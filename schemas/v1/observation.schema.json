@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Task/session observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_id",
+    "lifecycle_state",
+    "timing",
+    "configuration",
+    "summary_quality",
+    "token_evidence",
+    "quota_evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "observation_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "task_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "source_instance_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "lifecycle_state": {
+      "enum": [
+        "detected",
+        "active",
+        "task_ended",
+        "awaiting_meter",
+        "reconciling",
+        "finalized",
+        "incomplete",
+        "invalid"
+      ]
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "started_at": {
+          "$ref": "common.schema.json#/$defs/utcTimestamp"
+        },
+        "ended_at": {
+          "$ref": "common.schema.json#/$defs/utcTimestamp"
+        },
+        "finalized_at": {
+          "$ref": "common.schema.json#/$defs/utcTimestamp"
+        },
+        "duration_ms": {
+          "$ref": "common.schema.json#/$defs/durationMs"
+        }
+      }
+    },
+    "configuration": {
+      "$ref": "common.schema.json#/$defs/configurationIdentity"
+    },
+    "summary_quality": {
+      "$ref": "common.schema.json#/$defs/qualityGrade"
+    },
+    "token_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "raw_token_counters"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "common.schema.json#/$defs/evidenceStatus"
+        },
+        "raw_token_counters": {
+          "$ref": "common.schema.json#/$defs/tokenCounters"
+        }
+      }
+    },
+    "quota_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "five_hour",
+        "weekly"
+      ],
+      "properties": {
+        "five_hour": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "meter_type",
+            "status",
+            "before_sample",
+            "after_sample",
+            "window_identity",
+            "reset_status"
+          ],
+          "properties": {
+            "meter_type": {
+              "$ref": "common.schema.json#/$defs/quotaMeterType"
+            },
+            "status": {
+              "$ref": "common.schema.json#/$defs/evidenceStatus"
+            },
+            "before_sample": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaSampleSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "after_sample": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaSampleSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "delta_percentage_points": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "window_identity": {
+              "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+            },
+            "reset_status": {
+              "enum": [
+                "not_detected",
+                "detected",
+                "unavailable"
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "reset_status": {
+                    "const": "detected"
+                  }
+                },
+                "required": [
+                  "reset_status"
+                ]
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "delta_percentage_points"
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "properties": {
+                      "validity": {
+                        "const": "valid"
+                      }
+                    },
+                    "required": [
+                      "validity"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "required": [
+                  "delta_percentage_points"
+                ]
+              }
+            }
+          ]
+        },
+        "weekly": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "meter_type",
+            "status",
+            "before_sample",
+            "after_sample",
+            "window_identity",
+            "reset_status"
+          ],
+          "properties": {
+            "meter_type": {
+              "$ref": "common.schema.json#/$defs/quotaMeterType"
+            },
+            "status": {
+              "$ref": "common.schema.json#/$defs/evidenceStatus"
+            },
+            "before_sample": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaSampleSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "after_sample": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaSampleSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "delta_percentage_points": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "window_identity": {
+              "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+            },
+            "reset_status": {
+              "enum": [
+                "not_detected",
+                "detected",
+                "unavailable"
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "reset_status": {
+                    "const": "detected"
+                  }
+                },
+                "required": [
+                  "reset_status"
+                ]
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "delta_percentage_points"
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "properties": {
+                      "validity": {
+                        "const": "valid"
+                      }
+                    },
+                    "required": [
+                      "validity"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "required": [
+                  "delta_percentage_points"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

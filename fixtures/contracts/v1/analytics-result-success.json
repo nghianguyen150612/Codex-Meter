@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "request-001",
+  "analysis_type": "current_capacity_estimate",
+  "result_status": "succeeded",
+  "dataset_configuration": {
+    "plan": {
+      "availability": "available",
+      "value": "plus",
+      "provenance": "observed"
+    },
+    "model": {
+      "availability": "available",
+      "value": "gpt-5.6-sol",
+      "provenance": "observed"
+    },
+    "reasoning_level": {
+      "availability": "available",
+      "value": "high",
+      "provenance": "observed"
+    },
+    "speed_mode": {
+      "availability": "available",
+      "value": "standard",
+      "provenance": "observed"
+    },
+    "codex_version": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    }
+  },
+  "generated_at": "2026-10-01T03:00:01Z",
+  "estimator_method_version": "1.0.0",
+  "quota_capacity_estimates": [
+    {
+      "meter_type": "five_hour",
+      "metric_kind": "estimated_raw_tokens",
+      "provider_authority": "codex_meter_empirical_estimate",
+      "confidence": "medium",
+      "sample_accounting": {
+        "candidate_observations": 18,
+        "valid_observations": 14,
+        "excluded_observations": 4,
+        "outliers_removed": 2,
+        "used_observations": 12
+      },
+      "reason_codes": [],
+      "estimated_full_capacity_raw_tokens": 362500,
+      "estimated_used_raw_tokens": 87000,
+      "estimated_remaining_raw_tokens": 275500,
+      "capacity_percentiles_raw_tokens": {
+        "p25": 340000,
+        "p50": 362500,
+        "p75": 389000
+      }
+    },
+    {
+      "meter_type": "weekly",
+      "metric_kind": "estimated_raw_tokens",
+      "provider_authority": "codex_meter_empirical_estimate",
+      "confidence": "high",
+      "sample_accounting": {
+        "candidate_observations": 42,
+        "valid_observations": 38,
+        "excluded_observations": 4,
+        "outliers_removed": 3,
+        "used_observations": 35
+      },
+      "reason_codes": [],
+      "estimated_full_capacity_raw_tokens": 1450000,
+      "estimated_used_raw_tokens": 609000,
+      "estimated_remaining_raw_tokens": 841000,
+      "capacity_percentiles_raw_tokens": {
+        "p25": 1380000,
+        "p50": 1450000,
+        "p75": 1535000
+      }
+    }
+  ],
+  "warnings": []
+}

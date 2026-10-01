@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Meter v1 common definitions",
+  "description": "Shared definitions; not a serialized top-level contract.",
+  "$defs": {
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "opaqueId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "durationMs": {
+      "$ref": "#/$defs/safeInteger"
+    },
+    "provenance": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "derived",
+        "unavailable"
+      ]
+    },
+    "availability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "unavailable"
+      ]
+    },
+    "reasonCode": {
+      "type": "string",
+      "enum": [
+        "quota_reset_crossed",
+        "meter_unavailable",
+        "meter_unstable",
+        "telemetry_incomplete",
+        "concurrent_usage_possible",
+        "process_interrupted",
+        "source_acquisition_failure",
+        "unknown_reason"
+      ]
+    },
+    "validity": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "incomplete",
+        "invalid",
+        "unavailable"
+      ]
+    },
+    "qualityGrade": {
+      "type": "string",
+      "enum": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "X"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "insufficient",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "quotaMeterType": {
+      "type": "string",
+      "enum": [
+        "five_hour",
+        "weekly"
+      ]
+    },
+    "configurationValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "value",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "available"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "provenance": {
+              "enum": [
+                "observed",
+                "derived"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "unavailable"
+            },
+            "provenance": {
+              "const": "unavailable"
+            }
+          }
+        }
+      ]
+    },
+    "configurationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "model",
+        "reasoning_level",
+        "speed_mode",
+        "codex_version"
+      ],
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/configurationValue"
+        },
+        "model": {
+          "$ref": "#/$defs/configurationValue"
+        },
+        "reasoning_level": {
+          "$ref": "#/$defs/configurationValue"
+        },
+        "speed_mode": {
+          "$ref": "#/$defs/configurationValue"
+        },
+        "codex_version": {
+          "$ref": "#/$defs/configurationValue"
+        }
+      }
+    },
+    "tokenMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "value",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "available"
+            },
+            "value": {
+              "$ref": "#/$defs/safeInteger"
+            },
+            "provenance": {
+              "enum": [
+                "observed",
+                "derived"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "unavailable"
+            },
+            "provenance": {
+              "const": "unavailable"
+            }
+          }
+        }
+      ]
+    },
+    "tokenCounters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uncached_input",
+        "cached_input",
+        "output",
+        "reasoning_output",
+        "raw_total"
+      ],
+      "properties": {
+        "uncached_input": {
+          "$ref": "#/$defs/tokenMetric"
+        },
+        "cached_input": {
+          "$ref": "#/$defs/tokenMetric"
+        },
+        "output": {
+          "$ref": "#/$defs/tokenMetric"
+        },
+        "reasoning_output": {
+          "$ref": "#/$defs/tokenMetric"
+        },
+        "raw_total": {
+          "$ref": "#/$defs/tokenMetric"
+        }
+      }
+    },
+    "percentageMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "value",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "available"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "provenance": {
+              "enum": [
+                "observed",
+                "derived"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "provenance"
+          ],
+          "properties": {
+            "availability": {
+              "const": "unavailable"
+            },
+            "provenance": {
+              "const": "unavailable"
+            }
+          }
+        }
+      ]
+    },
+    "quotaWindowIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability"
+          ],
+          "properties": {
+            "availability": {
+              "const": "unavailable"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "availability",
+            "meter_type",
+            "identity_provenance",
+            "identity_confidence"
+          ],
+          "properties": {
+            "availability": {
+              "const": "available"
+            },
+            "meter_type": {
+              "$ref": "#/$defs/quotaMeterType"
+            },
+            "local_window_id": {
+              "$ref": "#/$defs/opaqueId"
+            },
+            "observed_reset_at": {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            "evidence_first_sample_at": {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            "evidence_last_sample_at": {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            "identity_provenance": {
+              "enum": [
+                "observed_reset",
+                "locally_inferred"
+              ]
+            },
+            "identity_confidence": {
+              "$ref": "#/$defs/confidence"
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "local_window_id"
+              ]
+            },
+            {
+              "required": [
+                "observed_reset_at"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "quotaSampleSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sample_id",
+        "sampled_at",
+        "used_percent",
+        "remaining_percent"
+      ],
+      "properties": {
+        "sample_id": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "sampled_at": {
+          "$ref": "#/$defs/utcTimestamp"
+        },
+        "used_percent": {
+          "$ref": "#/$defs/percentageMetric"
+        },
+        "remaining_percent": {
+          "$ref": "#/$defs/percentageMetric"
+        }
+      }
+    },
+    "evidenceStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validity",
+        "quality",
+        "reason_codes"
+      ],
+      "properties": {
+        "validity": {
+          "$ref": "#/$defs/validity"
+        },
+        "quality": {
+          "$ref": "#/$defs/qualityGrade"
+        },
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reasonCode"
+          }
+        }
+      }
+    }
+  }
+}

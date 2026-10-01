@@ -102,7 +102,7 @@
           ],
           "properties": {
             "meter_type": {
-              "$ref": "common.schema.json#/$defs/quotaMeterType"
+              "const": "five_hour"
             },
             "status": {
               "$ref": "common.schema.json#/$defs/evidenceStatus"
@@ -133,7 +133,33 @@
               "maximum": 100
             },
             "window_identity": {
-              "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+              "allOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "available"
+                      }
+                    },
+                    "required": [
+                      "availability"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "meter_type": {
+                        "const": "five_hour"
+                      }
+                    },
+                    "required": [
+                      "meter_type"
+                    ]
+                  }
+                }
+              ]
             },
             "reset_status": {
               "enum": [
@@ -202,7 +228,7 @@
           ],
           "properties": {
             "meter_type": {
-              "$ref": "common.schema.json#/$defs/quotaMeterType"
+              "const": "weekly"
             },
             "status": {
               "$ref": "common.schema.json#/$defs/evidenceStatus"
@@ -233,7 +259,33 @@
               "maximum": 100
             },
             "window_identity": {
-              "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+              "allOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "available"
+                      }
+                    },
+                    "required": [
+                      "availability"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "meter_type": {
+                        "const": "weekly"
+                      }
+                    },
+                    "required": [
+                      "meter_type"
+                    ]
+                  }
+                }
+              ]
             },
             "reset_status": {
               "enum": [

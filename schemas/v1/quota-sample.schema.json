@@ -57,5 +57,83 @@
     "failure_reason": {
       "$ref": "common.schema.json#/$defs/reasonCode"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "meter_type": {
+            "const": "five_hour"
+          }
+        },
+        "required": [
+          "meter_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reset_evidence": {
+            "if": {
+              "properties": {
+                "availability": {
+                  "const": "available"
+                }
+              },
+              "required": [
+                "availability"
+              ]
+            },
+            "then": {
+              "properties": {
+                "meter_type": {
+                  "const": "five_hour"
+                }
+              },
+              "required": [
+                "meter_type"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "meter_type": {
+            "const": "weekly"
+          }
+        },
+        "required": [
+          "meter_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reset_evidence": {
+            "if": {
+              "properties": {
+                "availability": {
+                  "const": "available"
+                }
+              },
+              "required": [
+                "availability"
+              ]
+            },
+            "then": {
+              "properties": {
+                "meter_type": {
+                  "const": "weekly"
+                }
+              },
+              "required": [
+                "meter_type"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

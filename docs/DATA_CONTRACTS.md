@@ -41,13 +41,13 @@ Configuration identity contains plan, model, reasoning level, speed mode, and Co
 
 ## Quota samples and windows
 
-A quota sample records one `five_hour` or `weekly` meter at a UTC instant. Used and remaining percentages are independently available: neither is required to be available merely because the other is, and deriving one must be labeled `derived`. Acquisition status and a narrow sanitized source kind preserve operational provenance without a raw payload. Configuration context is retained with explicit unknowns.
+A quota sample records one `five_hour` or `weekly` meter at a UTC instant. When reset/window evidence is available, its meter type must equal the sample’s top-level meter type; unavailable reset evidence remains valid without a fabricated identity. Used and remaining percentages are independently available: neither is required to be available merely because the other is, and deriving one must be labeled `derived`. Acquisition status and a narrow sanitized source kind preserve operational provenance without a raw payload. Configuration context is retained with explicit unknowns.
 
 A quota-window identity is either explicitly unavailable or supported by local evidence. Available identities include the meter type, observed reset and/or locally generated opaque identity, evidence sample bounds, provenance (`observed_reset` or `locally_inferred`), and confidence. This representation does not presume a provider window ID. Confidence is Codex Meter's assessment, not provider confidence.
 
 ## Normalized runtime events
 
-`normalized-event.schema.json` covers five minimal families: session detection/start/end, token updates, and configuration evidence. Events carry opaque event/source/session/task/cursor identities and UTC event time for future idempotency. Discriminated payloads contain only lifecycle, normalized counters, or configuration. They deliberately exclude provider field names, filenames, source payloads, and content. Source adapters must privacy-filter before producing these events.
+`normalized-event.schema.json` covers five minimal families: session detection/start/end, token updates, and configuration evidence. Events carry opaque event/source/session/task/cursor identities and UTC event time for future idempotency. The event discriminator and payload discriminator are coupled: session detection/start/end require a lifecycle payload, token updates require a token-counter payload, and configuration evidence requires a configuration payload. Discriminated payloads contain only lifecycle, normalized counters, or configuration. They deliberately exclude provider field names, filenames, source payloads, and content. Source adapters must privacy-filter before producing these events.
 
 ## Observations, lifecycle, validity, and quality
 
@@ -64,7 +64,7 @@ The schema does not implement weighting policy. Quality grades retain product se
 
 Compact reason codes explain degraded evidence without free-text content: quota reset crossed, meter unavailable/unstable, telemetry incomplete, concurrent usage possible, process interrupted, source acquisition failure, and unknown reason.
 
-Each quota domain contains before/after snapshots, window identity, reset status, validity/quality/reasons, and—only when defensible—a non-negative `delta_percentage_points`. A detected reset structurally forbids a delta; valid quota evidence requires one. Thus a 97-to-4 reset crossing is invalid for that window rather than valid `-93`, while token and the other quota window can remain valid.
+Each named quota branch locks its meter type (`five_hour` or `weekly`), and an available window identity must carry that same meter type. Each quota domain contains before/after snapshots, window identity, reset status, validity/quality/reasons, and—only when defensible—a non-negative `delta_percentage_points`. A detected reset structurally forbids a delta; valid quota evidence requires one. Thus a 97-to-4 reset crossing is invalid for that window rather than valid `-93`, while token and the other quota window can remain valid.
 
 ## Analytics process contracts
 

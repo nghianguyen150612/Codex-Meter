@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Analytics request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "analysis_type",
+    "dataset_selector",
+    "target_quota_windows",
+    "options"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "analysis_type": {
+      "enum": [
+        "current_capacity_estimate",
+        "history_summary",
+        "quota_change_analysis",
+        "workload_estimate",
+        "benchmark_analysis"
+      ]
+    },
+    "dataset_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "common.schema.json#/$defs/configurationIdentity"
+        },
+        "observed_from": {
+          "$ref": "common.schema.json#/$defs/utcTimestamp"
+        },
+        "observed_through": {
+          "$ref": "common.schema.json#/$defs/utcTimestamp"
+        }
+      }
+    },
+    "target_quota_windows": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/quotaMeterType"
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimum_quality": {
+          "$ref": "common.schema.json#/$defs/qualityGrade"
+        },
+        "maximum_observations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

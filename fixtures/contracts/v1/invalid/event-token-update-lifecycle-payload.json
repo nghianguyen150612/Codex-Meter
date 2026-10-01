@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "invalid-token-update-lifecycle",
+  "event_type": "token_counters_updated",
+  "source_instance_id": "src-local-01",
+  "safe_cursor_id": "cursor-0042",
+  "event_at": "2026-10-01T02:15:30Z",
+  "session_id": "session-001",
+  "task_id": "task-001",
+  "payload": {
+    "kind": "lifecycle"
+  }
+}

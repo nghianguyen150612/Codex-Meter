@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "request-002",
+  "analysis_type": "current_capacity_estimate",
+  "result_status": "insufficient_evidence",
+  "dataset_configuration": {
+    "plan": {
+      "availability": "available",
+      "value": "plus",
+      "provenance": "observed"
+    },
+    "model": {
+      "availability": "available",
+      "value": "gpt-5.6-sol",
+      "provenance": "observed"
+    },
+    "reasoning_level": {
+      "availability": "available",
+      "value": "high",
+      "provenance": "observed"
+    },
+    "speed_mode": {
+      "availability": "available",
+      "value": "standard",
+      "provenance": "observed"
+    },
+    "codex_version": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    }
+  },
+  "generated_at": "2026-10-01T03:00:01Z",
+  "estimator_method_version": "1.0.0",
+  "quota_capacity_estimates": [
+    {
+      "meter_type": "five_hour",
+      "metric_kind": "estimated_raw_tokens",
+      "provider_authority": "codex_meter_empirical_estimate",
+      "confidence": "insufficient",
+      "sample_accounting": {
+        "candidate_observations": 3,
+        "valid_observations": 1,
+        "excluded_observations": 2,
+        "outliers_removed": 0,
+        "used_observations": 1
+      },
+      "reason_codes": [
+        "telemetry_incomplete"
+      ]
+    }
+  ],
+  "warnings": [
+    "telemetry_incomplete"
+  ]
+}

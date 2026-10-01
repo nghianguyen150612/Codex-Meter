@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Normalized runtime event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "source_instance_id",
+    "event_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "event_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "event_type": {
+      "enum": [
+        "session_detected",
+        "session_started",
+        "token_counters_updated",
+        "session_ended",
+        "configuration_evidence_observed"
+      ]
+    },
+    "source_instance_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "safe_cursor_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "event_at": {
+      "$ref": "common.schema.json#/$defs/utcTimestamp"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "task_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "lifecycle"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "token_counters"
+          ],
+          "properties": {
+            "kind": {
+              "const": "token_counters"
+            },
+            "token_counters": {
+              "$ref": "common.schema.json#/$defs/tokenCounters"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "configuration"
+          ],
+          "properties": {
+            "kind": {
+              "const": "configuration"
+            },
+            "configuration": {
+              "$ref": "common.schema.json#/$defs/configurationIdentity"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": [
+              "session_detected",
+              "session_started",
+              "session_ended"
+            ]
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "kind": {
+                "const": "lifecycle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "token_counters_updated"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "kind": {
+                "const": "token_counters"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "configuration_evidence_observed"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "kind": {
+                "const": "configuration"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

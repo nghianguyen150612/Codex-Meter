@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Analytics result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "analysis_type",
+    "result_status",
+    "dataset_configuration",
+    "generated_at",
+    "estimator_method_version",
+    "quota_capacity_estimates",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "analysis_type": {
+      "enum": [
+        "current_capacity_estimate",
+        "history_summary",
+        "quota_change_analysis",
+        "workload_estimate",
+        "benchmark_analysis"
+      ]
+    },
+    "result_status": {
+      "enum": [
+        "succeeded",
+        "insufficient_evidence",
+        "failed"
+      ]
+    },
+    "dataset_configuration": {
+      "$ref": "common.schema.json#/$defs/configurationIdentity"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/utcTimestamp"
+    },
+    "estimator_method_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "quota_capacity_estimates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "meter_type",
+          "metric_kind",
+          "provider_authority",
+          "confidence",
+          "sample_accounting"
+        ],
+        "properties": {
+          "meter_type": {
+            "$ref": "common.schema.json#/$defs/quotaMeterType"
+          },
+          "metric_kind": {
+            "const": "estimated_raw_tokens"
+          },
+          "provider_authority": {
+            "const": "codex_meter_empirical_estimate"
+          },
+          "estimated_full_capacity_raw_tokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "estimated_used_raw_tokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "estimated_remaining_raw_tokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "capacity_percentiles_raw_tokens": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "p25",
+              "p50",
+              "p75"
+            ],
+            "properties": {
+              "p25": {
+                "type": "number",
+                "minimum": 0
+              },
+              "p50": {
+                "type": "number",
+                "minimum": 0
+              },
+              "p75": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          },
+          "confidence": {
+            "$ref": "common.schema.json#/$defs/confidence"
+          },
+          "sample_accounting": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "candidate_observations",
+              "valid_observations",
+              "excluded_observations",
+              "outliers_removed",
+              "used_observations"
+            ],
+            "properties": {
+              "candidate_observations": {
+                "$ref": "common.schema.json#/$defs/safeInteger"
+              },
+              "valid_observations": {
+                "$ref": "common.schema.json#/$defs/safeInteger"
+              },
+              "excluded_observations": {
+                "$ref": "common.schema.json#/$defs/safeInteger"
+              },
+              "outliers_removed": {
+                "$ref": "common.schema.json#/$defs/safeInteger"
+              },
+              "used_observations": {
+                "$ref": "common.schema.json#/$defs/safeInteger"
+              }
+            }
+          },
+          "reason_codes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "common.schema.json#/$defs/reasonCode"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "confidence": {
+                  "const": "insufficient"
+                }
+              },
+              "required": [
+                "confidence"
+              ]
+            },
+            "then": {},
+            "else": {
+              "required": [
+                "estimated_full_capacity_raw_tokens",
+                "estimated_used_raw_tokens",
+                "estimated_remaining_raw_tokens",
+                "capacity_percentiles_raw_tokens"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "common.schema.json#/$defs/reasonCode"
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "request-001",
+  "analysis_type": "current_capacity_estimate",
+  "dataset_selector": {
+    "configuration": {
+      "plan": {
+        "availability": "available",
+        "value": "plus",
+        "provenance": "observed"
+      },
+      "model": {
+        "availability": "available",
+        "value": "gpt-5.6-sol",
+        "provenance": "observed"
+      },
+      "reasoning_level": {
+        "availability": "available",
+        "value": "high",
+        "provenance": "observed"
+      },
+      "speed_mode": {
+        "availability": "available",
+        "value": "standard",
+        "provenance": "observed"
+      },
+      "codex_version": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      }
+    },
+    "observed_from": "2026-09-01T00:00:00Z",
+    "observed_through": "2026-10-01T03:00:00Z"
+  },
+  "target_quota_windows": [
+    "five_hour",
+    "weekly"
+  ],
+  "options": {
+    "minimum_quality": "C",
+    "maximum_observations": 500
+  }
+}

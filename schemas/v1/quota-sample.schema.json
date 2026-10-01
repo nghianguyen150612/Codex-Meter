@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Normalized quota sample",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sample_id",
+    "meter_type",
+    "sampled_at",
+    "used_percent",
+    "remaining_percent",
+    "reset_evidence",
+    "configuration",
+    "acquisition_status",
+    "source_kind"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "sample_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "meter_type": {
+      "$ref": "common.schema.json#/$defs/quotaMeterType"
+    },
+    "sampled_at": {
+      "$ref": "common.schema.json#/$defs/utcTimestamp"
+    },
+    "used_percent": {
+      "$ref": "common.schema.json#/$defs/percentageMetric"
+    },
+    "remaining_percent": {
+      "$ref": "common.schema.json#/$defs/percentageMetric"
+    },
+    "reset_evidence": {
+      "$ref": "common.schema.json#/$defs/quotaWindowIdentity"
+    },
+    "configuration": {
+      "$ref": "common.schema.json#/$defs/configurationIdentity"
+    },
+    "acquisition_status": {
+      "enum": [
+        "succeeded",
+        "partial",
+        "failed"
+      ]
+    },
+    "source_kind": {
+      "enum": [
+        "local_meter",
+        "provider_ui_adapter",
+        "unknown_source"
+      ]
+    },
+    "failure_reason": {
+      "$ref": "common.schema.json#/$defs/reasonCode"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "meter_type": {
+            "const": "five_hour"
+          }
+        },
+        "required": [
+          "meter_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reset_evidence": {
+            "if": {
+              "properties": {
+                "availability": {
+                  "const": "available"
+                }
+              },
+              "required": [
+                "availability"
+              ]
+            },
+            "then": {
+              "properties": {
+                "meter_type": {
+                  "const": "five_hour"
+                }
+              },
+              "required": [
+                "meter_type"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "meter_type": {
+            "const": "weekly"
+          }
+        },
+        "required": [
+          "meter_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reset_evidence": {
+            "if": {
+              "properties": {
+                "availability": {
+                  "const": "available"
+                }
+              },
+              "required": [
+                "availability"
+              ]
+            },
+            "then": {
+              "properties": {
+                "meter_type": {
+                  "const": "weekly"
+                }
+              },
+              "required": [
+                "meter_type"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

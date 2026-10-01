@@ -1,0 +1,167 @@
+{
+  "schema_version": "1.0.0",
+  "observation_id": "obs-reset-001",
+  "task_id": "task-001",
+  "session_id": "session-001",
+  "source_instance_id": "src-local-01",
+  "lifecycle_state": "finalized",
+  "timing": {
+    "started_at": "2026-10-01T02:00:00Z",
+    "ended_at": "2026-10-01T02:15:00Z",
+    "finalized_at": "2026-10-01T02:20:00Z",
+    "duration_ms": 900000
+  },
+  "configuration": {
+    "plan": {
+      "availability": "available",
+      "value": "plus",
+      "provenance": "observed"
+    },
+    "model": {
+      "availability": "available",
+      "value": "gpt-5.6-sol",
+      "provenance": "observed"
+    },
+    "reasoning_level": {
+      "availability": "available",
+      "value": "high",
+      "provenance": "observed"
+    },
+    "speed_mode": {
+      "availability": "available",
+      "value": "standard",
+      "provenance": "observed"
+    },
+    "codex_version": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    }
+  },
+  "summary_quality": "X",
+  "token_evidence": {
+    "status": {
+      "validity": "valid",
+      "quality": "B",
+      "reason_codes": []
+    },
+    "raw_token_counters": {
+      "uncached_input": {
+        "availability": "available",
+        "value": 8000,
+        "provenance": "observed"
+      },
+      "cached_input": {
+        "availability": "available",
+        "value": 2200,
+        "provenance": "observed"
+      },
+      "output": {
+        "availability": "available",
+        "value": 3100,
+        "provenance": "observed"
+      },
+      "reasoning_output": {
+        "availability": "available",
+        "value": 1200,
+        "provenance": "observed"
+      },
+      "raw_total": {
+        "availability": "available",
+        "value": 14500,
+        "provenance": "derived"
+      }
+    }
+  },
+  "quota_evidence": {
+    "five_hour": {
+      "meter_type": "five_hour",
+      "status": {
+        "validity": "invalid",
+        "quality": "X",
+        "reason_codes": [
+          "quota_reset_crossed"
+        ]
+      },
+      "before_sample": {
+        "sample_id": "rb5",
+        "sampled_at": "2026-10-01T04:58:00Z",
+        "used_percent": {
+          "availability": "available",
+          "value": 97,
+          "provenance": "observed"
+        },
+        "remaining_percent": {
+          "availability": "available",
+          "value": 3,
+          "provenance": "observed"
+        }
+      },
+      "after_sample": {
+        "sample_id": "ra5",
+        "sampled_at": "2026-10-01T05:03:00Z",
+        "used_percent": {
+          "availability": "available",
+          "value": 4,
+          "provenance": "observed"
+        },
+        "remaining_percent": {
+          "availability": "available",
+          "value": 96,
+          "provenance": "observed"
+        }
+      },
+      "window_identity": {
+        "availability": "unavailable"
+      },
+      "reset_status": "detected"
+    },
+    "weekly": {
+      "meter_type": "weekly",
+      "status": {
+        "validity": "valid",
+        "quality": "B",
+        "reason_codes": []
+      },
+      "before_sample": {
+        "sample_id": "sample-bw",
+        "sampled_at": "2026-10-01T02:00:00Z",
+        "used_percent": {
+          "availability": "available",
+          "value": 41,
+          "provenance": "observed"
+        },
+        "remaining_percent": {
+          "availability": "available",
+          "value": 59,
+          "provenance": "observed"
+        }
+      },
+      "after_sample": {
+        "sample_id": "sample-aw",
+        "sampled_at": "2026-10-01T02:20:00Z",
+        "used_percent": {
+          "availability": "available",
+          "value": 42,
+          "provenance": "observed"
+        },
+        "remaining_percent": {
+          "availability": "available",
+          "value": 58,
+          "provenance": "observed"
+        }
+      },
+      "window_identity": {
+        "availability": "available",
+        "meter_type": "weekly",
+        "local_window_id": "local-window-week-01",
+        "observed_reset_at": "2026-10-06T00:00:00Z",
+        "evidence_first_sample_at": "2026-10-01T02:00:00Z",
+        "evidence_last_sample_at": "2026-10-01T02:20:00Z",
+        "identity_provenance": "observed_reset",
+        "identity_confidence": "high"
+      },
+      "reset_status": "not_detected",
+      "delta_percentage_points": 1
+    }
+  }
+}

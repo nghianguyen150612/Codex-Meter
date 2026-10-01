@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "invalid-session-start-token-payload",
+  "event_type": "session_started",
+  "source_instance_id": "src-local-01",
+  "safe_cursor_id": "cursor-0042",
+  "event_at": "2026-10-01T02:15:30Z",
+  "session_id": "session-001",
+  "task_id": "task-001",
+  "payload": {
+    "kind": "token_counters",
+    "token_counters": {
+      "uncached_input": {
+        "availability": "available",
+        "value": 8000,
+        "provenance": "observed"
+      },
+      "cached_input": {
+        "availability": "available",
+        "value": 2200,
+        "provenance": "observed"
+      },
+      "output": {
+        "availability": "available",
+        "value": 3100,
+        "provenance": "observed"
+      },
+      "reasoning_output": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      },
+      "raw_total": {
+        "availability": "available",
+        "value": 13300,
+        "provenance": "derived"
+      }
+    }
+  }
+}

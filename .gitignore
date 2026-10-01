@@ -1,0 +1,13 @@
+/rust/target/
+/python/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+/python/dist/
+/python/build/
+*.egg-info/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,15 @@
+[package]
+name = "codex-meter"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Bootstrap executable for the independent Codex Meter project"
+license = "MIT"
+
+[lib]
+name = "codex_meter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-meter"
+path = "src/main.rs"

@@ -1,0 +1,114 @@
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[[package]]
+name = "attrs"
+version = "26.1.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/a/attrs/attrs-26.1.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "codex-meter-analytics"
+version = "0.0.0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+    { name = "referencing" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dev = { dev = [
+    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "pytest", specifier = ">=8.3,<10" },
+    { name = "referencing", specifier = ">=0.36,<1" },
+    { name = "ruff", specifier = ">=0.11,<1" },
+] }
+
+[[package]]
+name = "iniconfig"
+version = "2.3.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/i/iniconfig/iniconfig-2.3.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "jsonschema"
+version = "4.26.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/j/jsonschema/jsonschema-4.26.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "jsonschema-specifications" },
+    { name = "referencing" },
+    { name = "rpds-py" },
+]
+
+[[package]]
+name = "jsonschema-specifications"
+version = "2025.9.1"
+sdist = { url = "https://files.pythonhosted.org/packages/source/j/jsonschema-specifications/jsonschema_specifications-2025.9.1.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "referencing" }]
+
+[[package]]
+name = "packaging"
+version = "26.2"
+sdist = { url = "https://files.pythonhosted.org/packages/source/p/packaging/packaging-26.2.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pluggy"
+version = "1.6.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/p/pluggy/pluggy-1.6.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pygments"
+version = "2.20.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/p/pygments/pygments-2.20.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "9.0.3"
+sdist = { url = "https://files.pythonhosted.org/packages/source/p/pytest/pytest-9.0.3.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "iniconfig" },
+    { name = "packaging" },
+    { name = "pluggy" },
+    { name = "pygments" },
+]
+
+[[package]]
+name = "referencing"
+version = "0.37.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/r/referencing/referencing-0.37.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "rpds-py" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+
+[[package]]
+name = "rpds-py"
+version = "2026.6.3"
+sdist = { url = "https://files.pythonhosted.org/packages/source/r/rpds-py/rpds_py-2026.6.3.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "ruff"
+version = "0.15.12"
+sdist = { url = "https://files.pythonhosted.org/packages/source/r/ruff/ruff-0.15.12.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "typing-extensions"
+version = "4.15.0"
+sdist = { url = "https://files.pythonhosted.org/packages/source/t/typing-extensions/typing_extensions-4.15.0.tar.gz" }
+source = { registry = "https://pypi.org/simple" }

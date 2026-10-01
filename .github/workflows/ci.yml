@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+
+  rust-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path rust/Cargo.toml --workspace
+      - run: cargo test --manifest-path rust/Cargo.toml --workspace --all-targets
+
+  python-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project python --frozen
+      - run: uv run --project python --frozen ruff check python scripts
+      - run: uv run --project python --frozen ruff format --check python scripts
+      - run: uv run --project python --frozen python -m pytest python/tests
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project python --frozen
+      - run: uv run --project python --frozen python scripts/validate_contracts.py

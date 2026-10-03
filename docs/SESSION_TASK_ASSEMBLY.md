@@ -18,6 +18,8 @@ P009 deliberately does not infer `session_started` or `session_ended` from the f
 
 Task lifecycle is an internal typed domain: `Observed`, `Active`, `Completed`, `Failed`, `Aborted`, and `ConflictingTerminalEvidence`. Starts, completions, failures, and aborts produce deterministic internal lifecycle evidence, not v1 normalized task events. Completion or abort without a start is retained with an anomaly and does not fabricate a start. Contradictory terminal evidence is retained and marked conflicting. Token evidence remains valid after terminal evidence and is marked `TokenAfterTerminal`.
 
+Root-task evidence may arrive after a task is first observed. Later confirmed root evidence backfills unknown lineage; repeated agreeing evidence is idempotent. Distinct normalized roots are all retained in the task's root-evidence set and mark `ConflictingRootTaskEvidence` rather than silently overwriting an earlier root.
+
 ## Configuration timeline
 
 Thread settings update ordered defaults for model, provider, reasoning effort, and service tier. Turn context updates only the associated task's model and reasoning override. Precedence is task-specific turn context, then thread defaults, then session metadata. Updates are prospective; no later record is applied retroactively.

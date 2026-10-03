@@ -46,6 +46,7 @@ pub struct ConfigurationState {
 pub struct TaskState {
     pub task_id: String,
     pub root_task_id: Option<String>,
+    pub observed_root_task_ids: BTreeSet<String>,
     pub lifecycle: TaskLifecycle,
     pub start_observed: bool,
     pub terminal_evidence: BTreeSet<TaskTerminalEvidence>,
@@ -77,6 +78,7 @@ pub enum TaskAnomaly {
     CompletionWithoutStart,
     AbortWithoutStart,
     RepeatedStart,
+    ConflictingRootTaskEvidence,
     ConflictingTerminalEvidence,
     TokenAfterTerminal,
 }
@@ -559,12 +561,14 @@ fn task_mut<'a>(
     task_id: &str,
     root_turn_id: Option<&str>,
 ) -> &'a mut TaskState {
-    state
+    let observed_root_task_id = root_turn_id.map(identity::task_id);
+    let task = state
         .tasks
         .entry(task_id.to_owned())
         .or_insert_with(|| TaskState {
             task_id: task_id.to_owned(),
-            root_task_id: root_turn_id.map(identity::task_id),
+            root_task_id: observed_root_task_id.clone(),
+            observed_root_task_ids: observed_root_task_id.iter().cloned().collect(),
             lifecycle: TaskLifecycle::Observed,
             start_observed: false,
             terminal_evidence: BTreeSet::new(),
@@ -572,7 +576,23 @@ fn task_mut<'a>(
             configuration_override: ConfigurationState::default(),
             token_configuration_fingerprints: BTreeSet::new(),
             configuration_consistency: ConfigurationConsistency::NoTokenConsumption,
-        })
+        });
+    if let Some(observed_root_task_id) = observed_root_task_id {
+        let is_new_root = task
+            .observed_root_task_ids
+            .insert(observed_root_task_id.clone());
+        if is_new_root {
+            match &task.root_task_id {
+                None => task.root_task_id = Some(observed_root_task_id),
+                Some(existing_root_task_id) if existing_root_task_id != &observed_root_task_id => {
+                    task.anomalies
+                        .insert(TaskAnomaly::ConflictingRootTaskEvidence);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    task
 }
 
 fn terminal_update(task: &mut TaskState, evidence: TaskTerminalEvidence) {
@@ -917,6 +937,8 @@ mod tests {
             .next()
             .expect("task state");
         assert_eq!(task.lifecycle, TaskLifecycle::ConflictingTerminalEvidence);
+        let expected_root = identity::task_id("root-turn-synthetic-001");
+        assert_eq!(task.root_task_id.as_deref(), Some(expected_root.as_str()));
         assert!(task
             .anomalies
             .contains(&TaskAnomaly::ConflictingTerminalEvidence));
@@ -925,5 +947,143 @@ mod tests {
             .outputs
             .iter()
             .any(|output| matches!(output, AssembledOutput::AttributedToken(_))));
+    }
+
+    #[test]
+    fn token_before_task_start_backfills_root() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let token = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/token-usage-record.json"
+        ));
+        let started = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-started.json"
+        ));
+        let assembled = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![item(token, 0), item(started, 100)]),
+        )
+        .expect("late root evidence should assemble");
+        let task = assembled
+            .next_state
+            .tasks
+            .values()
+            .next()
+            .expect("task state");
+        let root_id = identity::task_id("root-turn-synthetic-001");
+        assert_eq!(task.root_task_id.as_deref(), Some(root_id.as_str()));
+        assert_eq!(task.observed_root_task_ids, BTreeSet::from([root_id]));
+    }
+
+    #[test]
+    fn token_before_turn_context_backfills_root() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let token = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/token-usage-record.json"
+        ));
+        let context = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/turn-context.json"
+        ));
+        let assembled = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![item(token, 0), item(context, 100)]),
+        )
+        .expect("late context root evidence should assemble");
+        let task = assembled
+            .next_state
+            .tasks
+            .values()
+            .next()
+            .expect("task state");
+        let root_id = identity::task_id("root-turn-synthetic-001");
+        assert_eq!(task.root_task_id.as_deref(), Some(root_id.as_str()));
+        assert!(task.anomalies.is_empty());
+    }
+
+    #[test]
+    fn agreeing_root_evidence_is_idempotent() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let started = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-started.json"
+        ));
+        let context = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/turn-context.json"
+        ));
+        let assembled = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![item(started, 0), item(context, 100)]),
+        )
+        .expect("agreeing root evidence should assemble");
+        let task = assembled
+            .next_state
+            .tasks
+            .values()
+            .next()
+            .expect("task state");
+        assert_eq!(task.observed_root_task_ids.len(), 1);
+        assert!(!task
+            .anomalies
+            .contains(&TaskAnomaly::ConflictingRootTaskEvidence));
+    }
+
+    #[test]
+    fn conflicting_root_evidence_is_preserved_without_dropping_the_task() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let started = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-started.json"
+        ));
+        let context = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/turn-context.json"
+        ))
+        .replace("root-turn-synthetic-001", "root-turn-synthetic-002");
+        let assembled = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![item(started, 0), item(&context, 100)]),
+        )
+        .expect("conflicting root evidence is non-fatal");
+        let task = assembled
+            .next_state
+            .tasks
+            .values()
+            .next()
+            .expect("task state");
+        let root_one = identity::task_id("root-turn-synthetic-001");
+        let root_two = identity::task_id("root-turn-synthetic-002");
+        assert_eq!(task.root_task_id.as_deref(), Some(root_one.as_str()));
+        assert_eq!(
+            task.observed_root_task_ids,
+            BTreeSet::from([root_one, root_two])
+        );
+        assert!(task
+            .anomalies
+            .contains(&TaskAnomaly::ConflictingRootTaskEvidence));
+    }
+
+    #[test]
+    fn root_evidence_backfill_replays_deterministically() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let token = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/token-usage-record.json"
+        ));
+        let context = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/turn-context.json"
+        ));
+        let source_batch = batch(vec![item(token, 0), item(context, 100)]);
+        let first = assemble_batch(&TelemetryState::default(), &source, &source_batch).unwrap();
+        let second = assemble_batch(&TelemetryState::default(), &source, &source_batch).unwrap();
+        assert_eq!(first, second);
     }
 }

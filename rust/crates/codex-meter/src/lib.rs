@@ -1,4 +1,6 @@
-//! Shared bootstrap identity for Codex Meter.
+//! Shared bootstrap identity and source-format models for Codex Meter.
+
+pub mod telemetry;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Codex Meter";

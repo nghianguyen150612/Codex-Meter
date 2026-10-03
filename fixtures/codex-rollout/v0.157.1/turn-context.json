@@ -1,0 +1,1 @@
+{"timestamp":"2026-10-03T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn-synthetic-001","root_turn_id":"root-turn-synthetic-001","model":"gpt-synthetic","effort":"high","cwd":"/synthetic/private/repository","summary":"fake summary must disappear"}}

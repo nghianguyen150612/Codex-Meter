@@ -6,6 +6,9 @@ publish = false
 description = "Bootstrap executable for the independent Codex Meter project"
 license = "MIT"
 
+[dependencies]
+serde_json = "1"
+
 [lib]
 name = "codex_meter"
 path = "src/lib.rs"

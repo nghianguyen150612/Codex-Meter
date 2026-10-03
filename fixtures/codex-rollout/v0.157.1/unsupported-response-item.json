@@ -1,0 +1,1 @@
+{"timestamp":"2026-10-03T10:02:04Z","type":"response_item","payload":{"type":"message","text":"synthetic prompt and response must be discarded","cwd":"/synthetic/private/repository","creator_account_id":"fake-account-must-disappear","repository":"fake-repository-content"},"metadata":{"private":"synthetic"}}

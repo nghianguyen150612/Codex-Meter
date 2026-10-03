@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "sample_id": "quota:p010-five-hour",
+  "meter_type": "five_hour",
+  "sampled_at": "2026-10-03T10:01:01Z",
+  "used_percent": {
+    "availability": "available",
+    "value": 42.5,
+    "provenance": "observed"
+  },
+  "remaining_percent": {
+    "availability": "available",
+    "value": 57.5,
+    "provenance": "derived"
+  },
+  "reset_evidence": {
+    "availability": "available",
+    "meter_type": "five_hour",
+    "observed_reset_at": "2026-10-03T15:00:00Z",
+    "identity_provenance": "observed_reset",
+    "identity_confidence": "high"
+  },
+  "configuration": {
+    "plan": {
+      "availability": "available",
+      "value": "plus",
+      "provenance": "observed"
+    },
+    "model": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    },
+    "reasoning_level": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    },
+    "speed_mode": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    },
+    "codex_version": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    }
+  },
+  "acquisition_status": "succeeded",
+  "source_kind": "local_meter"
+}

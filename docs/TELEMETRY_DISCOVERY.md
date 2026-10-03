@@ -388,14 +388,12 @@ source defines nested rate-limit windows, credits, plan type, limit identifiers,
 and spend-control fields. Local `token_count` records structurally contained a
 `rate_limits` object in the inspected files.
 
-These fields are recorded as:
-
-```text
-DEFERRED TO P010+
-```
-
-P005 does not interpret quota windows, scrape a provider UI, authenticate, or
-convert rate-limit fields into Codex Meter quota observations.
+P010 now retains a narrow privacy-filtered subset and converts supported local
+meter windows into v1 quota snapshots. It accepts only the main Codex bucket
+(missing `limit_id` or case-insensitive `codex`), classifies windows by observed
+duration, and does not retain credits or spend-control monetary values. P010
+does not scrape a provider UI, authenticate, calculate quota deltas, or infer
+reset/window continuity.
 
 ## Work/web surface limitation
 

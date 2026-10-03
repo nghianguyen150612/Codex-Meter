@@ -118,17 +118,21 @@ additive to output totals or that upstream `total_tokens` equals a sum of the
 six source fields. Those are P008 normalization questions and remain
 evidence-dependent.
 
-The `rate_limits` member of `token_count` is intentionally ignored. No plan,
-quota, or rate-limit semantics are inferred.
+The `rate_limits` member of `token_count` is now retained through a narrow
+P010-safe model. It contains only the optional `limit_id`, `primary` and
+`secondary` windows (`used_percent`, `window_minutes`, and `resets_at`), and a
+recognized provider `plan_type`. Credits, spend-control monetary values,
+model-slug metadata, arbitrary fields, and raw JSON remain discarded. Quota
+semantics are applied only by the separate P010 quota normalizer.
 
 ## Privacy filtering
 
 The public source model contains no generic payload field. It intentionally
 does not retain prompts, responses, reasoning text, source code, paths, working
-directories, Git metadata, account identifiers, response IDs, raw errors, rate
-limits, or provider request payloads. Synthetic fixtures include fake sensitive-
-looking values to regression-test their removal; no local rollout data is
-committed.
+directories, Git metadata, account identifiers, response IDs, raw errors,
+credits, monetary spend values, or provider request payloads. Synthetic
+fixtures include fake sensitive-looking values to regression-test their
+removal; no local rollout data is committed.
 
 String discriminators and allowlisted IDs/configuration values are bounded and
 control-character checked. They are retained only where the P005 evidence

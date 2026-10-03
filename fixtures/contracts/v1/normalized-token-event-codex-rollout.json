@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "evt-codex-rollout-synthetic-001",
+  "event_type": "token_counters_updated",
+  "source_instance_id": "src-codex-rollout-synthetic-001",
+  "safe_cursor_id": "cursor-codex-rollout-synthetic-001",
+  "event_at": "2026-10-03T10:01:00Z",
+  "session_id": "session-codex-rollout-synthetic-001",
+  "task_id": "task-codex-rollout-synthetic-001",
+  "payload": {
+    "kind": "token_counters",
+    "token_counters": {
+      "uncached_input": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      },
+      "cached_input": {
+        "availability": "available",
+        "value": 20,
+        "provenance": "observed"
+      },
+      "output": {
+        "availability": "available",
+        "value": 30,
+        "provenance": "observed"
+      },
+      "reasoning_output": {
+        "availability": "available",
+        "value": 10,
+        "provenance": "observed"
+      },
+      "raw_total": {
+        "availability": "available",
+        "value": 100,
+        "provenance": "observed"
+      }
+    }
+  }
+}

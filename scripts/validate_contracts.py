@@ -21,6 +21,7 @@ FIXTURES = {
     "analytics-result-insufficient.json": "analytics-result.schema.json",
     "analytics-result-success.json": "analytics-result.schema.json",
     "normalized-token-event.json": "normalized-event.schema.json",
+    "normalized-token-event-codex-rollout.json": "normalized-event.schema.json",
     "observation-finalized.json": "observation.schema.json",
     "observation-incomplete.json": "observation.schema.json",
     "observation-reset-crossing.json": "observation.schema.json",

@@ -2,6 +2,8 @@
 
 pub mod codex_rollout;
 pub mod incremental_jsonl;
+pub mod normalized;
+pub mod token_normalization;
 
 pub use codex_rollout::{
     parse_rollout_record, ContextCompactedEvent, EventMessage, RolloutDecodeError, RolloutRecord,
@@ -15,4 +17,15 @@ pub use codex_rollout::{
 pub use incremental_jsonl::{
     read_available, CursorIdentityError, IncrementalReadError, IoOperation, ReadBatch, ReadItem,
     ReadItemOutcome, RejectedLine, RejectedLineReason, RolloutCursor, SourceIdentity,
+};
+
+pub use normalized::{
+    MetricAvailability, MetricProvenance, NormalizedEventType, NormalizedTokenEvent,
+    NormalizedTokenPayload, SchemaVersion, TokenCounters, TokenMetric, TokenPayloadKind,
+};
+
+pub use token_normalization::{
+    extract_token_evidence, normalize_token_item, RawTokenEvidence, TimestampErrorReason,
+    TokenEvidenceExtraction, TokenEvidenceSemantic, TokenEvidenceSet, TokenNormalizationError,
+    TokenNormalizationOutcome,
 };

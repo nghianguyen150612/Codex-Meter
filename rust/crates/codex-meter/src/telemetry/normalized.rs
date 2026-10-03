@@ -104,6 +104,104 @@ pub struct ConfigurationValue {
     pub provenance: MetricProvenance,
 }
 
+/// A normalized v1 quota snapshot.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NormalizedQuotaSample {
+    pub schema_version: SchemaVersion,
+    pub sample_id: String,
+    pub meter_type: QuotaMeterType,
+    pub sampled_at: String,
+    pub used_percent: PercentageMetric,
+    pub remaining_percent: PercentageMetric,
+    pub reset_evidence: QuotaWindowIdentity,
+    pub configuration: ConfigurationIdentity,
+    pub acquisition_status: AcquisitionStatus,
+    pub source_kind: QuotaSourceKind,
+}
+
+impl Eq for NormalizedQuotaSample {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaMeterType {
+    FiveHour,
+    Weekly,
+}
+
+impl QuotaMeterType {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::FiveHour => "five_hour",
+            Self::Weekly => "weekly",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PercentageMetric {
+    pub availability: MetricAvailability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    pub provenance: MetricProvenance,
+}
+
+impl Eq for PercentageMetric {}
+
+impl PercentageMetric {
+    pub(crate) fn observed(value: f64) -> Self {
+        Self {
+            availability: MetricAvailability::Available,
+            value: Some(value),
+            provenance: MetricProvenance::Observed,
+        }
+    }
+
+    pub(crate) fn derived(value: f64) -> Self {
+        Self {
+            availability: MetricAvailability::Available,
+            value: Some(value),
+            provenance: MetricProvenance::Derived,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "availability", rename_all = "snake_case")]
+pub enum QuotaWindowIdentity {
+    Unavailable,
+    Available {
+        meter_type: QuotaMeterType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        observed_reset_at: Option<String>,
+        identity_provenance: QuotaIdentityProvenance,
+        identity_confidence: QuotaIdentityConfidence,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaIdentityProvenance {
+    ObservedReset,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaIdentityConfidence {
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionStatus {
+    Succeeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum QuotaSourceKind {
+    #[serde(rename = "local_meter")]
+    LocalMeter,
+}
+
 impl ConfigurationValue {
     pub(crate) fn observed(value: impl Into<String>) -> Self {
         Self {

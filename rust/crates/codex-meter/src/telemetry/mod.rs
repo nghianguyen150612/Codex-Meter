@@ -5,15 +5,16 @@ pub mod codex_rollout;
 mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;
+pub mod quota_normalization;
 pub mod token_normalization;
 
 pub use codex_rollout::{
-    parse_rollout_record, ContextCompactedEvent, EventMessage, RolloutDecodeError, RolloutRecord,
-    RolloutRecordKind, SessionMetaRecord, SessionSource, TaskCompletedEvent, TaskCompletion,
-    TaskStartedEvent, ThreadSettingsAppliedRecord, TokenCount, TokenCountEvent, TokenCountInfo,
-    TokenUsage, TokenUsageRecord, TurnAbortReason, TurnAbortedEvent, TurnContextRecord,
-    UnsupportedRecord, UnsupportedRecordClassification, COMPATIBILITY_CLI_VERSION,
-    COMPATIBILITY_UPSTREAM_REVISION,
+    parse_rollout_record, ContextCompactedEvent, EventMessage, PlanType, QuotaPercent,
+    RateLimitSnapshot, RateLimitWindow, RolloutDecodeError, RolloutRecord, RolloutRecordKind,
+    SessionMetaRecord, SessionSource, TaskCompletedEvent, TaskCompletion, TaskStartedEvent,
+    ThreadSettingsAppliedRecord, TokenCount, TokenCountEvent, TokenCountInfo, TokenUsage,
+    TokenUsageRecord, TurnAbortReason, TurnAbortedEvent, TurnContextRecord, UnsupportedRecord,
+    UnsupportedRecordClassification, COMPATIBILITY_CLI_VERSION, COMPATIBILITY_UPSTREAM_REVISION,
 };
 
 pub use assembly::{
@@ -29,11 +30,16 @@ pub use incremental_jsonl::{
 };
 
 pub use normalized::{
-    ConfigurationIdentity, ConfigurationPayload, ConfigurationPayloadKind, ConfigurationValue,
-    LifecyclePayload, LifecyclePayloadKind, MetricAvailability, MetricProvenance,
-    NormalizedConfigurationEvent, NormalizedEventType, NormalizedSessionEvent,
-    NormalizedTokenEvent, NormalizedTokenPayload, SchemaVersion, TokenCounters, TokenMetric,
-    TokenPayloadKind,
+    AcquisitionStatus, ConfigurationIdentity, ConfigurationPayload, ConfigurationPayloadKind,
+    ConfigurationValue, LifecyclePayload, LifecyclePayloadKind, MetricAvailability,
+    MetricProvenance, NormalizedConfigurationEvent, NormalizedEventType, NormalizedQuotaSample,
+    NormalizedSessionEvent, NormalizedTokenEvent, NormalizedTokenPayload, PercentageMetric,
+    QuotaIdentityConfidence, QuotaIdentityProvenance, QuotaMeterType, QuotaSourceKind,
+    QuotaWindowIdentity, SchemaVersion, TokenCounters, TokenMetric, TokenPayloadKind,
+};
+
+pub use quota_normalization::{
+    normalize_quota_item, QuotaNormalizationError, QuotaNormalizationOutcome,
 };
 
 pub use token_normalization::{

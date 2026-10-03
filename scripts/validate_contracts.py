@@ -28,6 +28,8 @@ FIXTURES = {
     "observation-incomplete.json": "observation.schema.json",
     "observation-reset-crossing.json": "observation.schema.json",
     "quota-sample.json": "quota-sample.schema.json",
+    "quota-sample-codex-five-hour.json": "quota-sample.schema.json",
+    "quota-sample-codex-weekly.json": "quota-sample.schema.json",
     "invalid/event-session-started-token-payload.json": "normalized-event.schema.json",
     "invalid/event-token-update-lifecycle-payload.json": "normalized-event.schema.json",
     "invalid/observation-five-hour-as-weekly.json": "observation.schema.json",

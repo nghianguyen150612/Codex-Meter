@@ -1,0 +1,1 @@
+{"timestamp":"2026-10-03T10:01:03Z","type":"event_msg","payload":{"type":"turn_started","turn_id":"turn-synthetic-002","started_at":1791021663,"model_context_window":100000}}

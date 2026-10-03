@@ -27,8 +27,99 @@ pub enum SchemaVersion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum NormalizedEventType {
+    #[serde(rename = "session_detected")]
+    SessionDetected,
     #[serde(rename = "token_counters_updated")]
     TokenCountersUpdated,
+    #[serde(rename = "configuration_evidence_observed")]
+    ConfigurationEvidenceObserved,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NormalizedSessionEvent {
+    pub schema_version: SchemaVersion,
+    pub event_id: String,
+    pub event_type: NormalizedEventType,
+    pub source_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_cursor_id: Option<String>,
+    pub event_at: String,
+    pub session_id: String,
+    pub payload: LifecyclePayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LifecyclePayload {
+    pub kind: LifecyclePayloadKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum LifecyclePayloadKind {
+    #[serde(rename = "lifecycle")]
+    Lifecycle,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NormalizedConfigurationEvent {
+    pub schema_version: SchemaVersion,
+    pub event_id: String,
+    pub event_type: NormalizedEventType,
+    pub source_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_cursor_id: Option<String>,
+    pub event_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub payload: ConfigurationPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigurationPayload {
+    pub kind: ConfigurationPayloadKind,
+    pub configuration: ConfigurationIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ConfigurationPayloadKind {
+    #[serde(rename = "configuration")]
+    Configuration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigurationIdentity {
+    pub plan: ConfigurationValue,
+    pub model: ConfigurationValue,
+    pub reasoning_level: ConfigurationValue,
+    pub speed_mode: ConfigurationValue,
+    pub codex_version: ConfigurationValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigurationValue {
+    pub availability: MetricAvailability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub provenance: MetricProvenance,
+}
+
+impl ConfigurationValue {
+    pub(crate) fn observed(value: impl Into<String>) -> Self {
+        Self {
+            availability: MetricAvailability::Available,
+            value: Some(value.into()),
+            provenance: MetricProvenance::Observed,
+        }
+    }
+
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            availability: MetricAvailability::Unavailable,
+            value: None,
+            provenance: MetricProvenance::Unavailable,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

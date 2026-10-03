@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "evt:session-detected-synthetic-001",
+  "event_type": "session_detected",
+  "source_instance_id": "src:codex-rollout-synthetic-001",
+  "safe_cursor_id": "cursor:codex-rollout-synthetic-001",
+  "event_at": "2026-10-03T10:00:00Z",
+  "session_id": "session:codex-rollout-synthetic-001",
+  "payload": {
+    "kind": "lifecycle"
+  }
+}

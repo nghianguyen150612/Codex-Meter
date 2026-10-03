@@ -2,11 +2,10 @@
 
 use std::fmt;
 
-use sha2::{Digest, Sha256};
-
 use super::codex_rollout::{
     EventMessage, RolloutRecord, RolloutRecordKind, TokenUsage, TokenUsageRecord,
 };
+use super::identity;
 use super::incremental_jsonl::{ReadItem, ReadItemOutcome, RejectedLineReason, SourceIdentity};
 use super::normalized::{
     NormalizedEventType, NormalizedTokenEvent, NormalizedTokenPayload, SchemaVersion,
@@ -163,13 +162,18 @@ pub fn normalize_token_item(
                 .usage;
             let normalized_event = NormalizedTokenEvent {
                 schema_version: SchemaVersion::V1,
-                event_id: derive_event_id(source, item),
+                event_id: identity::token_event_id(
+                    source,
+                    item.start_offset,
+                    item.end_offset,
+                    item.ordinal,
+                ),
                 event_type: NormalizedEventType::TokenCountersUpdated,
-                source_instance_id: derive_source_instance_id(source),
-                safe_cursor_id: Some(derive_cursor_id(source, item.end_offset)),
+                source_instance_id: identity::source_instance_id(source),
+                safe_cursor_id: Some(identity::cursor_id(source, item.end_offset)),
                 event_at: record.timestamp.clone(),
-                session_id: Some(derive_session_id(&session_id)),
-                task_id: Some(derive_task_id(&turn_id)),
+                session_id: Some(identity::session_id(&session_id)),
+                task_id: Some(identity::task_id(&turn_id)),
                 payload: NormalizedTokenPayload {
                     kind: TokenPayloadKind::TokenCounters,
                     token_counters: TokenCounters::from_per_response(per_response_usage),
@@ -207,97 +211,28 @@ fn usage_evidence(usage: &TokenUsageRecord) -> TokenEvidenceSet {
     }
 }
 
-fn derive_source_instance_id(source: &SourceIdentity) -> String {
-    derive_id(
-        "src:",
-        "codex-meter/source-instance/v1",
-        &[source.rollout_id(), source.source_generation()],
-    )
+pub(crate) fn validate_utc_timestamp(value: &str) -> Result<(), TokenNormalizationError> {
+    validate_timestamp(value).map_err(TokenNormalizationError::InvalidTimestamp)
 }
 
-fn derive_event_id(source: &SourceIdentity, item: &ReadItem) -> String {
-    let ordinal = item
-        .ordinal
-        .map_or_else(String::new, |value| value.to_string());
-    derive_id(
-        "evt:",
-        "codex-meter/token-event/v1",
-        &[
-            source.rollout_id(),
-            source.source_generation(),
-            &item.start_offset.to_string(),
-            &item.end_offset.to_string(),
-            &ordinal,
-        ],
-    )
-}
-
-fn derive_cursor_id(source: &SourceIdentity, end_offset: u64) -> String {
-    derive_id(
-        "cursor:",
-        "codex-meter/source-boundary/v1",
-        &[
-            source.rollout_id(),
-            source.source_generation(),
-            &end_offset.to_string(),
-        ],
-    )
-}
-
-fn derive_session_id(upstream_id: &str) -> String {
-    derive_id("session:", "codex-meter/session/v1", &[upstream_id])
-}
-
-fn derive_task_id(upstream_id: &str) -> String {
-    derive_id("task:", "codex-meter/task/v1", &[upstream_id])
-}
-
-fn derive_id(prefix: &str, domain: &str, parts: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    hash_part(&mut hasher, domain);
-    for part in parts {
-        hash_part(&mut hasher, part);
-    }
-    let digest = hasher.finalize();
-    let mut result = String::with_capacity(prefix.len() + digest.len() * 2);
-    result.push_str(prefix);
-    for byte in digest {
-        result.push_str(&format!("{byte:02x}"));
-    }
-    result
-}
-
-fn hash_part(hasher: &mut Sha256, part: &str) {
-    hasher.update((part.len() as u64).to_be_bytes());
-    hasher.update(part.as_bytes());
-}
-
-fn validate_utc_timestamp(value: &str) -> Result<(), TokenNormalizationError> {
+pub(crate) fn validate_timestamp(value: &str) -> Result<(), TimestampErrorReason> {
     let bytes = value.as_bytes();
     if bytes.len() < 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::WrongShape,
-        ));
+        return Err(TimestampErrorReason::WrongShape);
     }
     if bytes[13] != b':' || bytes[16] != b':' {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::WrongShape,
-        ));
+        return Err(TimestampErrorReason::WrongShape);
     }
     let fraction_end = bytes.len() - 1;
     if bytes[fraction_end] != b'Z' {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::WrongShape,
-        ));
+        return Err(TimestampErrorReason::WrongShape);
     }
     if fraction_end > 19
         && (bytes[19] != b'.'
             || fraction_end == 20
             || !bytes[20..fraction_end].iter().all(u8::is_ascii_digit))
     {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::WrongShape,
-        ));
+        return Err(TimestampErrorReason::WrongShape);
     }
     let year = decimal(&bytes[0..4]);
     let month = decimal(&bytes[5..7]);
@@ -309,9 +244,7 @@ fn validate_utc_timestamp(value: &str) -> Result<(), TokenNormalizationError> {
         .iter()
         .any(Option::is_none)
     {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::WrongShape,
-        ));
+        return Err(TimestampErrorReason::WrongShape);
     }
     let year = year.expect("checked above");
     let month = month.expect("checked above");
@@ -320,14 +253,10 @@ fn validate_utc_timestamp(value: &str) -> Result<(), TokenNormalizationError> {
     let minute = minute.expect("checked above");
     let second = second.expect("checked above");
     if month == 0 || month > 12 || day == 0 || day > days_in_month(year, month) {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::InvalidDate,
-        ));
+        return Err(TimestampErrorReason::InvalidDate);
     }
     if hour > 23 || minute > 59 || second > 59 {
-        return Err(TokenNormalizationError::InvalidTimestamp(
-            TimestampErrorReason::InvalidTime,
-        ));
+        return Err(TimestampErrorReason::InvalidTime);
     }
     Ok(())
 }
@@ -762,6 +691,38 @@ mod tests {
                 .all(|character| character.is_ascii_alphanumeric()
                     || matches!(character, '.' | '_' | ':' | '-')));
         }
+    }
+
+    #[test]
+    fn p008_identity_domains_remain_stable_after_shared_refactor() {
+        let source = source("generation-1");
+        let item = usage_item(TOKEN_USAGE_FIXTURE, 10, 100);
+        let TokenNormalizationOutcome::PerResponse {
+            normalized_event, ..
+        } = normalize_token_item(&source, &item).expect("normalization should succeed")
+        else {
+            panic!("expected normalized event");
+        };
+        assert_eq!(
+            normalized_event.source_instance_id,
+            "src:6fc10234e90b5a972ceb75dc86da9ade29e1d1fa67bdc50644ff91eb7d25c2a3"
+        );
+        assert_eq!(
+            normalized_event.event_id,
+            "evt:e9fa822c657c9622b47ebd66302d9b525831013c69835bc0be605ea4abedcfb7"
+        );
+        assert_eq!(
+            normalized_event.safe_cursor_id.as_deref(),
+            Some("cursor:17575161849f536ed81dc3e411c6c88629849a3e34765a01bcde9d387a33301d")
+        );
+        assert_eq!(
+            normalized_event.session_id.as_deref(),
+            Some("session:ec34cebfd1edf04478a1f3403718816ddd84f723a3e97c22310dbc0faddf665d")
+        );
+        assert_eq!(
+            normalized_event.task_id.as_deref(),
+            Some("task:029bdc773ec84bb9e449cc050cccb13ec4652f187be878d15165994bc9e1f70f")
+        );
     }
 
     #[test]

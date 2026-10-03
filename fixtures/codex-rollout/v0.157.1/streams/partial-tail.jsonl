@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-03T10:00:00Z","ordinal":1,"type":"session_meta","payload":{"session_id":"session-stream-002","id":"thread-stream-002","cli_version":"0.157.1","model_provider":"synthetic-provider","source":"cli"}}
+{"timestamp":"2026-10-03T10:01:00Z","ordinal":2,"type":"token_usage_record","payload":{"thread_id":"thread-stream-002

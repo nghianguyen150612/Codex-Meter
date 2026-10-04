@@ -1,0 +1,23 @@
+# Prompt 014 Manifest
+
+- Starting SHA: `569051ac6261c01c538ca25d54fd769ff5054d59`.
+- Verified P013A baseline: fetched `origin/main`, checked out `main`, confirmed `main == origin/main` at the P013A corrective baseline, and confirmed a clean worktree before editing.
+- Workflow: direct-to-main only; no feature branch and no pull request.
+- Dependency: added `rusqlite` `0.40.2` with `default-features = false` and `features = ["bundled"]`; no ORM, async runtime, or async database layer.
+- Module structure: added `storage/mod.rs`, `storage/sqlite.rs`, `storage/migrations.rs`, and embedded `migrations/0001_storage_metadata.sql`.
+- Storage API: added Rust-owned `SqliteStore::open`, `SqliteStore::open_in_memory`, and `StorageInfo`; the rusqlite connection remains private.
+- Connection configuration: explicit caller path, caller-owned parent directories, five-second busy timeout, verified foreign keys, and safe/default synchronous durability.
+- WAL behavior: file-backed writer opens request `PRAGMA journal_mode = WAL` and verify the returned mode is `wal`; in-memory opens do not request WAL.
+- Migration registry: embedded ordered definitions with positive contiguous versions, unique stable names, registry validation before database mutation, and forward-only application.
+- Migration history: `schema_migrations(version, name, checksum_sha256)` with durable positive-version, non-empty-name, unique-name, and lowercase 64-character checksum constraints.
+- Checksums: exact embedded SQL is hashed with lowercase SHA-256; checksum and name drift are rejected without automatic repair.
+- Transaction semantics: each migration runs under `BEGIN IMMEDIATE`, executes schema SQL, records history, and commits atomically; history is re-read while holding the writer lock.
+- Compatibility: corrupt/gapped history is rejected, and a database newer than the binary returns `DatabaseTooNew` without destructive recovery.
+- Initial migration: `0001_storage_metadata` creates only constrained infrastructure table `storage_metadata`; its fixed checksum regression is tested.
+- Tests performed: bootstrap, reopen/idempotency, in-memory behavior, foreign keys, WAL, registry invalidity, checksum/name drift, database-too-new, history gap, pending upgrade, and failure rollback/resume.
+- Privacy: storage errors expose only stable migration metadata and SQLite error sources; no prompts, responses, source payloads, credentials, tokens, or account identifiers are stored.
+- Explicit deferrals: no rollout cursors, telemetry state, normalized events, quota samples, reconciliation state, runtime checkpoint state, or Observation tables; no Python SQLite implementation.
+- Full validation: final completion report records formatting, Clippy, Rust tests, build, Ruff, Python tests, contract validation, diff checks, and cross-platform status.
+- Final SHA handling: this manifest is created before the single logical P014 commit and intentionally does not include a self-referential commit SHA; the final SHA is reported in the completion report.
+- Push result: direct push to `origin/main` and final equality/worktree checks are recorded in the completion report after the commit.
+- Unrelated-work confirmation: no unrelated files or pre-existing legitimate newer work were overwritten; P013/P013A telemetry and JSON contracts remain unchanged.

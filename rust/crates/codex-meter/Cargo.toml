@@ -7,6 +7,7 @@ description = "Bootstrap executable for the independent Codex Meter project"
 license = "MIT"
 
 [dependencies]
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

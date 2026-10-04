@@ -5,6 +5,7 @@ pub mod codex_rollout;
 mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;
+pub mod observation;
 pub mod quota_normalization;
 pub mod quota_reconciliation;
 pub mod quota_tracking;
@@ -38,6 +39,14 @@ pub use normalized::{
     NormalizedSessionEvent, NormalizedTokenEvent, NormalizedTokenPayload, PercentageMetric,
     QuotaIdentityConfidence, QuotaIdentityProvenance, QuotaMeterType, QuotaSourceKind,
     QuotaWindowIdentity, SchemaVersion, TokenCounters, TokenMetric, TokenPayloadKind,
+};
+
+pub use observation::{
+    build_observation, EvidenceStatus, EvidenceValidity, IsolationEvidence, NormalizedObservation,
+    Observation, ObservationError, ObservationInput, ObservationLifecycle,
+    ObservationMeterEvidence, ObservationQuotaEvidence, ObservationQuotaEvidenceSet,
+    ObservationTiming, ObservationTokenEvidence, QualityGrade, QuotaSampleSnapshot, ReasonCode,
+    ResetStatus, TokenTelemetryCompleteness,
 };
 
 pub use quota_normalization::{

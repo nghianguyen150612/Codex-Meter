@@ -161,6 +161,22 @@ pub(crate) fn configuration_fingerprint(fields: &[Option<&str>]) -> String {
     )
 }
 
+pub(crate) fn observation_id(
+    task_id: &str,
+    session_id: Option<&str>,
+    ended_at: Option<&str>,
+) -> String {
+    derive_id(
+        "obs:",
+        "codex-meter/observation/v1",
+        &[
+            task_id,
+            session_id.unwrap_or("<missing>"),
+            ended_at.unwrap_or("<missing>"),
+        ],
+    )
+}
+
 fn derive_position_id(
     prefix: &str,
     domain: &str,

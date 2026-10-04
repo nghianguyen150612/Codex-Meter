@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0.0",
+  "observation_id": "obs:a5fd8d5fdf3fd05505b782c6cd6eba0f499ed590c5a93106619e583bd7c6f6ea",
+  "task_id": "task:codex-reset-001",
+  "session_id": "session:codex-reset-001",
+  "source_instance_id": "src:codex-001",
+  "lifecycle_state": "finalized",
+  "timing": { "started_at": "2026-10-01T04:58:00Z", "ended_at": "2026-10-01T05:01:00Z", "finalized_at": "2026-10-01T05:10:00Z", "duration_ms": 180000 },
+  "configuration": {
+    "plan": { "availability": "available", "value": "plus", "provenance": "observed" },
+    "model": { "availability": "available", "value": "gpt-5.6-sol", "provenance": "observed" },
+    "reasoning_level": { "availability": "available", "value": "high", "provenance": "observed" },
+    "speed_mode": { "availability": "unavailable", "provenance": "unavailable" },
+    "codex_version": { "availability": "unavailable", "provenance": "unavailable" }
+  },
+  "summary_quality": "X",
+  "token_evidence": {
+    "status": { "validity": "valid", "quality": "B", "reason_codes": [] },
+    "raw_token_counters": {
+      "uncached_input": { "availability": "unavailable", "provenance": "unavailable" },
+      "cached_input": { "availability": "available", "value": 2200, "provenance": "derived" },
+      "output": { "availability": "available", "value": 3100, "provenance": "derived" },
+      "reasoning_output": { "availability": "available", "value": 1200, "provenance": "derived" },
+      "raw_total": { "availability": "available", "value": 14500, "provenance": "derived" }
+    }
+  },
+  "quota_evidence": {
+    "five_hour": {
+      "meter_type": "five_hour",
+      "status": { "validity": "invalid", "quality": "X", "reason_codes": ["quota_reset_crossed"] },
+      "before_sample": {
+        "sample_id": "sample:codex-reset-before",
+        "sampled_at": "2026-10-01T04:58:00Z",
+        "used_percent": { "availability": "available", "value": 97, "provenance": "observed" },
+        "remaining_percent": { "availability": "available", "value": 3, "provenance": "observed" }
+      },
+      "after_sample": {
+        "sample_id": "sample:codex-reset-after",
+        "sampled_at": "2026-10-01T05:03:00Z",
+        "used_percent": { "availability": "available", "value": 4, "provenance": "observed" },
+        "remaining_percent": { "availability": "available", "value": 96, "provenance": "observed" }
+      },
+      "window_identity": { "availability": "unavailable" },
+      "reset_status": "detected"
+    },
+    "weekly": {
+      "meter_type": "weekly",
+      "status": { "validity": "valid", "quality": "B", "reason_codes": [] },
+      "before_sample": {
+        "sample_id": "sample:codex-reset-wb",
+        "sampled_at": "2026-10-01T04:58:00Z",
+        "used_percent": { "availability": "available", "value": 41, "provenance": "observed" },
+        "remaining_percent": { "availability": "available", "value": 59, "provenance": "observed" }
+      },
+      "after_sample": {
+        "sample_id": "sample:codex-reset-wa",
+        "sampled_at": "2026-10-01T05:03:00Z",
+        "used_percent": { "availability": "available", "value": 42, "provenance": "observed" },
+        "remaining_percent": { "availability": "available", "value": 58, "provenance": "observed" }
+      },
+      "window_identity": { "availability": "available", "meter_type": "weekly", "observed_reset_at": "2026-10-06T00:00:00Z", "identity_provenance": "observed_reset", "identity_confidence": "high" },
+      "reset_status": "not_detected",
+      "delta_percentage_points": 0
+    }
+  }
+}

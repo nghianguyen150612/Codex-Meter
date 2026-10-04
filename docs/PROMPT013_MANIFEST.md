@@ -1,0 +1,26 @@
+# Prompt 013 Manifest
+
+- Starting SHA: `8be24c114b9e83db1d22377b5cad265e8d36825d`.
+- Verified P012A baseline: `main` matched `origin/main` at the starting SHA and the worktree was clean; the P012A Rust suite passed with 96 tests.
+- Workflow: direct changes on `main`; no feature branch and no pull request.
+- Modules: added `rust/crates/codex-meter/src/telemetry/observation.rs`; exported it from `telemetry/mod.rs`; added observation identity derivation in `identity.rs`.
+- Input model: `ObservationInput` combines `TaskQuotaReconciliation`, attributed canonical token events, explicit token completeness, isolation evidence, and explicit evaluation time.
+- Identity: SHA-256 domain `codex-meter/observation/v1`, prefix `obs:`, using task ID, optional session ID, and optional task end.
+- Tokens: event-ID replay deduplication, conflicting duplicate rejection, target-task filtering, per-field checked sums, unavailable partial metrics, and derived raw-total sums.
+- Completeness: absent canonical events are unavailable; incomplete and interrupted streams are D-quality incomplete evidence with stable reason codes.
+- Configuration: consistent effective task configuration is preserved; mixed configuration is conservative and estimator-incomplete; plan values merge only when observed values agree.
+- Isolation: explicit controlled benchmark, isolated normal task, possible concurrency, and unknown external usage contexts; local overlap caps usable quality at C.
+- Grades and validity: typed A/B/C/D/X quality and valid/incomplete/invalid/unavailable domain status, with worst-grade summary selection.
+- Reasons: only the v1 reason-code vocabulary is serialized, sorted and deduplicated.
+- Lifecycle: pending reconciliation maps to `awaiting_meter`/`reconciling`; terminal states map to finalized, incomplete, or globally invalid without clock reads.
+- Quota mapping: stable, reset, no-baseline, unstable, timeout, acquisition-failure, plan-discontinuity, and provisional states retain only schema-defined reduced samples.
+- Fixtures: added Codex-specific finalized, reset, and incomplete Observation fixtures; existing generic fixtures remain unchanged.
+- Contract fixture counts: expected after fixture addition is 6 schemas, 16 positive fixtures, and 5 negative fixtures; final validation records actual counts.
+- Rust tests: observation serialization, reset/delta rejection, stable identity, v1 version coverage, token replay deduplication, partial metric handling, source conflict handling, and checked overflow coverage added; current complete test count is 104.
+- Privacy: no prompts, responses, reasoning text, raw rollout fields, account data, paths, credentials, or provider error bodies are retained.
+- Dependencies: none added; existing `serde`, `serde_json`, `sha2`, and `time` remain sufficient.
+- Deferrals: no capacity estimation, weighting, SQLite, migrations, persistence, acquisition, polling, or P014 work.
+- P014 handoff: P014 receives deterministic v1 observations, replay-safe aggregation, independent domain validity, explicit quality/concurrency, and no storage implementation.
+- Final SHA handling: this manifest is written before the single P013 commit and is not edited afterward to add a self-referential final SHA.
+- Push result: recorded in the completion report after the required direct push.
+- Unrelated work: no unrelated repository changes were intentionally modified.

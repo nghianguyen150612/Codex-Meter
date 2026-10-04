@@ -34,6 +34,15 @@ immutable for the life of the reconciliation. Samples during the task are
 still sent through P011 so reset crossings, meter instability, and plan
 discontinuity cannot be hidden by choosing a later pair.
 
+`NoBaseline` is a terminal/resolved state for the current reconciliation
+attempt. It preserves whether the cause was `MissingTaskStart`,
+`NoSampleBeforeTaskStart`, or `SampleOlderThanMaximumAge`. Post-task acquisition
+cannot repair a missing pre-task baseline, so a `NoBaseline` meter emits no
+retry or deadline action. Reconciliation completes when both meters are
+resolved, including `NoBaseline + Stable`, `NoBaseline + ResetCrossed`, and
+`NoBaseline + NoBaseline`; an `AwaitingAfterSample` or `Reconciling` meter still
+blocks completion.
+
 ## Policy and retry actions
 
 `ReconciliationPolicy` is explicit caller/test input. It contains:

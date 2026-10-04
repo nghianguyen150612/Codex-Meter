@@ -346,7 +346,8 @@ impl MeterReconciliation {
     fn is_terminal(&self) -> bool {
         matches!(
             self.state,
-            MeterReconciliationState::Stable { .. }
+            MeterReconciliationState::NoBaseline { .. }
+                | MeterReconciliationState::Stable { .. }
                 | MeterReconciliationState::ResetCrossed { .. }
                 | MeterReconciliationState::MeterUnstable { .. }
                 | MeterReconciliationState::PlanDiscontinuity { .. }
@@ -1566,12 +1567,158 @@ mod tests {
                 reason: BaselineUnavailableReason::MissingTaskStart
             }
         ));
+        assert!(matches!(
+            state.weekly.state,
+            MeterReconciliationState::NoBaseline {
+                reason: BaselineUnavailableReason::MissingTaskStart
+            }
+        ));
+        let result = reconcile_task_quota(&state, &[], &reconciliation_policy).unwrap();
+        assert_eq!(
+            result.actions,
+            vec![ReconciliationAction::ReconciliationComplete]
+        );
         let target_without_end =
             TaskReconciliationTarget::new("task", Some("2026-10-04T10:00:00Z".to_owned()), None);
         assert_eq!(
             begin_task_quota_reconciliation(target_without_end, &[], &reconciliation_policy)
                 .unwrap_err(),
             ReconciliationError::MissingTaskEnd
+        );
+    }
+
+    #[test]
+    fn no_baseline_and_stable_meter_complete_without_no_baseline_action() {
+        let weekly_baseline = sample(
+            QuotaMeterType::Weekly,
+            "weekly-before",
+            "2026-10-04T09:59:00Z",
+            30.0,
+            None,
+            None,
+        );
+        let current =
+            begin_task_quota_reconciliation(target(), &[weekly_baseline], &policy()).unwrap();
+        let inputs = vec![
+            attempt(sample(
+                QuotaMeterType::Weekly,
+                "weekly-a",
+                "2026-10-04T10:05:15Z",
+                32.0,
+                None,
+                None,
+            )),
+            attempt(sample(
+                QuotaMeterType::Weekly,
+                "weekly-b",
+                "2026-10-04T10:05:30Z",
+                32.0,
+                None,
+                None,
+            )),
+        ];
+        let result = reconcile_task_quota(&current, &inputs, &policy()).unwrap();
+        assert!(matches!(
+            result.next_state.five_hour.state,
+            MeterReconciliationState::NoBaseline {
+                reason: BaselineUnavailableReason::NoSampleBeforeTaskStart
+            }
+        ));
+        assert!(matches!(
+            result.next_state.weekly.state,
+            MeterReconciliationState::Stable { .. }
+        ));
+        assert_eq!(
+            result.actions,
+            vec![ReconciliationAction::ReconciliationComplete]
+        );
+    }
+
+    #[test]
+    fn no_baseline_does_not_block_reconciling_meter_or_request_sampling() {
+        let weekly_baseline = sample(
+            QuotaMeterType::Weekly,
+            "weekly-before",
+            "2026-10-04T09:59:00Z",
+            30.0,
+            None,
+            None,
+        );
+        let current =
+            begin_task_quota_reconciliation(target(), &[weekly_baseline], &policy()).unwrap();
+        let result = reconcile_task_quota(
+            &current,
+            &[attempt(sample(
+                QuotaMeterType::Weekly,
+                "weekly-a",
+                "2026-10-04T10:05:15Z",
+                32.0,
+                None,
+                None,
+            ))],
+            &policy(),
+        )
+        .unwrap();
+        assert!(matches!(
+            result.next_state.five_hour.state,
+            MeterReconciliationState::NoBaseline { .. }
+        ));
+        assert!(matches!(
+            result.next_state.weekly.state,
+            MeterReconciliationState::Reconciling { .. }
+        ));
+        assert!(!result
+            .actions
+            .contains(&ReconciliationAction::ReconciliationComplete));
+        assert!(result.actions.iter().any(|action| matches!(
+            action,
+            ReconciliationAction::AwaitSample {
+                meter_type: QuotaMeterType::Weekly,
+                ..
+            }
+        )));
+        assert!(!result.actions.iter().any(|action| matches!(
+            action,
+            ReconciliationAction::AwaitSample {
+                meter_type: QuotaMeterType::FiveHour,
+                ..
+            } | ReconciliationAction::RequestAnotherSample {
+                meter_type: QuotaMeterType::FiveHour,
+                ..
+            } | ReconciliationAction::AwaitDeadline {
+                meter_type: QuotaMeterType::FiveHour,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn stale_baseline_is_resolved_without_post_task_polling() {
+        let mut stale_policy = policy();
+        stale_policy.max_before_sample_age = Duration::minutes(30);
+        let old_five_hour = sample(
+            QuotaMeterType::FiveHour,
+            "old-five-hour",
+            "2026-10-04T11:00:00Z",
+            20.0,
+            None,
+            None,
+        );
+        let mut task = target();
+        task.started_at = Some("2026-10-04T12:00:00Z".to_owned());
+        task.ended_at = Some("2026-10-04T12:05:00Z".to_owned());
+        let current =
+            begin_task_quota_reconciliation(task, &[old_five_hour], &stale_policy).unwrap();
+        assert!(matches!(
+            current.five_hour.state,
+            MeterReconciliationState::NoBaseline {
+                reason: BaselineUnavailableReason::SampleOlderThanMaximumAge
+            }
+        ));
+        let result = reconcile_task_quota(&current, &[], &stale_policy).unwrap();
+        assert_eq!(
+            result.actions,
+            vec![ReconciliationAction::ReconciliationComplete]
         );
     }
 

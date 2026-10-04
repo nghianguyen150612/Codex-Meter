@@ -24,10 +24,10 @@ match every stored projection. P016 never repairs a corrupt row.
 ## Projections and schema
 
 Migration `0003_observations` creates one `STRICT` table named `observations`.
-SQLite migration version `3`, Observation schema version `1.0.0`, and checkpoint
+SQLite migration version `4`, Observation schema version `1.0.0`, and checkpoint
 state format version `1` are independent version domains.
 
-The intentional application tables after migration 3 are exactly
+The intentional application tables after migration 4 are exactly
 `schema_migrations`, `storage_metadata`, `runtime_checkpoints`, and
 `observations` (plus SQLite internal indexes/objects).
 
@@ -43,6 +43,12 @@ The table includes:
 - independent five-hour validity/quality/delta/reset status; and
 - independent weekly validity/quality/delta/reset status;
 - canonical JSON, checksum, and positive `storage_revision`.
+
+The `started_at`, `ended_at`, and `finalized_at` SQL projections are fixed-width
+UTC query keys in the form `YYYY-MM-DDTHH:MM:SS.NNNNNNNNNZ`. The migration 0004
+backfill normalizes existing projections and leaves `observation_json` byte-for-
+byte unchanged; the JSON retains the exact domain timestamp supplied by P013.
+New writes derive the same query keys from the typed Observation.
 
 Configuration and numeric projections come only from the typed Observation.
 Unavailable configuration is SQL `NULL`; unavailable/reset/incomplete quota
@@ -76,6 +82,12 @@ terminal conflict. Identity-defining `task_id`, `session_id`, and
 `source_instance_id` cannot change. P016 does not generate or overwrite
 `timing.finalized_at`.
 
+Provisional lifecycle rows must omit `timing.finalized_at`. Terminal rows may
+include it or omit it; storage never fabricates a finalization timestamp. If
+both task endpoints exist, `duration_ms` must equal the exact floor of their
+elapsed interval in milliseconds. Missing either endpoint requires missing
+duration, and inconsistent timing is rejected as corruption.
+
 An exact canonical replay is an idempotent no-op even when the caller's
 expected revision is stale. It returns the durable row, preserves its revision,
 and creates no duplicate history entry.
@@ -95,6 +107,8 @@ selects provisional lifecycle rows separately.
 
 Results are ordered deterministically by
 `COALESCE(finalized_at, ended_at, started_at, '') DESC, observation_id DESC`.
+Because each non-empty projection is fixed-width UTC, this lexical ordering is
+chronological even when source timestamps use different fractional precision.
 `ObservationPageCursor` stores that stable order-time plus the ID and uses
 keyset predicates, so pages do not rely on `OFFSET`, wall-clock tokens, or
 unstable row order. Terminal history normally has finalized timestamps and is
@@ -108,11 +122,15 @@ revision, or schema.
 `SqliteStore::commit_observation_and_checkpoint` accepts both expected
 revisions and performs Observation validation, checkpoint validation, both
 writes, and commit in one `BEGIN IMMEDIATE` transaction. It reuses the P015
-checkpoint writer helper without nesting transactions.
+checkpoint writer helper without nesting transactions. Standalone
+`save_runtime_checkpoint` retains strict P015 CAS behavior.
 
 If either Observation or checkpoint CAS fails, both writes roll back. If the
 Observation is already an identical durable replay, it is a no-op while a valid
-checkpoint CAS can still advance. This makes the safe runtime sequence
+checkpoint CAS can still advance. If the checkpoint payload is also exactly
+identical (including source, cursor, format, JSON, and checksum), its write is
+a no-op and its existing revision is returned even when the caller's expected
+revision is stale. This makes the safe runtime sequence
 straightforward: persist the terminal Observation while removing its completed
 reconciliation from the next checkpoint. A crash before commit leaves the old
 checkpoint available for deterministic replay; a crash after commit leaves both
@@ -134,7 +152,7 @@ become a migration owner.
 
 P017 may assume:
 
-- migration 0003 exists;
+- migration 0004 exists;
 - Observations persist losslessly;
 - finalized history is immutable;
 - provisional Observation updates are CAS-protected;

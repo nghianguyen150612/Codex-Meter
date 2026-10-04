@@ -6,7 +6,8 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 use super::checkpoints::{
-    encode_state, load_runtime_checkpoint, save_in_transaction as save_checkpoint_in_transaction,
+    encode_state, load_runtime_checkpoint,
+    save_in_transaction_idempotent as save_checkpoint_in_transaction_idempotent,
     save_runtime_checkpoint, RuntimeCheckpoint, RuntimeRecoveryState,
 };
 use super::migrations::{migrate, validate_registry, Migration, MIGRATIONS};
@@ -306,7 +307,7 @@ impl SqliteStore {
             observation,
             observation_expected_revision,
         )?;
-        let checkpoint = save_checkpoint_in_transaction(
+        let checkpoint = save_checkpoint_in_transaction_idempotent(
             &transaction,
             source,
             cursor,
@@ -438,6 +439,23 @@ mod tests {
             sql: "CREATE TABLE storage_test_three (value TEXT NOT NULL);",
         },
     ];
+    const PRODUCTION_THREE_MIGRATIONS: &[Migration] = &[
+        Migration {
+            version: 1,
+            name: "0001_storage_metadata",
+            sql: super::super::migrations::STORAGE_METADATA_MIGRATION,
+        },
+        Migration {
+            version: 2,
+            name: "0002_runtime_checkpoints",
+            sql: super::super::migrations::RUNTIME_CHECKPOINTS_MIGRATION,
+        },
+        Migration {
+            version: 3,
+            name: "0003_observations",
+            sql: super::super::migrations::OBSERVATIONS_MIGRATION,
+        },
+    ];
     const FAILING_MIGRATIONS: &[Migration] = &[
         Migration {
             version: 1,
@@ -485,8 +503,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 3,
-                latest_applied_migration: 3,
+                latest_supported_migration: 4,
+                latest_applied_migration: 4,
             }
         );
         let tables = store
@@ -512,7 +530,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
     }
 
     #[test]
@@ -544,7 +562,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 3);
+            assert_eq!(migration_count, 4);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
@@ -557,15 +575,50 @@ mod tests {
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 3);
+        assert_eq!(upgraded.info().latest_applied_migration, 4);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
         drop(upgraded);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn production_v3_upgrades_observation_time_keys_without_rewriting_payload() {
+        let path = database_path();
+        let mut observation: crate::telemetry::NormalizedObservation = serde_json::from_str(
+            include_str!("../../../../../fixtures/contracts/v1/observation-codex-finalized.json"),
+        )
+        .unwrap();
+        observation.timing.finalized_at = Some("2026-10-01T02:20:00.12Z".to_owned());
+        let payload_checksum = {
+            let store = open_with_migrations(&path, false, PRODUCTION_THREE_MIGRATIONS).unwrap();
+            let mut store = store;
+            let stored = store.save_observation(&observation, None).unwrap();
+            store.connection().execute("UPDATE observations SET started_at = '2026-10-01T02:00:00Z', ended_at = '2026-10-01T02:15:00Z', finalized_at = '2026-10-01T02:20:00.12Z'", []).unwrap();
+            stored.payload_sha256
+        };
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.info().latest_applied_migration, 4);
+        let (json, checksum, started, ended, finalized): (String, String, String, String, String) = store.connection().query_row("SELECT observation_json, observation_sha256, started_at, ended_at, finalized_at FROM observations", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
+        assert_eq!(checksum, payload_checksum);
+        assert_eq!(json, serde_json::to_string(&observation).unwrap());
+        assert_eq!(started, "2026-10-01T02:00:00.000000000Z");
+        assert_eq!(ended, "2026-10-01T02:15:00.000000000Z");
+        assert_eq!(finalized, "2026-10-01T02:20:00.120000000Z");
+        assert_eq!(
+            store
+                .load_observation(&observation.observation_id)
+                .unwrap()
+                .unwrap()
+                .payload_sha256,
+            payload_checksum
+        );
+        drop(store);
         remove_database(&path);
     }
 
@@ -662,7 +715,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 3
+                latest_supported_migration: 4
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -671,7 +724,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 4);
+        assert_eq!(count, 5);
         drop(connection);
         remove_database(&path);
     }

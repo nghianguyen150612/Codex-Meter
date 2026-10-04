@@ -2,7 +2,7 @@ use std::fmt;
 
 use rusqlite::{params, params_from_iter, OptionalExtension, Row, Transaction};
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 
 use crate::telemetry::{
     ConfigurationIdentity, ConfigurationValue, EvidenceValidity, MetricAvailability,
@@ -87,11 +87,23 @@ impl ObservationQuery {
             .into_iter()
             .flatten()
         {
-            parse_timestamp(timestamp).map_err(|_| StorageError::ObservationQueryInvalid)?;
+            canonical_timestamp_projection(timestamp)
+                .map_err(|_| StorageError::ObservationQueryInvalid)?;
+        }
+        if let Some(cursor) = &self.page_cursor {
+            if cursor.observation_id.is_empty()
+                || (!cursor.order_time.is_empty()
+                    && canonical_timestamp_projection(&cursor.order_time).ok()
+                        != Some(cursor.order_time.clone()))
+            {
+                return Err(StorageError::ObservationQueryInvalid);
+            }
         }
         if let (Some(after), Some(before)) = (&self.finalized_after, &self.finalized_before) {
-            if parse_timestamp(after).map_err(|_| StorageError::ObservationQueryInvalid)?
-                > parse_timestamp(before).map_err(|_| StorageError::ObservationQueryInvalid)?
+            if canonical_timestamp_projection(after)
+                .map_err(|_| StorageError::ObservationQueryInvalid)?
+                > canonical_timestamp_projection(before)
+                    .map_err(|_| StorageError::ObservationQueryInvalid)?
             {
                 return Err(StorageError::ObservationQueryInvalid);
             }
@@ -139,9 +151,9 @@ impl ObservationProjection {
             session_id: observation.session_id.clone(),
             source_instance_id: observation.source_instance_id.clone(),
             lifecycle_state: lifecycle_name(observation.lifecycle_state),
-            started_at: observation.timing.started_at.clone(),
-            ended_at: observation.timing.ended_at.clone(),
-            finalized_at: observation.timing.finalized_at.clone(),
+            started_at: canonical_optional_timestamp(observation.timing.started_at.as_deref())?,
+            ended_at: canonical_optional_timestamp(observation.timing.ended_at.as_deref())?,
+            finalized_at: canonical_optional_timestamp(observation.timing.finalized_at.as_deref())?,
             duration_ms: observation
                 .timing
                 .duration_ms
@@ -302,11 +314,17 @@ pub(crate) fn list_observations_from_connection(
     }
     if let Some(value) = &query.finalized_after {
         sql.push_str(" AND finalized_at IS NOT NULL AND finalized_at > ?");
-        values.push(value_string(value));
+        values.push(value_string(
+            &canonical_timestamp_projection(value)
+                .map_err(|_| StorageError::ObservationQueryInvalid)?,
+        ));
     }
     if let Some(value) = &query.finalized_before {
         sql.push_str(" AND finalized_at IS NOT NULL AND finalized_at < ?");
-        values.push(value_string(value));
+        values.push(value_string(
+            &canonical_timestamp_projection(value)
+                .map_err(|_| StorageError::ObservationQueryInvalid)?,
+        ));
     }
     if let Some(cursor) = &query.page_cursor {
         sql.push_str(" AND (COALESCE(finalized_at, ended_at, started_at, '') < ? OR (COALESCE(finalized_at, ended_at, started_at, '') = ? AND observation_id < ?))");
@@ -626,8 +644,20 @@ fn validate_timing(observation: &NormalizedObservation) -> Result<(), StorageErr
     {
         return Err(StorageError::ObservationCorrupt);
     }
-    if is_terminal(observation.lifecycle_state) != observation.timing.finalized_at.is_some() {
+    if !is_terminal(observation.lifecycle_state) && observation.timing.finalized_at.is_some() {
         return Err(StorageError::ObservationCorrupt);
+    }
+    match (started, ended, observation.timing.duration_ms) {
+        (Some(started), Some(ended), Some(duration_ms)) => {
+            let milliseconds = (ended - started).whole_milliseconds();
+            if milliseconds < 0 || u64::try_from(milliseconds).ok() != Some(duration_ms) {
+                return Err(StorageError::ObservationCorrupt);
+            }
+        }
+        (Some(_), Some(_), None) | (None, _, Some(_)) | (_, None, Some(_)) => {
+            return Err(StorageError::ObservationCorrupt);
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -803,7 +833,35 @@ fn available_u64(
     }
 }
 fn parse_timestamp(value: &str) -> Result<OffsetDateTime, ()> {
-    OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ())
+    if !value.ends_with('Z') {
+        return Err(());
+    }
+    let timestamp = OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ())?;
+    if timestamp.offset() != UtcOffset::UTC {
+        return Err(());
+    }
+    if !(0..=9999).contains(&timestamp.year()) {
+        return Err(());
+    }
+    Ok(timestamp)
+}
+
+fn canonical_optional_timestamp(value: Option<&str>) -> Result<Option<String>, StorageError> {
+    value.map(canonical_timestamp_projection).transpose()
+}
+
+pub(crate) fn canonical_timestamp_projection(value: &str) -> Result<String, StorageError> {
+    let timestamp = parse_timestamp(value).map_err(|_| StorageError::ObservationCorrupt)?;
+    Ok(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
+        timestamp.year(),
+        timestamp.month() as u8,
+        timestamp.day(),
+        timestamp.hour(),
+        timestamp.minute(),
+        timestamp.second(),
+        timestamp.nanosecond(),
+    ))
 }
 fn value_string(value: impl Into<String>) -> rusqlite::types::Value {
     rusqlite::types::Value::Text(value.into())
@@ -1057,7 +1115,7 @@ mod tests {
                 &observation,
                 None,
                 &source,
-                &cursor,
+                &crate::telemetry::RolloutCursor::from_checkpoint(&source, 1, None),
                 &crate::storage::RuntimeRecoveryState::default(),
                 Some(999),
             )
@@ -1175,6 +1233,274 @@ mod tests {
         assert!(matches!(
             store.load_observation(&observation.observation_id),
             Err(StorageError::ObservationFormatUnsupported)
+        ));
+    }
+
+    #[test]
+    fn canonical_timestamp_projection_normalizes_precision_and_rejects_offsets() {
+        assert_eq!(
+            canonical_timestamp_projection("2026-10-04T10:00:00Z").unwrap(),
+            "2026-10-04T10:00:00.000000000Z"
+        );
+        assert_eq!(
+            canonical_timestamp_projection("2026-10-04T10:00:00.123456Z").unwrap(),
+            "2026-10-04T10:00:00.123456000Z"
+        );
+        assert!(canonical_timestamp_projection("2026-10-04T10:00:00+07:00").is_err());
+    }
+
+    #[test]
+    fn mixed_precision_history_filters_and_pagination_are_chronological() {
+        let template = fixture("observation-codex-finalized.json");
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        for (id, finalized_at) in [
+            ("obs-a", "2026-10-04T10:00:00Z"),
+            ("obs-b", "2026-10-04T10:00:00.01Z"),
+            ("obs-c", "2026-10-04T10:00:00.1Z"),
+        ] {
+            let mut observation = template.clone();
+            observation.observation_id = id.to_owned();
+            observation.timing.finalized_at = Some(finalized_at.to_owned());
+            store.save_observation(&observation, None).unwrap();
+        }
+        let mut query = ObservationQuery::new(1);
+        let mut page = store.list_terminal_history(query.clone()).unwrap();
+        assert_eq!(page.observations[0].observation.observation_id, "obs-c");
+        query.page_cursor = page.next_cursor.take();
+        page = store.list_terminal_history(query.clone()).unwrap();
+        assert_eq!(page.observations[0].observation.observation_id, "obs-b");
+        query.page_cursor = page.next_cursor.take();
+        page = store.list_terminal_history(query).unwrap();
+        assert_eq!(page.observations[0].observation.observation_id, "obs-a");
+
+        let mut after = ObservationQuery::new(10);
+        after.finalized_after = Some("2026-10-04T10:00:00Z".to_owned());
+        assert_eq!(
+            store
+                .list_terminal_history(after)
+                .unwrap()
+                .observations
+                .iter()
+                .map(|row| row.observation.observation_id.as_str())
+                .collect::<Vec<_>>(),
+            ["obs-c", "obs-b"]
+        );
+        let mut before = ObservationQuery::new(10);
+        before.finalized_before = Some("2026-10-04T10:00:00.1Z".to_owned());
+        assert_eq!(
+            store
+                .list_terminal_history(before)
+                .unwrap()
+                .observations
+                .iter()
+                .map(|row| row.observation.observation_id.as_str())
+                .collect::<Vec<_>>(),
+            ["obs-b", "obs-a"]
+        );
+    }
+
+    #[test]
+    fn terminal_without_finalized_at_is_valid_but_provisional_finalized_at_is_not() {
+        let terminal = fixture("observation-codex-finalized.json");
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let mut without_finalized = terminal.clone();
+        without_finalized.observation_id = "obs-terminal-no-finalized".to_owned();
+        without_finalized.timing.finalized_at = None;
+        let stored = store.save_observation(&without_finalized, None).unwrap();
+        assert_eq!(
+            store
+                .load_observation(&without_finalized.observation_id)
+                .unwrap()
+                .unwrap(),
+            stored
+        );
+        assert_eq!(
+            store
+                .list_terminal_history(ObservationQuery::new(10))
+                .unwrap()
+                .observations
+                .len(),
+            1
+        );
+
+        let mut provisional = without_finalized;
+        provisional.observation_id = "obs-provisional-finalized".to_owned();
+        provisional.lifecycle_state = ObservationLifecycle::Reconciling;
+        provisional.timing.finalized_at = Some("2026-10-04T10:00:00Z".to_owned());
+        assert!(matches!(
+            store.save_observation(&provisional, None),
+            Err(StorageError::ObservationCorrupt)
+        ));
+    }
+
+    #[test]
+    fn duration_must_match_complete_task_interval() {
+        let template = fixture("observation-codex-finalized.json");
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let mut mismatch = template.clone();
+        mismatch.observation_id = "obs-duration-mismatch".to_owned();
+        mismatch.timing.duration_ms = Some(999);
+        assert!(matches!(
+            store.save_observation(&mismatch, None),
+            Err(StorageError::ObservationCorrupt)
+        ));
+        let mut missing = template.clone();
+        missing.observation_id = "obs-duration-missing".to_owned();
+        missing.timing.duration_ms = None;
+        assert!(matches!(
+            store.save_observation(&missing, None),
+            Err(StorageError::ObservationCorrupt)
+        ));
+        let mut no_start = template;
+        no_start.observation_id = "obs-duration-no-start".to_owned();
+        no_start.timing.started_at = None;
+        no_start.timing.duration_ms = Some(1);
+        assert!(matches!(
+            store.save_observation(&no_start, None),
+            Err(StorageError::ObservationCorrupt)
+        ));
+    }
+
+    #[test]
+    fn exact_composite_replay_is_a_true_noop_and_partial_replays_progress_one_side() {
+        let observation = fixture("observation-codex-finalized.json");
+        let source = crate::telemetry::SourceIdentity::new("rollout-replay", "generation").unwrap();
+        let cursor = crate::telemetry::RolloutCursor::at_start(&source);
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let first = store
+            .commit_observation_and_checkpoint(
+                &observation,
+                None,
+                &source,
+                &cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                None,
+            )
+            .unwrap();
+        let replay = store
+            .commit_observation_and_checkpoint(
+                &observation,
+                Some(999),
+                &source,
+                &cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(999),
+            )
+            .unwrap();
+        assert_eq!(first.0.storage_revision, replay.0.storage_revision);
+        assert_eq!(first.1.revision, replay.1.revision);
+
+        let advanced_cursor = crate::telemetry::RolloutCursor::from_checkpoint(&source, 10, None);
+        let advanced = store
+            .commit_observation_and_checkpoint(
+                &observation,
+                Some(999),
+                &source,
+                &advanced_cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(1),
+            )
+            .unwrap();
+        assert_eq!(advanced.0.storage_revision, 1);
+        assert_eq!(advanced.1.revision, 2);
+
+        let mut provisional = observation.clone();
+        provisional.observation_id = "obs-provisional-composite".to_owned();
+        provisional.lifecycle_state = ObservationLifecycle::AwaitingMeter;
+        provisional.timing.finalized_at = None;
+        let initial = store
+            .commit_observation_and_checkpoint(
+                &provisional,
+                None,
+                &source,
+                &advanced_cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(2),
+            )
+            .unwrap();
+        let mut progressed = provisional;
+        progressed.lifecycle_state = ObservationLifecycle::Reconciling;
+        let progressed = store
+            .commit_observation_and_checkpoint(
+                &progressed,
+                Some(initial.0.storage_revision),
+                &source,
+                &advanced_cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(999),
+            )
+            .unwrap();
+        assert_eq!(progressed.0.storage_revision, 2);
+        assert_eq!(progressed.1.revision, initial.1.revision);
+    }
+
+    #[test]
+    fn stale_non_identical_checkpoint_rolls_back_observation() {
+        let observation = fixture("observation-codex-finalized.json");
+        let source = crate::telemetry::SourceIdentity::new("rollout-stale", "generation").unwrap();
+        let cursor = crate::telemetry::RolloutCursor::at_start(&source);
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        store
+            .save_runtime_checkpoint(
+                &source,
+                &cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                None,
+            )
+            .unwrap();
+        let mut changed = observation.clone();
+        changed.observation_id = "obs-stale-rollback".to_owned();
+        assert!(matches!(
+            store.commit_observation_and_checkpoint(
+                &changed,
+                None,
+                &source,
+                &crate::telemetry::RolloutCursor::from_checkpoint(&source, 1, None),
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(99)
+            ),
+            Err(StorageError::CheckpointRevisionConflict { .. })
+        ));
+        assert!(store
+            .load_observation(&changed.observation_id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn corrupt_checkpoint_cannot_qualify_as_exact_replay() {
+        let observation = fixture("observation-codex-finalized.json");
+        let source =
+            crate::telemetry::SourceIdentity::new("rollout-corrupt", "generation").unwrap();
+        let cursor = crate::telemetry::RolloutCursor::at_start(&source);
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        store
+            .commit_observation_and_checkpoint(
+                &observation,
+                None,
+                &source,
+                &cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                None,
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "UPDATE runtime_checkpoints SET state_sha256 = ?1",
+                ["0".repeat(64)],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.commit_observation_and_checkpoint(
+                &observation,
+                Some(999),
+                &source,
+                &cursor,
+                &crate::storage::RuntimeRecoveryState::default(),
+                Some(999),
+            ),
+            Err(StorageError::CheckpointCorrupt)
         ));
     }
 }

@@ -435,6 +435,97 @@ pub(crate) fn save_in_transaction(
     })
 }
 
+pub(crate) fn save_in_transaction_idempotent(
+    transaction: &Transaction<'_>,
+    source: &SourceIdentity,
+    cursor: &RolloutCursor,
+    state: &RuntimeRecoveryState,
+    state_json: String,
+    state_sha256: String,
+    expected_revision: Option<u64>,
+) -> Result<RuntimeCheckpoint, StorageError> {
+    if source.rollout_id() != cursor.rollout_id()
+        || source.source_generation() != cursor.source_generation()
+    {
+        return Err(StorageError::CheckpointSourceMismatch);
+    }
+    let existing = transaction
+        .query_row(
+            "SELECT rollout_id, source_generation, committed_offset, last_ordinal, checkpoint_revision, state_format_version, state_json, state_sha256 FROM runtime_checkpoints WHERE rollout_id = ?1 AND source_generation = ?2",
+            params![source.rollout_id(), source.source_generation()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StorageError::sqlite)?;
+    if let Some((
+        rollout_id,
+        source_generation,
+        offset,
+        ordinal,
+        revision,
+        format,
+        existing_json,
+        existing_sha256,
+    )) = existing
+    {
+        let existing_source = SourceIdentity::new(rollout_id, source_generation)
+            .map_err(|_| StorageError::CheckpointCorrupt)?;
+        let committed_offset = parse_u64(&offset)?;
+        let last_ordinal = ordinal.as_deref().map(parse_u64).transpose()?;
+        let revision = u64::try_from(revision).map_err(|_| StorageError::CheckpointCorrupt)?;
+        if revision == 0 {
+            return Err(StorageError::CheckpointCorrupt);
+        }
+        let format = u32::try_from(format)
+            .map_err(|_| StorageError::CheckpointFormatUnsupported { found: 0 })?;
+        if format > STATE_FORMAT_VERSION {
+            return Err(StorageError::CheckpointFormatTooNew {
+                found: format,
+                supported: STATE_FORMAT_VERSION,
+            });
+        }
+        if format == 0 {
+            return Err(StorageError::CheckpointFormatUnsupported { found: format });
+        }
+        let existing_state = decode_state(&existing_json, &existing_sha256)?;
+        let existing_cursor =
+            RolloutCursor::from_checkpoint(&existing_source, committed_offset, last_ordinal);
+        if existing_source == *source
+            && existing_cursor == *cursor
+            && format == STATE_FORMAT_VERSION
+            && existing_json == state_json
+            && existing_sha256 == state_sha256
+        {
+            return Ok(RuntimeCheckpoint {
+                source: existing_source,
+                cursor: existing_cursor,
+                state: existing_state,
+                revision,
+            });
+        }
+    }
+    save_in_transaction(
+        transaction,
+        source,
+        cursor,
+        state,
+        state_json,
+        state_sha256,
+        expected_revision,
+    )
+}
+
 fn parse_u64(value: &str) -> Result<u64, StorageError> {
     value
         .parse::<u64>()

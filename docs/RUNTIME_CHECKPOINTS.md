@@ -51,7 +51,7 @@ than floating-point seconds. Restored policies pass `ReconciliationPolicy::valid
 and domain-owned recovery validation before becoming runtime state.
 
 `state_format_version = 1` is an internal checkpoint format version. It is
-separate from the SQLite migration version (`2`) and public JSON contract
+separate from the SQLite migration version (`4`) and public JSON contract
 versions such as `schema_version = 1.0.0`. The format is present in both the
 row metadata and the typed payload envelope. A newer or unsupported format is
 rejected rather than decoded as version 1.
@@ -91,6 +91,15 @@ is not a complete process-level singleton lock.
 
 Loading is read-only and never creates a row. A missing exact source-generation
 row returns `Ok(None)`.
+
+The standalone `SqliteStore::save_runtime_checkpoint` API retains the strict
+P015 rule that an expected revision must match before a non-identical update.
+The P016/P016A composite Observation handoff additionally recognizes an exact
+durable checkpoint replay by comparing source identity, cursor, state format,
+state JSON, and state checksum. An exact replay returns the existing checkpoint
+without incrementing its revision, even if the caller's expected revision is
+stale. Corrupt checkpoint rows are decoded and checksum-validated before they
+can qualify as an exact replay.
 
 ## Ingestion sequence
 

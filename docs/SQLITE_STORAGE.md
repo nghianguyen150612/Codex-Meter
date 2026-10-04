@@ -113,8 +113,8 @@ P016 extends the P015 storage infrastructure with durable Observation history:
 - `runtime_checkpoints`: atomic cursor/runtime/replay recovery state from
   migration `0002_runtime_checkpoints`.
 - `observations`: canonical P013 Observation JSON plus derived indexed
-  projections, checksum, and positive storage revision from migration
-  `0003_observations`.
+  projections, checksum, and positive storage revision from migrations
+  `0003_observations` and `0004_observation_time_keys`.
 
 Migration 0001 creates:
 
@@ -143,6 +143,12 @@ Migration 0003 has checksum:
 1ed907c9f124697b7f5620799672e49128dde7110860d513b0efaa9f57cd305c
 ```
 
+Migration 0004 has checksum:
+
+```text
+97aaebf9ca9c856b42cd88089ee17f84cbe3010ad4e37246ecd7118417d14f6c
+```
+
 The checkpoint table is a `STRICT` table keyed by `(rollout_id,
 source_generation)`. It stores unsigned cursor values as decimal text, a
 nullable decimal ordinal, positive revision, internal state format version,
@@ -156,6 +162,9 @@ independent five-hour and weekly validity/quality/delta/reset status. It has
 deliberate history, lifecycle, configuration, quality, validity, and composite
 configuration/time indexes. There is no generic JSON blob table, normalized
 event archive, task/session content table, or analytics result table.
+
+Migration 0004 backfills the three timestamp projections to fixed-width UTC
+keys (`YYYY-MM-DDTHH:MM:SS.NNNNNNNNNZ`) without rewriting canonical JSON.
 
 See `docs/RUNTIME_CHECKPOINTS.md` for the runtime recovery payload and
 transaction contract, and `docs/OBSERVATION_STORAGE.md` for the Observation

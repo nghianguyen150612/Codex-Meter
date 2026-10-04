@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::codex_rollout::{EventMessage, RolloutRecordKind, TaskCompletion, TurnContextRecord};
 use super::identity;
 use super::incremental_jsonl::{
@@ -21,14 +23,16 @@ use super::token_normalization::{
     TokenNormalizationOutcome,
 };
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelemetryState {
     pub session: Option<SessionContext>,
     pub thread_configuration: ConfigurationState,
     pub tasks: BTreeMap<String, TaskState>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionContext {
     pub session_id: String,
     pub thread_id: String,
@@ -36,7 +40,8 @@ pub struct SessionContext {
     pub model_provider: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigurationState {
     pub model: Option<String>,
     pub model_provider: Option<String>,
@@ -45,7 +50,8 @@ pub struct ConfigurationState {
     pub codex_version: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskState {
     pub task_id: String,
     pub root_task_id: Option<String>,
@@ -59,7 +65,7 @@ pub struct TaskState {
     pub configuration_consistency: ConfigurationConsistency,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum TaskLifecycle {
     Observed,
     Active,
@@ -69,14 +75,14 @@ pub enum TaskLifecycle {
     ConflictingTerminalEvidence,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum TaskTerminalEvidence {
     Completed,
     Failed,
     Aborted,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum TaskAnomaly {
     CompletionWithoutStart,
     AbortWithoutStart,
@@ -86,7 +92,7 @@ pub enum TaskAnomaly {
     TokenAfterTerminal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ConfigurationConsistency {
     NoTokenConsumption,
     Consistent,

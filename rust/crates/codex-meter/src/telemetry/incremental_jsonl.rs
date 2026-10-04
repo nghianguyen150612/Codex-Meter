@@ -68,6 +68,20 @@ impl RolloutCursor {
         }
     }
 
+    /// Restores a validated cursor from durable checkpoint fields.
+    pub fn from_checkpoint(
+        source: &SourceIdentity,
+        committed_offset: u64,
+        last_ordinal: Option<u64>,
+    ) -> Self {
+        Self {
+            rollout_id: source.rollout_id.clone(),
+            source_generation: source.source_generation.clone(),
+            committed_offset,
+            last_ordinal,
+        }
+    }
+
     /// Returns the logical rollout identifier carried by this cursor.
     pub fn rollout_id(&self) -> &str {
         &self.rollout_id

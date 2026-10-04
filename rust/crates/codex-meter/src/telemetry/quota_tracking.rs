@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 
 use super::identity;
@@ -15,7 +17,8 @@ const FIVE_HOUR_MINUTES: i64 = 300;
 const WEEKLY_MINUTES: i64 = 10_080;
 
 /// Stateful independent tracker state for both supported quota meters.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaTrackingState {
     pub five_hour: MeterTrackingState,
     pub weekly: MeterTrackingState,
@@ -31,7 +34,8 @@ impl Default for QuotaTrackingState {
 }
 
 /// State for one meter. It never contains raw provider payloads or account data.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeterTrackingState {
     pub meter_type: QuotaMeterType,
     pub current_window: Option<TrackedQuotaWindow>,
@@ -48,17 +52,36 @@ impl MeterTrackingState {
             seen_sample_ids: BTreeSet::new(),
         }
     }
+
+    pub(crate) fn validate_recovered(&self) -> Result<(), QuotaTrackingError> {
+        if let Some(window) = &self.current_window {
+            if window.meter_type != self.meter_type {
+                return Err(QuotaTrackingError::InvalidWindowIdentityMeter {
+                    sample: self.meter_type,
+                    identity: window.meter_type,
+                });
+            }
+        }
+        if let Some(sample) = &self.last_sample {
+            validate_sample(self.meter_type, sample)?;
+        }
+        if self.last_sample.is_some() != self.current_window.is_some() {
+            return Err(QuotaTrackingError::InvalidSampleTimestamp);
+        }
+        Ok(())
+    }
 }
 
 /// Explicit tracked identity, distinguishing provider evidence from local inference.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TrackedWindowIdentity {
     ObservedReset { observed_reset_at: String },
     LocallyInferred { local_window_id: String },
 }
 
 /// The current window and its observed evidence range.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrackedQuotaWindow {
     pub meter_type: QuotaMeterType,
     pub identity: TrackedWindowIdentity,
@@ -97,6 +120,25 @@ impl TrackedQuotaWindow {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct NonNegativePercentagePoints(f64);
 
+impl Serialize for NonNegativePercentagePoints {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for NonNegativePercentagePoints {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = f64::deserialize(deserializer)?;
+        Self::new(value).map_err(|error| serde::de::Error::custom(error.to_string()))
+    }
+}
+
 impl NonNegativePercentagePoints {
     pub fn new(value: f64) -> Result<Self, QuotaTrackingError> {
         if value.is_finite() && (0.0..=100.0).contains(&value) {
@@ -122,14 +164,14 @@ pub struct SameWindowDelta {
 }
 
 /// Why a boundary was classified as observed or locally inferred.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum BoundaryEvidence {
     ObservedReset,
     LocalInference,
 }
 
 /// Explicit reasons for contradictory meter behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum MeterInstabilityReason {
     SameObservedResetUsageDecreased,
     ObservedResetChangedBeforePreviousBoundary,

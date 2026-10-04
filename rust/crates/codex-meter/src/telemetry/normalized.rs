@@ -1,9 +1,9 @@
 //! Typed v1 normalized token-event structures.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A normalized event emitted by the Codex raw-token adapter.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct NormalizedTokenEvent {
     pub schema_version: SchemaVersion,
     pub event_id: String,
@@ -19,13 +19,13 @@ pub struct NormalizedTokenEvent {
     pub payload: NormalizedTokenPayload,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum SchemaVersion {
     #[serde(rename = "1.0.0")]
     V1,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum NormalizedEventType {
     #[serde(rename = "session_detected")]
     SessionDetected,
@@ -35,7 +35,7 @@ pub enum NormalizedEventType {
     ConfigurationEvidenceObserved,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct NormalizedSessionEvent {
     pub schema_version: SchemaVersion,
     pub event_id: String,
@@ -48,18 +48,18 @@ pub struct NormalizedSessionEvent {
     pub payload: LifecyclePayload,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct LifecyclePayload {
     pub kind: LifecyclePayloadKind,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum LifecyclePayloadKind {
     #[serde(rename = "lifecycle")]
     Lifecycle,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct NormalizedConfigurationEvent {
     pub schema_version: SchemaVersion,
     pub event_id: String,
@@ -75,19 +75,19 @@ pub struct NormalizedConfigurationEvent {
     pub payload: ConfigurationPayload,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigurationPayload {
     pub kind: ConfigurationPayloadKind,
     pub configuration: ConfigurationIdentity,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ConfigurationPayloadKind {
     #[serde(rename = "configuration")]
     Configuration,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigurationIdentity {
     pub plan: ConfigurationValue,
     pub model: ConfigurationValue,
@@ -96,7 +96,7 @@ pub struct ConfigurationIdentity {
     pub codex_version: ConfigurationValue,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigurationValue {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,7 +105,7 @@ pub struct ConfigurationValue {
 }
 
 /// A normalized v1 quota snapshot.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct NormalizedQuotaSample {
     pub schema_version: SchemaVersion,
     pub sample_id: String,
@@ -121,7 +121,7 @@ pub struct NormalizedQuotaSample {
 
 impl Eq for NormalizedQuotaSample {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaMeterType {
     FiveHour,
@@ -137,7 +137,7 @@ impl QuotaMeterType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct PercentageMetric {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,7 +165,7 @@ impl PercentageMetric {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "availability", rename_all = "snake_case")]
 pub enum QuotaWindowIdentity {
     Unavailable,
@@ -184,27 +184,27 @@ pub enum QuotaWindowIdentity {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaIdentityProvenance {
     ObservedReset,
     LocallyInferred,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaIdentityConfidence {
     High,
     Medium,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcquisitionStatus {
     Succeeded,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum QuotaSourceKind {
     #[serde(rename = "local_meter")]
     LocalMeter,
@@ -228,19 +228,19 @@ impl ConfigurationValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct NormalizedTokenPayload {
     pub kind: TokenPayloadKind,
     pub token_counters: TokenCounters,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TokenPayloadKind {
     #[serde(rename = "token_counters")]
     TokenCounters,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TokenCounters {
     pub uncached_input: TokenMetric,
     pub cached_input: TokenMetric,
@@ -262,7 +262,7 @@ impl TokenCounters {
 }
 
 /// Availability of one normalized token metric.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricAvailability {
     Available,
@@ -270,7 +270,7 @@ pub enum MetricAvailability {
 }
 
 /// Provenance of one normalized token metric.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricProvenance {
     Observed,
@@ -280,7 +280,7 @@ pub enum MetricProvenance {
 
 /// A v1 token metric. Constructors preserve the schema invariant that only
 /// available metrics carry values and unavailable metrics carry no value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TokenMetric {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]

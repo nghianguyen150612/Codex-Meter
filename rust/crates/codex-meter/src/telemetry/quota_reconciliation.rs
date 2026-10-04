@@ -3,7 +3,45 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
+
+mod duration_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use time::Duration;
+
+    #[derive(Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct StoredDuration {
+        seconds: i64,
+        nanoseconds: i32,
+    }
+
+    pub fn serialize<S>(value: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        StoredDuration {
+            seconds: value.whole_seconds(),
+            nanoseconds: value.subsec_nanoseconds(),
+        }
+        .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = StoredDuration::deserialize(deserializer)?;
+        if !(-999_999_999..=999_999_999).contains(&value.nanoseconds) {
+            return Err(serde::de::Error::custom(
+                "duration nanoseconds out of range",
+            ));
+        }
+        Ok(Duration::new(value.seconds, value.nanoseconds))
+    }
+}
 
 use super::normalized::{NormalizedQuotaSample, QuotaMeterType, QuotaWindowIdentity};
 use super::quota_tracking::{
@@ -12,7 +50,8 @@ use super::quota_tracking::{
 };
 
 /// The privacy-safe identity and lifecycle interval of one task.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskReconciliationTarget {
     pub task_id: String,
     pub session_id: Option<String>,
@@ -143,22 +182,25 @@ impl fmt::Display for PolicyValidationError {
 }
 
 /// Explicit result of selecting a pre-task baseline.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub enum BeforeSampleSelection {
     Selected {
         sample: NormalizedQuotaSample,
+        #[serde(with = "duration_serde")]
         age: Duration,
     },
     Unavailable,
     TooOld {
         sample: NormalizedQuotaSample,
+        #[serde(with = "duration_serde")]
         age: Duration,
     },
     MissingTaskStart,
 }
 
 /// Why a meter has no usable task baseline.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum BaselineUnavailableReason {
     MissingTaskStart,
     NoSampleBeforeTaskStart,
@@ -166,14 +208,15 @@ pub enum BaselineUnavailableReason {
 }
 
 /// Stable, provider-independent attribution-risk evidence.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub enum AttributionRisk {
     NoKnownLocalOverlap,
     KnownLocalOverlap { task_ids: BTreeSet<String> },
 }
 
 /// Acquisition failure reasons intentionally contain no provider error body.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum AcquisitionFailureReason {
     Temporary,
     SourceUnavailable,
@@ -182,7 +225,7 @@ pub enum AcquisitionFailureReason {
 }
 
 /// One scheduled acquisition opportunity, successful or failed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct QuotaAcquisitionAttempt {
     pub sampled_at: String,
     pub meter_type: QuotaMeterType,
@@ -193,13 +236,14 @@ pub type ReconciliationInput = QuotaAcquisitionAttempt;
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
+#[derive(Deserialize, Serialize)]
 pub enum QuotaAcquisitionResult {
     Sample(NormalizedQuotaSample),
     Failed { reason: AcquisitionFailureReason },
 }
 
 /// State machine for one independent meter.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum MeterReconciliationState {
     NoBaseline { reason: BaselineUnavailableReason },
     AwaitingAfterSample,
@@ -213,7 +257,8 @@ pub enum MeterReconciliationState {
 }
 
 /// Candidate semantics count the first eligible observation as confirmation one.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StableCandidate {
     pub sample: NormalizedQuotaSample,
     pub window: TrackedQuotaWindow,
@@ -221,7 +266,8 @@ pub struct StableCandidate {
     pub first_observed_at: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReconciledMeterEvidence {
     pub meter_type: QuotaMeterType,
     pub before_sample: NormalizedQuotaSample,
@@ -233,7 +279,8 @@ pub struct ReconciledMeterEvidence {
     pub last_change_at: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResetCrossedEvidence {
     pub meter_type: QuotaMeterType,
     pub before_sample: NormalizedQuotaSample,
@@ -243,7 +290,8 @@ pub struct ResetCrossedEvidence {
     pub evidence: BoundaryEvidence,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeterUnstableEvidence {
     pub meter_type: QuotaMeterType,
     pub before_sample: NormalizedQuotaSample,
@@ -252,7 +300,8 @@ pub struct MeterUnstableEvidence {
     pub reason: MeterInstabilityReason,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanDiscontinuityEvidence {
     pub meter_type: QuotaMeterType,
     pub before_sample: NormalizedQuotaSample,
@@ -260,7 +309,8 @@ pub struct PlanDiscontinuityEvidence {
     pub window: TrackedQuotaWindow,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimedOutEvidence {
     pub meter_type: QuotaMeterType,
     pub before_sample: Option<NormalizedQuotaSample>,
@@ -272,7 +322,8 @@ pub struct TimedOutEvidence {
 
 /// Explicit per-meter state. The tracker is private so P011 remains the only
 /// implementation of reset-safe comparison semantics.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeterReconciliation {
     pub meter_type: QuotaMeterType,
     pub before_selection: BeforeSampleSelection,
@@ -355,10 +406,73 @@ impl MeterReconciliation {
                 | MeterReconciliationState::AcquisitionFailed { .. }
         )
     }
+
+    pub(crate) fn validate_recovered(&self) -> Result<(), ReconciliationError> {
+        if self.meter_type != self.tracker.meter_type
+            || self.meter_type
+                != self
+                    .before_sample
+                    .as_ref()
+                    .map(|sample| sample.meter_type)
+                    .unwrap_or(self.meter_type)
+        {
+            return Err(ReconciliationError::AttemptMeterMismatch);
+        }
+        self.tracker
+            .validate_recovered()
+            .map_err(ReconciliationError::Tracking)?;
+        if let Some(sample) = &self.before_sample {
+            if sample.meter_type != self.meter_type {
+                return Err(ReconciliationError::AttemptMeterMismatch);
+            }
+        }
+        if let Some(sample) = &self.last_successful_sample {
+            if sample.meter_type != self.meter_type {
+                return Err(ReconciliationError::AttemptMeterMismatch);
+            }
+        }
+        if let Some(timestamp) = &self.last_attempt_at {
+            parse_timestamp(timestamp, false)?;
+        }
+        if let Some(timestamp) = &self.last_change_at {
+            parse_timestamp(timestamp, false)?;
+        }
+        Ok(())
+    }
+}
+
+impl TaskQuotaReconciliation {
+    pub(crate) fn validate_recovered(
+        &self,
+        policy: &ReconciliationPolicy,
+    ) -> Result<(), ReconciliationError> {
+        policy.validate()?;
+        if self.task.task_id.is_empty() {
+            return Err(ReconciliationError::InvalidTaskTimestamp);
+        }
+        validate_optional_task_timestamp(self.task.started_at.as_deref())?;
+        validate_optional_task_timestamp(self.task.ended_at.as_deref())?;
+        if self.five_hour.meter_type != QuotaMeterType::FiveHour
+            || self.weekly.meter_type != QuotaMeterType::Weekly
+        {
+            return Err(ReconciliationError::AttemptMeterMismatch);
+        }
+        self.five_hour.validate_recovered()?;
+        self.weekly.validate_recovered()?;
+        Ok(())
+    }
+}
+
+fn validate_optional_task_timestamp(value: Option<&str>) -> Result<(), ReconciliationError> {
+    if let Some(value) = value {
+        parse_timestamp(value, true)?;
+    }
+    Ok(())
 }
 
 /// Independent five-hour and weekly task evidence.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskQuotaReconciliation {
     pub task: TaskReconciliationTarget,
     pub five_hour: MeterReconciliation,

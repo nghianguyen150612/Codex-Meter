@@ -18,12 +18,21 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 pub(crate) const STORAGE_METADATA_MIGRATION: &str =
     include_str!("../../migrations/0001_storage_metadata.sql");
+pub(crate) const RUNTIME_CHECKPOINTS_MIGRATION: &str =
+    include_str!("../../migrations/0002_runtime_checkpoints.sql");
 
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_storage_metadata",
-    sql: STORAGE_METADATA_MIGRATION,
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_storage_metadata",
+        sql: STORAGE_METADATA_MIGRATION,
+    },
+    Migration {
+        version: 2,
+        name: "0002_runtime_checkpoints",
+        sql: RUNTIME_CHECKPOINTS_MIGRATION,
+    },
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Migration {
@@ -342,6 +351,14 @@ mod tests {
         assert_eq!(
             checksum(STORAGE_METADATA_MIGRATION),
             "1ffa336dcdc5abc63fdf74276c354c82a7b8f157af9412625723a7d8fe20c5aa"
+        );
+    }
+
+    #[test]
+    fn migration_two_checksum_is_regression_stable() {
+        assert_eq!(
+            checksum(RUNTIME_CHECKPOINTS_MIGRATION),
+            "ae4a25ab39f865e7d1d5f02c9d03cc95a2786b72a48733025db1a0abe01d7199"
         );
     }
 }

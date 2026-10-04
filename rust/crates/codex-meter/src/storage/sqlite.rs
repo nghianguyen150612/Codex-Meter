@@ -5,7 +5,11 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
+use super::checkpoints::{
+    load_runtime_checkpoint, save_runtime_checkpoint, RuntimeCheckpoint, RuntimeRecoveryState,
+};
 use super::migrations::{migrate, validate_registry, Migration, MIGRATIONS};
+use crate::telemetry::{RolloutCursor, SourceIdentity};
 
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -45,6 +49,23 @@ pub enum StorageError {
     Sqlite {
         source: rusqlite::Error,
     },
+    CheckpointSourceMismatch,
+    CheckpointRevisionConflict {
+        expected: Option<u64>,
+        actual: Option<u64>,
+    },
+    CheckpointRevisionOverflow,
+    CheckpointCorrupt,
+    CheckpointFormatTooNew {
+        found: u32,
+        supported: u32,
+    },
+    CheckpointFormatUnsupported {
+        found: u32,
+    },
+    CheckpointDecode,
+    CheckpointStateInvalid,
+    CheckpointCursorInvalid,
 }
 
 impl StorageError {
@@ -80,6 +101,15 @@ impl fmt::Display for StorageError {
                 write!(formatter, "SQLite migration {version} ({name}) failed")
             }
             Self::Sqlite { .. } => write!(formatter, "SQLite operation failed"),
+            Self::CheckpointSourceMismatch => write!(formatter, "runtime checkpoint source does not match cursor"),
+            Self::CheckpointRevisionConflict { .. } => write!(formatter, "runtime checkpoint revision conflict"),
+            Self::CheckpointRevisionOverflow => write!(formatter, "runtime checkpoint revision overflowed"),
+            Self::CheckpointCorrupt => write!(formatter, "runtime checkpoint is corrupt"),
+            Self::CheckpointFormatTooNew { found, supported } => write!(formatter, "runtime checkpoint format {found} is newer than supported format {supported}"),
+            Self::CheckpointFormatUnsupported { found } => write!(formatter, "runtime checkpoint format {found} is unsupported"),
+            Self::CheckpointDecode => write!(formatter, "runtime checkpoint could not be decoded"),
+            Self::CheckpointStateInvalid => write!(formatter, "runtime checkpoint state is invalid"),
+            Self::CheckpointCursorInvalid => write!(formatter, "runtime checkpoint cursor is invalid"),
         }
     }
 }
@@ -96,7 +126,16 @@ impl Error for StorageError {
             }
             Self::MigrationRegistryInvalid { .. }
             | Self::MigrationDrift { .. }
-            | Self::DatabaseTooNew { .. } => None,
+            | Self::DatabaseTooNew { .. }
+            | Self::CheckpointSourceMismatch
+            | Self::CheckpointRevisionConflict { .. }
+            | Self::CheckpointRevisionOverflow
+            | Self::CheckpointCorrupt
+            | Self::CheckpointFormatTooNew { .. }
+            | Self::CheckpointFormatUnsupported { .. }
+            | Self::CheckpointDecode
+            | Self::CheckpointStateInvalid
+            | Self::CheckpointCursorInvalid => None,
         }
     }
 }
@@ -139,6 +178,29 @@ impl SqliteStore {
         self.connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .map_err(StorageError::sqlite)
+    }
+
+    pub fn load_runtime_checkpoint(
+        &self,
+        source: &SourceIdentity,
+    ) -> Result<Option<RuntimeCheckpoint>, StorageError> {
+        load_runtime_checkpoint(&self.connection, source)
+    }
+
+    pub fn save_runtime_checkpoint(
+        &mut self,
+        source: &SourceIdentity,
+        cursor: &RolloutCursor,
+        state: &RuntimeRecoveryState,
+        expected_revision: Option<u64>,
+    ) -> Result<RuntimeCheckpoint, StorageError> {
+        save_runtime_checkpoint(
+            &mut self.connection,
+            source,
+            cursor,
+            state,
+            expected_revision,
+        )
     }
 
     #[cfg(test)]
@@ -307,8 +369,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 1,
-                latest_applied_migration: 1,
+                latest_supported_migration: 2,
+                latest_applied_migration: 2,
             }
         );
         let tables = store
@@ -319,14 +381,21 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        assert_eq!(tables, vec!["schema_migrations", "storage_metadata"]);
+        assert_eq!(
+            tables,
+            vec![
+                "runtime_checkpoints",
+                "schema_migrations",
+                "storage_metadata"
+            ]
+        );
         let migration_count: i64 = store
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
     }
 
     #[test]
@@ -358,9 +427,28 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 1);
+            assert_eq!(migration_count, 2);
             assert_eq!(value, "test-value");
         }
+        remove_database(&path);
+    }
+
+    #[test]
+    fn production_open_upgrades_a_version_one_database_to_version_two() {
+        let path = database_path();
+        let version_one = open_with_migrations(&path, false, ONE_MIGRATION).unwrap();
+        assert_eq!(version_one.info().latest_applied_migration, 1);
+        drop(version_one);
+        let upgraded = SqliteStore::open(&path).unwrap();
+        assert_eq!(upgraded.info().latest_applied_migration, 2);
+        let migration_count: i64 = upgraded
+            .connection()
+            .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(migration_count, 2);
+        drop(upgraded);
         remove_database(&path);
     }
 
@@ -457,7 +545,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 1
+                latest_supported_migration: 2
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -466,7 +554,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
         drop(connection);
         remove_database(&path);
     }

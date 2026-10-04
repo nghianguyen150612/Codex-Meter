@@ -105,11 +105,14 @@ future process/agent single-writer coordination described by the architecture.
 
 ## Current schema
 
-P014 intentionally persists only storage infrastructure:
+P015 extends the P014 storage infrastructure with one latest-state checkpoint
+row per exact source generation:
 
 - `schema_migrations`: versioned migration identity and checksums;
 - `storage_metadata`: constrained infrastructure key/value space from migration
   `0001_storage_metadata`.
+- `runtime_checkpoints`: atomic cursor/runtime/replay recovery state from
+  migration `0002_runtime_checkpoints`.
 
 Migration 0001 creates:
 
@@ -126,11 +129,23 @@ The exact migration checksum is:
 1ffa336dcdc5abc63fdf74276c354c82a7b8f157af9412625723a7d8fe20c5aa
 ```
 
-No measurement-domain table exists yet. In particular, P014 does not create
+Migration 0002 has checksum:
+
+```text
+ae4a25ab39f865e7d1d5f02c9d03cc95a2786b72a48733025db1a0abe01d7199
+```
+
+The checkpoint table is a `STRICT` table keyed by `(rollout_id,
+source_generation)`. It stores unsigned cursor values as decimal text, a
+nullable decimal ordinal, positive revision, internal state format version,
+typed JSON payload, and lowercase payload checksum. It has no source path and
+is not an append-only history table.
+
+No measurement-domain table exists yet. In particular, P015 does not create
 `observations`, `normalized_events`, `quota_samples`, `sessions`, `tasks`,
-`rollout_cursors`, `telemetry_state`, `quota_tracking_state`,
-`reconciliation_state`, `analytics_results`, or `benchmarks`. It also does not
-use a generic JSON blob table and does not store secrets or account identifiers.
+`analytics_results`, or `benchmarks`. It also does not use a generic JSON blob
+table or store secrets/account identifiers. See `docs/RUNTIME_CHECKPOINTS.md`
+for the runtime recovery payload and transaction contract.
 
 SQLite migration versions are separate from JSON contract versions such as
 `schema_version = 1.0.0`; one must not be inferred from the other.
@@ -167,9 +182,9 @@ P015 may assume:
 - direct database path injection exists; and
 - no domain persistence exists yet.
 
-P015 will implement **durable ingestion/runtime state and atomic checkpoint
-persistence**. Its expected domains include source identity, rollout
-cursor/checkpoint, replay/idempotency state, and runtime recovery inputs.
+P015 implements **durable ingestion/runtime state and atomic checkpoint
+persistence**. Its domains include source identity, rollout cursor/checkpoint,
+replay/idempotency state, and runtime recovery inputs.
 
 P016 owns the persisted Observation model and observation/history queries. P014
 does not begin either domain.

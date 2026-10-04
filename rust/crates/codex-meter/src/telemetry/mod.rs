@@ -6,6 +6,7 @@ mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;
 pub mod quota_normalization;
+pub mod quota_reconciliation;
 pub mod quota_tracking;
 pub mod token_normalization;
 
@@ -41,6 +42,17 @@ pub use normalized::{
 
 pub use quota_normalization::{
     normalize_quota_item, QuotaNormalizationError, QuotaNormalizationOutcome,
+};
+
+pub use quota_reconciliation::{
+    begin_task_quota_reconciliation, reconcile_task_quota, reconcile_task_quota_at,
+    select_before_sample, AcquisitionFailureReason, AttributionRisk, BaselineUnavailableReason,
+    BeforeSampleSelection, MeterReconciliation, MeterReconciliationState, MeterUnstableEvidence,
+    PlanDiscontinuityEvidence, PolicyValidationError, QuotaAcquisitionAttempt,
+    QuotaAcquisitionResult, ReconciledMeterEvidence, ReconciliationAction, ReconciliationBatch,
+    ReconciliationError, ReconciliationInput, ReconciliationOutput, ReconciliationPolicy,
+    ResetCrossedEvidence, StableCandidate, TaskQuotaReconciliation, TaskReconciliationTarget,
+    TimedOutEvidence,
 };
 
 pub use quota_tracking::{

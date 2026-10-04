@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "scenarios": [
+    "delayed_positive_update",
+    "stabilized_zero",
+    "changing_post_task_values",
+    "reset_during_task",
+    "reset_during_stabilization",
+    "five_hour_reset_weekly_success",
+    "meter_instability",
+    "plan_discontinuity",
+    "temporary_failure_then_recovery",
+    "acquisition_failure_through_deadline",
+    "stale_baseline",
+    "known_local_overlapping_task"
+  ],
+  "privacy": {
+    "synthetic_only": true,
+    "contains_raw_account_data": false,
+    "contains_prompt_or_response_content": false
+  }
+}

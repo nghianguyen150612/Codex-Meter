@@ -43,8 +43,13 @@ One consistent effective task configuration is preserved from attributed token
 events. Mixed configurations do not select first, last, or majority evidence;
 the serialized identity is conservatively unavailable and estimator-relevant
 token evidence is `incomplete / D`. Plan values are merged from consistent
-quota sample evidence when task configuration does not prove a plan. Conflicting
-observed plans remain unavailable and degrade compatible estimator evidence.
+task configuration and all retained quota evidence. One available plan value is
+preserved, including a task-only value, while a quota-only value is promoted as
+provider-observed evidence. Missing plan metadata is not a conflict. Multiple
+distinct available task/quota values make the serialized plan unavailable and
+degrade token and valid quota evidence to `incomplete / D` with
+`telemetry_incomplete`; numerical samples and counters remain preserved.
+Conflicting observed plans do not select first, latest, or majority evidence.
 Speed mode is never inferred from quota proximity or `service_tier`.
 
 ## Isolation and quality

@@ -310,6 +310,9 @@ pub fn build_observation(
             .push(ReasonCode::ConcurrentUsagePossible);
         token.status.reason_codes = sorted_reasons(std::mem::take(&mut token.status.reason_codes));
     }
+    if plan_conflict {
+        degrade_status(&mut token.status, ReasonCode::TelemetryIncomplete);
+    }
     let mut five_hour = build_meter_evidence(
         &input.reconciliation.five_hour,
         base_quality,
@@ -451,6 +454,11 @@ fn build_configuration(
         configuration = unavailable_configuration();
     }
     let mut plans = BTreeSet::new();
+    if configuration.plan.availability == MetricAvailability::Available {
+        if let Some(plan) = configuration.plan.value.as_deref() {
+            plans.insert(plan.to_owned());
+        }
+    }
     for sample in meter_samples(&reconciliation.five_hour)
         .into_iter()
         .chain(meter_samples(&reconciliation.weekly))
@@ -885,8 +893,14 @@ fn sorted_reasons(mut reasons: Vec<ReasonCode>) -> Vec<ReasonCode> {
 mod tests {
     use super::*;
     use crate::telemetry::normalized::{
-        NormalizedEventType, NormalizedTokenPayload, SchemaVersion, TokenPayloadKind,
+        AcquisitionStatus, NormalizedEventType, NormalizedQuotaSample, NormalizedTokenPayload,
+        PercentageMetric, QuotaSourceKind, SchemaVersion, TokenPayloadKind,
     };
+    use crate::telemetry::quota_reconciliation::{
+        begin_task_quota_reconciliation, reconcile_task_quota_at, QuotaAcquisitionAttempt,
+        QuotaAcquisitionResult, ReconciliationPolicy, TaskReconciliationTarget,
+    };
+    use time::Duration;
 
     fn configuration(model: &str) -> ConfigurationIdentity {
         ConfigurationIdentity {
@@ -933,6 +947,138 @@ mod tests {
             configuration_fingerprint: format!("cfg:{model}"),
             task_lifecycle: None,
         }
+    }
+
+    fn quota_sample(
+        meter_type: QuotaMeterType,
+        sample_id: &str,
+        sampled_at: &str,
+        used_percent: f64,
+        plan: Option<&str>,
+    ) -> NormalizedQuotaSample {
+        NormalizedQuotaSample {
+            schema_version: SchemaVersion::V1,
+            sample_id: sample_id.to_owned(),
+            meter_type,
+            sampled_at: sampled_at.to_owned(),
+            used_percent: PercentageMetric {
+                availability: MetricAvailability::Available,
+                value: Some(used_percent),
+                provenance: MetricProvenance::Observed,
+            },
+            remaining_percent: PercentageMetric {
+                availability: MetricAvailability::Available,
+                value: Some(100.0 - used_percent),
+                provenance: MetricProvenance::Derived,
+            },
+            reset_evidence: QuotaWindowIdentity::Unavailable,
+            configuration: ConfigurationIdentity {
+                plan: plan.map_or_else(
+                    ConfigurationValue::unavailable,
+                    ConfigurationValue::observed,
+                ),
+                model: ConfigurationValue::unavailable(),
+                reasoning_level: ConfigurationValue::unavailable(),
+                speed_mode: ConfigurationValue::unavailable(),
+                codex_version: ConfigurationValue::unavailable(),
+            },
+            acquisition_status: AcquisitionStatus::Succeeded,
+            source_kind: QuotaSourceKind::LocalMeter,
+        }
+    }
+
+    fn reconciliation_with_quota_plans(
+        five_hour_plan: Option<&str>,
+        weekly_plan: Option<&str>,
+    ) -> TaskQuotaReconciliation {
+        let target = TaskReconciliationTarget::new(
+            "task:plan-test",
+            Some("2026-10-04T10:00:00Z".to_owned()),
+            Some("2026-10-04T10:05:00Z".to_owned()),
+        );
+        let historical = [
+            quota_sample(
+                QuotaMeterType::FiveHour,
+                "sample:plan-five",
+                "2026-10-04T10:00:00Z",
+                20.0,
+                five_hour_plan,
+            ),
+            quota_sample(
+                QuotaMeterType::Weekly,
+                "sample:plan-weekly",
+                "2026-10-04T10:00:00Z",
+                40.0,
+                weekly_plan,
+            ),
+        ];
+        let policy = ReconciliationPolicy {
+            max_before_sample_age: Duration::hours(1),
+            post_task_sample_offsets: vec![Duration::minutes(1)],
+            stabilization_not_before: Duration::ZERO,
+            required_stable_confirmations: 1,
+            deadline: Duration::minutes(5),
+        };
+        begin_task_quota_reconciliation(target, &historical, &policy).unwrap()
+    }
+
+    fn resolved_reconciliation(
+        five_hour_plan: Option<&str>,
+        weekly_plan: Option<&str>,
+    ) -> TaskQuotaReconciliation {
+        let initial = reconciliation_with_quota_plans(five_hour_plan, weekly_plan);
+        let policy = ReconciliationPolicy {
+            max_before_sample_age: Duration::hours(1),
+            post_task_sample_offsets: vec![Duration::minutes(1)],
+            stabilization_not_before: Duration::ZERO,
+            required_stable_confirmations: 1,
+            deadline: Duration::minutes(5),
+        };
+        let five = quota_sample(
+            QuotaMeterType::FiveHour,
+            "sample:plan-five-after",
+            "2026-10-04T10:10:00Z",
+            24.0,
+            five_hour_plan,
+        );
+        let weekly = quota_sample(
+            QuotaMeterType::Weekly,
+            "sample:plan-weekly-after",
+            "2026-10-04T10:10:00Z",
+            42.0,
+            weekly_plan,
+        );
+        let attempts = [
+            QuotaAcquisitionAttempt {
+                sampled_at: five.sampled_at.clone(),
+                meter_type: five.meter_type,
+                result: QuotaAcquisitionResult::Sample(five),
+            },
+            QuotaAcquisitionAttempt {
+                sampled_at: weekly.sampled_at.clone(),
+                meter_type: weekly.meter_type,
+                result: QuotaAcquisitionResult::Sample(weekly),
+            },
+        ];
+        reconcile_task_quota_at(&initial, &attempts, &policy, "2026-10-04T10:10:00Z")
+            .unwrap()
+            .next_state
+    }
+
+    fn task_plan_event(plan: Option<&str>) -> AttributedTokenEvent {
+        let mut event = token_event(
+            "evt:plan-test",
+            "src:plan-test",
+            "task:plan-test",
+            Some(100),
+            Some(5),
+            "model-plan",
+        );
+        event.effective_configuration.plan = plan.map_or_else(
+            ConfigurationValue::unavailable,
+            ConfigurationValue::observed,
+        );
+        event
     }
 
     #[test]
@@ -1113,5 +1259,114 @@ mod tests {
             evidence.status.reason_codes,
             vec![ReasonCode::TelemetryIncomplete]
         );
+    }
+
+    #[test]
+    fn task_plus_quota_pro_is_plan_conflict() {
+        let reconciliation = reconciliation_with_quota_plans(Some("pro"), Some("pro"));
+        let event = task_plan_event(Some("plus"));
+        let (_, conflict) = build_configuration(&[&event], &reconciliation);
+        assert!(conflict);
+    }
+
+    #[test]
+    fn task_pro_quota_plus_is_plan_conflict() {
+        let reconciliation = reconciliation_with_quota_plans(Some("plus"), Some("plus"));
+        let event = task_plan_event(Some("pro"));
+        let (_, conflict) = build_configuration(&[&event], &reconciliation);
+        assert!(conflict);
+    }
+
+    #[test]
+    fn agreeing_task_and_quota_plan_is_preserved() {
+        let reconciliation = reconciliation_with_quota_plans(Some("plus"), Some("plus"));
+        let event = task_plan_event(Some("plus"));
+        let (configuration, conflict) = build_configuration(&[&event], &reconciliation);
+        assert!(!conflict);
+        assert_eq!(configuration.plan.value.as_deref(), Some("plus"));
+        assert_eq!(configuration.plan.provenance, MetricProvenance::Observed);
+    }
+
+    #[test]
+    fn task_only_and_quota_only_plans_are_preserved_or_promoted() {
+        let task_only = reconciliation_with_quota_plans(None, None);
+        let task_event = task_plan_event(Some("plus"));
+        let (configuration, conflict) = build_configuration(&[&task_event], &task_only);
+        assert!(!conflict);
+        assert_eq!(configuration.plan.value.as_deref(), Some("plus"));
+
+        let quota_only = reconciliation_with_quota_plans(Some("plus"), None);
+        let quota_event = task_plan_event(None);
+        let (configuration, conflict) = build_configuration(&[&quota_event], &quota_only);
+        assert!(!conflict);
+        assert_eq!(configuration.plan.value.as_deref(), Some("plus"));
+        assert_eq!(configuration.plan.provenance, MetricProvenance::Observed);
+    }
+
+    #[test]
+    fn missing_plan_is_not_conflict() {
+        let reconciliation = reconciliation_with_quota_plans(None, None);
+        let event = task_plan_event(None);
+        let (configuration, conflict) = build_configuration(&[&event], &reconciliation);
+        assert!(!conflict);
+        assert_eq!(
+            configuration.plan.availability,
+            MetricAvailability::Unavailable
+        );
+    }
+
+    #[test]
+    fn plan_conflict_degrades_token_quota_and_lifecycle() {
+        let reconciliation = resolved_reconciliation(Some("pro"), Some("pro"));
+        let input = ObservationInput::new(
+            reconciliation,
+            vec![task_plan_event(Some("plus"))],
+            TokenTelemetryCompleteness::Complete,
+            IsolationEvidence::IsolatedNormalTask,
+            Some("2026-10-04T10:10:00Z".to_owned()),
+        );
+        let observation = build_observation(&input).unwrap();
+        assert_eq!(
+            observation.configuration.plan.availability,
+            MetricAvailability::Unavailable
+        );
+        assert_eq!(
+            observation.token_evidence.status.validity,
+            EvidenceValidity::Incomplete
+        );
+        assert_eq!(observation.token_evidence.status.quality, QualityGrade::D);
+        assert!(observation
+            .token_evidence
+            .status
+            .reason_codes
+            .contains(&ReasonCode::TelemetryIncomplete));
+        assert_eq!(
+            observation.quota_evidence.five_hour.status.validity,
+            EvidenceValidity::Incomplete
+        );
+        assert_eq!(
+            observation.quota_evidence.weekly.status.validity,
+            EvidenceValidity::Incomplete
+        );
+        assert_eq!(
+            observation.lifecycle_state,
+            ObservationLifecycle::Incomplete
+        );
+    }
+
+    #[test]
+    fn plan_conflict_preserves_reset_invalidity() {
+        let mut status = EvidenceStatus::new(
+            EvidenceValidity::Invalid,
+            QualityGrade::X,
+            [ReasonCode::QuotaResetCrossed],
+        );
+        degrade_status(&mut status, ReasonCode::TelemetryIncomplete);
+        assert_eq!(status.validity, EvidenceValidity::Invalid);
+        assert_eq!(status.quality, QualityGrade::X);
+        assert!(status.reason_codes.contains(&ReasonCode::QuotaResetCrossed));
+        assert!(status
+            .reason_codes
+            .contains(&ReasonCode::TelemetryIncomplete));
     }
 }

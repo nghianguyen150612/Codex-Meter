@@ -6,9 +6,14 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 use super::checkpoints::{
-    load_runtime_checkpoint, save_runtime_checkpoint, RuntimeCheckpoint, RuntimeRecoveryState,
+    encode_state, load_runtime_checkpoint, save_in_transaction as save_checkpoint_in_transaction,
+    save_runtime_checkpoint, RuntimeCheckpoint, RuntimeRecoveryState,
 };
 use super::migrations::{migrate, validate_registry, Migration, MIGRATIONS};
+use super::observations::{
+    list_observations_from_connection, load_observation_from_connection,
+    save_observation_in_transaction, ObservationPage, ObservationQuery, StoredObservation,
+};
 use crate::telemetry::{RolloutCursor, SourceIdentity};
 
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -66,6 +71,19 @@ pub enum StorageError {
     CheckpointDecode,
     CheckpointStateInvalid,
     CheckpointCursorInvalid,
+    ObservationRevisionConflict {
+        expected: Option<u64>,
+        actual: Option<u64>,
+    },
+    ObservationRevisionOverflow,
+    ObservationTerminalConflict,
+    ObservationLifecycleRegression,
+    ObservationCorrupt,
+    ObservationDecode,
+    ObservationProjectionMismatch,
+    ObservationIdentityConflict,
+    ObservationFormatUnsupported,
+    ObservationQueryInvalid,
 }
 
 impl StorageError {
@@ -110,6 +128,16 @@ impl fmt::Display for StorageError {
             Self::CheckpointDecode => write!(formatter, "runtime checkpoint could not be decoded"),
             Self::CheckpointStateInvalid => write!(formatter, "runtime checkpoint state is invalid"),
             Self::CheckpointCursorInvalid => write!(formatter, "runtime checkpoint cursor is invalid"),
+            Self::ObservationRevisionConflict { .. } => write!(formatter, "observation revision conflict"),
+            Self::ObservationRevisionOverflow => write!(formatter, "observation revision overflowed"),
+            Self::ObservationTerminalConflict => write!(formatter, "terminal observation cannot be changed"),
+            Self::ObservationLifecycleRegression => write!(formatter, "observation lifecycle regression is not allowed"),
+            Self::ObservationCorrupt => write!(formatter, "observation storage is corrupt"),
+            Self::ObservationDecode => write!(formatter, "observation could not be decoded"),
+            Self::ObservationProjectionMismatch => write!(formatter, "observation projection does not match payload"),
+            Self::ObservationIdentityConflict => write!(formatter, "observation identity does not match durable identity"),
+            Self::ObservationFormatUnsupported => write!(formatter, "observation format is unsupported"),
+            Self::ObservationQueryInvalid => write!(formatter, "observation query is invalid"),
         }
     }
 }
@@ -135,7 +163,17 @@ impl Error for StorageError {
             | Self::CheckpointFormatUnsupported { .. }
             | Self::CheckpointDecode
             | Self::CheckpointStateInvalid
-            | Self::CheckpointCursorInvalid => None,
+            | Self::CheckpointCursorInvalid
+            | Self::ObservationRevisionConflict { .. }
+            | Self::ObservationRevisionOverflow
+            | Self::ObservationTerminalConflict
+            | Self::ObservationLifecycleRegression
+            | Self::ObservationCorrupt
+            | Self::ObservationDecode
+            | Self::ObservationProjectionMismatch
+            | Self::ObservationIdentityConflict
+            | Self::ObservationFormatUnsupported
+            | Self::ObservationQueryInvalid => None,
         }
     }
 }
@@ -201,6 +239,84 @@ impl SqliteStore {
             state,
             expected_revision,
         )
+    }
+
+    pub fn save_observation(
+        &mut self,
+        observation: &crate::telemetry::NormalizedObservation,
+        expected_revision: Option<u64>,
+    ) -> Result<StoredObservation, StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(StorageError::sqlite)?;
+        let stored = save_observation_in_transaction(&transaction, observation, expected_revision)?;
+        transaction.commit().map_err(StorageError::sqlite)?;
+        Ok(stored)
+    }
+
+    pub fn load_observation(
+        &self,
+        observation_id: &str,
+    ) -> Result<Option<StoredObservation>, StorageError> {
+        load_observation_from_connection(&self.connection, observation_id)
+    }
+
+    pub fn list_observations(
+        &self,
+        query: &ObservationQuery,
+    ) -> Result<ObservationPage, StorageError> {
+        list_observations_from_connection(&self.connection, query)
+    }
+
+    pub fn list_terminal_history(
+        &self,
+        mut query: ObservationQuery,
+    ) -> Result<ObservationPage, StorageError> {
+        query.terminal_only = true;
+        query.provisional_only = false;
+        list_observations_from_connection(&self.connection, &query)
+    }
+
+    pub fn list_active_observations(
+        &self,
+        mut query: ObservationQuery,
+    ) -> Result<ObservationPage, StorageError> {
+        query.terminal_only = false;
+        query.provisional_only = true;
+        list_observations_from_connection(&self.connection, &query)
+    }
+
+    pub fn commit_observation_and_checkpoint(
+        &mut self,
+        observation: &crate::telemetry::NormalizedObservation,
+        observation_expected_revision: Option<u64>,
+        source: &SourceIdentity,
+        cursor: &RolloutCursor,
+        state: &RuntimeRecoveryState,
+        checkpoint_expected_revision: Option<u64>,
+    ) -> Result<(StoredObservation, RuntimeCheckpoint), StorageError> {
+        let (state_json, state_sha256) = encode_state(state)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(StorageError::sqlite)?;
+        let stored_observation = save_observation_in_transaction(
+            &transaction,
+            observation,
+            observation_expected_revision,
+        )?;
+        let checkpoint = save_checkpoint_in_transaction(
+            &transaction,
+            source,
+            cursor,
+            state,
+            state_json,
+            state_sha256,
+            checkpoint_expected_revision,
+        )?;
+        transaction.commit().map_err(StorageError::sqlite)?;
+        Ok((stored_observation, checkpoint))
     }
 
     #[cfg(test)]
@@ -364,13 +480,13 @@ mod tests {
     }
 
     #[test]
-    fn new_database_is_migrated_without_domain_tables() {
+    fn new_database_is_migrated_with_expected_application_tables() {
         let store = SqliteStore::open_in_memory().unwrap();
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 2,
-                latest_applied_migration: 2,
+                latest_supported_migration: 3,
+                latest_applied_migration: 3,
             }
         );
         let tables = store
@@ -384,6 +500,7 @@ mod tests {
         assert_eq!(
             tables,
             vec![
+                "observations",
                 "runtime_checkpoints",
                 "schema_migrations",
                 "storage_metadata"
@@ -395,7 +512,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
     }
 
     #[test]
@@ -427,27 +544,27 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 2);
+            assert_eq!(migration_count, 3);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
     }
 
     #[test]
-    fn production_open_upgrades_a_version_one_database_to_version_two() {
+    fn production_open_upgrades_a_version_one_database_to_version_three() {
         let path = database_path();
         let version_one = open_with_migrations(&path, false, ONE_MIGRATION).unwrap();
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 2);
+        assert_eq!(upgraded.info().latest_applied_migration, 3);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
         drop(upgraded);
         remove_database(&path);
     }
@@ -545,7 +662,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 2
+                latest_supported_migration: 3
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -554,7 +671,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         drop(connection);
         remove_database(&path);
     }

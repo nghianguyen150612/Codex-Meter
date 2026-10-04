@@ -105,14 +105,16 @@ future process/agent single-writer coordination described by the architecture.
 
 ## Current schema
 
-P015 extends the P014 storage infrastructure with one latest-state checkpoint
-row per exact source generation:
+P016 extends the P015 storage infrastructure with durable Observation history:
 
 - `schema_migrations`: versioned migration identity and checksums;
 - `storage_metadata`: constrained infrastructure key/value space from migration
   `0001_storage_metadata`.
 - `runtime_checkpoints`: atomic cursor/runtime/replay recovery state from
   migration `0002_runtime_checkpoints`.
+- `observations`: canonical P013 Observation JSON plus derived indexed
+  projections, checksum, and positive storage revision from migration
+  `0003_observations`.
 
 Migration 0001 creates:
 
@@ -135,17 +137,29 @@ Migration 0002 has checksum:
 ae4a25ab39f865e7d1d5f02c9d03cc95a2786b72a48733025db1a0abe01d7199
 ```
 
+Migration 0003 has checksum:
+
+```text
+1ed907c9f124697b7f5620799672e49128dde7110860d513b0efaa9f57cd305c
+```
+
 The checkpoint table is a `STRICT` table keyed by `(rollout_id,
 source_generation)`. It stores unsigned cursor values as decimal text, a
 nullable decimal ordinal, positive revision, internal state format version,
 typed JSON payload, and lowercase payload checksum. It has no source path and
 is not an append-only history table.
 
-No measurement-domain table exists yet. In particular, P015 does not create
-`observations`, `normalized_events`, `quota_samples`, `sessions`, `tasks`,
-`analytics_results`, or `benchmarks`. It also does not use a generic JSON blob
-table or store secrets/account identifiers. See `docs/RUNTIME_CHECKPOINTS.md`
-for the runtime recovery payload and transaction contract.
+The `observations` table is `STRICT`, keyed by `observation_id`, and contains
+the complete canonical P013 payload. Its explicit projections cover identity,
+lifecycle/timing, configuration, token validity/quality/raw total, and
+independent five-hour and weekly validity/quality/delta/reset status. It has
+deliberate history, lifecycle, configuration, quality, validity, and composite
+configuration/time indexes. There is no generic JSON blob table, normalized
+event archive, task/session content table, or analytics result table.
+
+See `docs/RUNTIME_CHECKPOINTS.md` for the runtime recovery payload and
+transaction contract, and `docs/OBSERVATION_STORAGE.md` for the Observation
+repository contract.
 
 SQLite migration versions are separate from JSON contract versions such as
 `schema_version = 1.0.0`; one must not be inferred from the other.
@@ -165,7 +179,7 @@ metadata only. They do not print arbitrary SQLite row values or application
 payloads. Full SQLite physical integrity checking is intentionally separate
 from migration compatibility and is deferred to a future diagnostics feature.
 
-## Inputs for P015
+## Inputs for P016
 
 P015 may assume:
 
@@ -180,11 +194,9 @@ P015 may assume:
 - newer databases are rejected by older binaries;
 - failed migrations do not record success;
 - direct database path injection exists; and
-- no domain persistence exists yet.
+- migration 0002 and runtime checkpoint CAS/transaction helpers exist; and
+- Python remains a read-only consumer.
 
-P015 implements **durable ingestion/runtime state and atomic checkpoint
-persistence**. Its domains include source identity, rollout cursor/checkpoint,
-replay/idempotency state, and runtime recovery inputs.
-
-P016 owns the persisted Observation model and observation/history queries. P014
-does not begin either domain.
+P016 implements **durable Observation persistence, deterministic history queries,
+and atomic checkpoint-to-Observation handoff**. Estimation, weighting, capacity
+calculation, and Python analytics remain deferred to Phase E.

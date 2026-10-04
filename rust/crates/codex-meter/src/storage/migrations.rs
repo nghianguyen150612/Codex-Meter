@@ -20,6 +20,8 @@ pub(crate) const STORAGE_METADATA_MIGRATION: &str =
     include_str!("../../migrations/0001_storage_metadata.sql");
 pub(crate) const RUNTIME_CHECKPOINTS_MIGRATION: &str =
     include_str!("../../migrations/0002_runtime_checkpoints.sql");
+pub(crate) const OBSERVATIONS_MIGRATION: &str =
+    include_str!("../../migrations/0003_observations.sql");
 
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -31,6 +33,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "0002_runtime_checkpoints",
         sql: RUNTIME_CHECKPOINTS_MIGRATION,
+    },
+    Migration {
+        version: 3,
+        name: "0003_observations",
+        sql: OBSERVATIONS_MIGRATION,
     },
 ];
 
@@ -359,6 +366,14 @@ mod tests {
         assert_eq!(
             checksum(RUNTIME_CHECKPOINTS_MIGRATION),
             "ae4a25ab39f865e7d1d5f02c9d03cc95a2786b72a48733025db1a0abe01d7199"
+        );
+    }
+
+    #[test]
+    fn migration_three_checksum_is_regression_stable() {
+        assert_eq!(
+            checksum(OBSERVATIONS_MIGRATION),
+            "1ed907c9f124697b7f5620799672e49128dde7110860d513b0efaa9f57cd305c"
         );
     }
 }

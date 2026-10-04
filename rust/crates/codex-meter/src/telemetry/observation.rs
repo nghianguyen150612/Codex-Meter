@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::{ser::SerializeStruct, Serialize, Serializer};
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use super::assembly::AttributedTokenEvent;
@@ -19,7 +19,7 @@ use super::token_normalization::{validate_timestamp, TimestampErrorReason};
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceValidity {
     Valid,
@@ -28,7 +28,7 @@ pub enum EvidenceValidity {
     Unavailable,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum QualityGrade {
     A,
     B,
@@ -43,7 +43,7 @@ impl QualityGrade {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonCode {
     QuotaResetCrossed,
@@ -56,7 +56,7 @@ pub enum ReasonCode {
     UnknownReason,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResetStatus {
     NotDetected,
@@ -64,14 +64,16 @@ pub enum ResetStatus {
     Unavailable,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceStatus {
     pub validity: EvidenceValidity,
     pub quality: QualityGrade,
     pub reason_codes: Vec<ReasonCode>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationTiming {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
@@ -83,13 +85,15 @@ pub struct ObservationTiming {
     pub duration_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationTokenEvidence {
     pub status: EvidenceStatus,
     pub raw_token_counters: TokenCounters,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaSampleSnapshot {
     pub sample_id: String,
     pub sampled_at: String,
@@ -113,7 +117,8 @@ impl Serialize for QuotaSampleSnapshot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationQuotaEvidence {
     pub meter_type: QuotaMeterType,
     pub status: EvidenceStatus,
@@ -152,13 +157,15 @@ impl Serialize for ObservationQuotaEvidence {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationQuotaEvidenceSet {
     pub five_hour: ObservationQuotaEvidence,
     pub weekly: ObservationQuotaEvidence,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NormalizedObservation {
     pub schema_version: super::normalized::SchemaVersion,
     pub observation_id: String,
@@ -178,7 +185,7 @@ pub struct NormalizedObservation {
 
 pub type Observation = NormalizedObservation;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationLifecycle {
     Detected,

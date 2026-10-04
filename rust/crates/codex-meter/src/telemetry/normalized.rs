@@ -88,6 +88,7 @@ pub enum ConfigurationPayloadKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigurationIdentity {
     pub plan: ConfigurationValue,
     pub model: ConfigurationValue,
@@ -97,6 +98,7 @@ pub struct ConfigurationIdentity {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigurationValue {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +140,7 @@ impl QuotaMeterType {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PercentageMetric {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,6 +170,7 @@ impl PercentageMetric {
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "availability", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum QuotaWindowIdentity {
     Unavailable,
     Available {
@@ -229,6 +233,7 @@ impl ConfigurationValue {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NormalizedTokenPayload {
     pub kind: TokenPayloadKind,
     pub token_counters: TokenCounters,
@@ -241,6 +246,7 @@ pub enum TokenPayloadKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenCounters {
     pub uncached_input: TokenMetric,
     pub cached_input: TokenMetric,
@@ -281,6 +287,7 @@ pub enum MetricProvenance {
 /// A v1 token metric. Constructors preserve the schema invariant that only
 /// available metrics carry values and unavailable metrics carry no value.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenMetric {
     pub availability: MetricAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]

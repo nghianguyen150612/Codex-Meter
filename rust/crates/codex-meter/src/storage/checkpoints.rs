@@ -216,7 +216,7 @@ fn validate_telemetry(state: &TelemetryState) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn encode_state(state: &RuntimeRecoveryState) -> Result<(String, String), StorageError> {
+pub(crate) fn encode_state(state: &RuntimeRecoveryState) -> Result<(String, String), StorageError> {
     validate_runtime_state(state)?;
     let dto = PersistedRuntimeStateV1::from(state);
     let bytes = serde_json::to_vec(&dto).map_err(|_| StorageError::CheckpointDecode)?;
@@ -356,7 +356,7 @@ pub(crate) fn save_runtime_checkpoint(
     }
 }
 
-fn save_in_transaction(
+pub(crate) fn save_in_transaction(
     transaction: &Transaction<'_>,
     source: &SourceIdentity,
     cursor: &RolloutCursor,
@@ -365,6 +365,11 @@ fn save_in_transaction(
     state_sha256: String,
     expected_revision: Option<u64>,
 ) -> Result<RuntimeCheckpoint, StorageError> {
+    if source.rollout_id() != cursor.rollout_id()
+        || source.source_generation() != cursor.source_generation()
+    {
+        return Err(StorageError::CheckpointSourceMismatch);
+    }
     let actual_revision = transaction
         .query_row(
             "SELECT checkpoint_revision FROM runtime_checkpoints WHERE rollout_id = ?1 AND source_generation = ?2",

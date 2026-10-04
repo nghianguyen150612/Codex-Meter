@@ -116,6 +116,30 @@ pub(crate) fn snapshot_evidence_id(
     )
 }
 
+pub(crate) fn quota_sample_id(
+    source: &SourceIdentity,
+    start_offset: u64,
+    end_offset: u64,
+    ordinal: Option<u64>,
+    slot: &str,
+    meter_type: &str,
+) -> String {
+    let ordinal = ordinal.map_or_else(String::new, |value| value.to_string());
+    derive_id(
+        "quota:",
+        "codex-meter/quota-sample/v1",
+        &[
+            source.rollout_id(),
+            source.source_generation(),
+            &start_offset.to_string(),
+            &end_offset.to_string(),
+            &ordinal,
+            slot,
+            meter_type,
+        ],
+    )
+}
+
 pub(crate) fn configuration_fingerprint(fields: &[Option<&str>]) -> String {
     let parts: Vec<String> = fields
         .iter()

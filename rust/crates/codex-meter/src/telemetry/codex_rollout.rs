@@ -138,6 +138,7 @@ pub enum EventMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TokenCountEvent {
     pub info: Option<TokenCountInfo>,
+    pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,6 +148,115 @@ pub struct TokenCountInfo {
     /// Latest appended usage snapshot, not a lifetime total.
     pub last_token_usage: TokenUsage,
     pub model_context_window: Option<i64>,
+}
+
+/// Privacy-safe account quota evidence from one token-count event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+    pub plan_type: Option<PlanType>,
+}
+
+/// One provider-reported quota window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RateLimitWindow {
+    pub used_percent: QuotaPercent,
+    pub window_minutes: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+impl Eq for RateLimitWindow {}
+
+/// A provider percentage accepted only when finite and within the inclusive
+/// 0..=100 range.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct QuotaPercent(f64);
+
+impl QuotaPercent {
+    pub const fn new(value: f64) -> Option<Self> {
+        if value.is_finite() && (value >= 0.0) && (value <= 100.0) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl Eq for QuotaPercent {}
+
+/// Provider plan values recognized by the pinned Codex source enum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlanType {
+    Free,
+    Go,
+    Plus,
+    Pro,
+    ProLite,
+    ProMax,
+    Team,
+    SelfServeBusinessProLite,
+    SelfServeBusinessUsageBased,
+    Business,
+    Ent26,
+    EnterpriseCbpAutomation,
+    EnterpriseCbpUsageBased,
+    Enterprise,
+    Edu,
+    EduPlus,
+    EduPro,
+}
+
+impl PlanType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Go => "go",
+            Self::Plus => "plus",
+            Self::Pro => "pro",
+            Self::ProLite => "prolite",
+            Self::ProMax => "promax",
+            Self::Team => "team",
+            Self::SelfServeBusinessProLite => "self_serve_business_prolite",
+            Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
+            Self::Business => "business",
+            Self::Ent26 => "ent26",
+            Self::EnterpriseCbpAutomation => "enterprise_cbp_automation",
+            Self::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
+            Self::Enterprise => "enterprise",
+            Self::Edu => "edu",
+            Self::EduPlus => "edu_plus",
+            Self::EduPro => "edu_pro",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        Some(match value {
+            "free" => Self::Free,
+            "go" => Self::Go,
+            "plus" => Self::Plus,
+            "pro" => Self::Pro,
+            "prolite" => Self::ProLite,
+            "promax" => Self::ProMax,
+            "team" => Self::Team,
+            "self_serve_business_prolite" => Self::SelfServeBusinessProLite,
+            "self_serve_business_usage_based" => Self::SelfServeBusinessUsageBased,
+            "business" => Self::Business,
+            "ent26" => Self::Ent26,
+            "enterprise_cbp_automation" => Self::EnterpriseCbpAutomation,
+            "enterprise_cbp_usage_based" => Self::EnterpriseCbpUsageBased,
+            "enterprise" => Self::Enterprise,
+            "edu" => Self::Edu,
+            "edu_plus" => Self::EduPlus,
+            "edu_pro" => Self::EduPro,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +347,8 @@ pub enum InvalidFieldReason {
     NegativeNumber,
     NonIntegerNumber,
     NumberTooLarge,
+    NonFiniteNumber,
+    PercentageOutOfRange,
     InvalidEnumValue,
 }
 
@@ -285,6 +397,8 @@ impl fmt::Display for InvalidFieldReason {
             Self::NegativeNumber => "negative number",
             Self::NonIntegerNumber => "non-integer number",
             Self::NumberTooLarge => "number exceeds safe-integer range",
+            Self::NonFiniteNumber => "number is not finite",
+            Self::PercentageOutOfRange => "percentage is outside 0..=100",
             Self::InvalidEnumValue => "unsupported enum value",
         };
         formatter.write_str(description)
@@ -499,7 +613,79 @@ fn parse_token_count(
             })
         }
     };
-    Ok(EventMessage::TokenCount(TokenCountEvent { info }))
+    let rate_limits = parse_rate_limits(object.get("rate_limits"), record_type)?;
+    Ok(EventMessage::TokenCount(TokenCountEvent {
+        info,
+        rate_limits,
+    }))
+}
+
+fn parse_rate_limits(
+    value: Option<&Value>,
+    record_type: &str,
+) -> Result<Option<RateLimitSnapshot>, RolloutDecodeError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = required_object(Some(value), record_type, "rate_limits")?;
+    Ok(Some(RateLimitSnapshot {
+        limit_id: optional_string(object, Some(record_type), "limit_id", MAX_SAFE_TEXT_LENGTH)?,
+        primary: optional_rate_limit_window(object, record_type, "primary")?,
+        secondary: optional_rate_limit_window(object, record_type, "secondary")?,
+        plan_type: optional_plan_type(object, record_type)?,
+    }))
+}
+
+fn optional_rate_limit_window(
+    object: &Map<String, Value>,
+    record_type: &str,
+    field: &'static str,
+) -> Result<Option<RateLimitWindow>, RolloutDecodeError> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let window = required_object(Some(value), record_type, field)?;
+    let used_percent = window
+        .get("used_percent")
+        .ok_or_else(|| missing_field(record_type, "used_percent"))?;
+    let used_percent = used_percent
+        .as_f64()
+        .ok_or_else(|| invalid_type(record_type, "used_percent"))?;
+    let used_percent = QuotaPercent::new(used_percent).ok_or_else(|| {
+        let reason = if !used_percent.is_finite() {
+            InvalidFieldReason::NonFiniteNumber
+        } else {
+            InvalidFieldReason::PercentageOutOfRange
+        };
+        invalid_value(record_type, "used_percent", reason)
+    })?;
+    Ok(Some(RateLimitWindow {
+        used_percent,
+        window_minutes: optional_i64(window, Some(record_type), "window_minutes")?,
+        resets_at: optional_i64(window, Some(record_type), "resets_at")?,
+    }))
+}
+
+fn optional_plan_type(
+    object: &Map<String, Value>,
+    record_type: &str,
+) -> Result<Option<PlanType>, RolloutDecodeError> {
+    let Some(value) = object.get("plan_type") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| invalid_type(record_type, "plan_type"))?;
+    Ok(PlanType::from_str(value))
 }
 
 fn parse_task_started(
@@ -941,6 +1127,19 @@ mod tests {
         assert_eq!(token_value(info.total_token_usage.total_tokens), 900);
         assert_eq!(token_value(info.last_token_usage.total_tokens), 100);
         assert_eq!(info.model_context_window, Some(200_000));
+        assert_eq!(event.rate_limits.as_ref().unwrap().limit_id, None);
+        assert_eq!(
+            event
+                .rate_limits
+                .as_ref()
+                .unwrap()
+                .primary
+                .unwrap()
+                .used_percent
+                .get(),
+            42.0
+        );
+        assert_eq!(event.rate_limits.unwrap().plan_type, None);
     }
 
     #[test]

@@ -13,6 +13,9 @@ use super::normalized::{
     LifecyclePayload, LifecyclePayloadKind, NormalizedConfigurationEvent, NormalizedEventType,
     NormalizedSessionEvent, NormalizedTokenEvent, SchemaVersion,
 };
+use super::quota_normalization::{
+    normalize_quota_item, QuotaNormalizationError, QuotaNormalizationOutcome,
+};
 use super::token_normalization::{
     normalize_token_item, validate_timestamp, TimestampErrorReason, TokenNormalizationError,
     TokenNormalizationOutcome,
@@ -103,6 +106,7 @@ pub enum AssembledOutput {
     TaskLifecycle(TaskLifecycleTransition),
     AttributedToken(AttributedTokenEvent),
     TokenSnapshot(TokenSnapshotEvidence),
+    QuotaSample(super::normalized::NormalizedQuotaSample),
     RejectedSourceLine { reason: RejectedLineReason },
 }
 
@@ -143,6 +147,7 @@ pub enum TelemetryAssemblyError {
     InvalidTimestamp(TimestampErrorReason),
     SessionIdentityConflict,
     TokenNormalization(TokenNormalizationError),
+    QuotaNormalization(QuotaNormalizationError),
 }
 
 impl fmt::Display for TelemetryAssemblyError {
@@ -158,6 +163,7 @@ impl fmt::Display for TelemetryAssemblyError {
                 formatter.write_str("source generation contains conflicting session identities")
             }
             Self::TokenNormalization(error) => error.fmt(formatter),
+            Self::QuotaNormalization(error) => error.fmt(formatter),
         }
     }
 }
@@ -456,6 +462,11 @@ fn append_token_output(
         TokenNormalizationOutcome::RejectedSourceLine { reason } => {
             outputs.push(AssembledOutput::RejectedSourceLine { reason });
         }
+    }
+    if let QuotaNormalizationOutcome::Samples(samples) =
+        normalize_quota_item(source, item).map_err(TelemetryAssemblyError::QuotaNormalization)?
+    {
+        outputs.extend(samples.into_iter().map(AssembledOutput::QuotaSample));
     }
     Ok(())
 }
@@ -875,6 +886,37 @@ mod tests {
             .iter()
             .any(|output| matches!(output, AssembledOutput::TokenSnapshot(_))));
         assert!(!assembled
+            .outputs
+            .iter()
+            .any(|output| matches!(output, AssembledOutput::AttributedToken(_))));
+    }
+
+    #[test]
+    fn token_count_rate_limits_add_quota_samples_without_changing_token_snapshot_behavior() {
+        let source = SourceIdentity::new("assembly-quota-rollout", "generation-a").unwrap();
+        let input = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/quota/normal.json"
+        ));
+        let source_batch = batch(vec![item(input, 0)]);
+        let first = assemble_batch(&TelemetryState::default(), &source, &source_batch)
+            .expect("quota snapshot should assemble");
+        let second = assemble_batch(&TelemetryState::default(), &source, &source_batch)
+            .expect("quota snapshot replay should assemble");
+        assert_eq!(first, second);
+        assert_eq!(
+            first
+                .outputs
+                .iter()
+                .filter(|output| matches!(output, AssembledOutput::QuotaSample(_)))
+                .count(),
+            2
+        );
+        assert!(first
+            .outputs
+            .iter()
+            .any(|output| matches!(output, AssembledOutput::TokenSnapshot(_))));
+        assert!(!first
             .outputs
             .iter()
             .any(|output| matches!(output, AssembledOutput::AttributedToken(_))));

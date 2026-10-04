@@ -159,7 +159,10 @@ fn normalize_window(
     let reset_evidence = match observed_reset_at {
         Some(observed_reset_at) => QuotaWindowIdentity::Available {
             meter_type,
+            local_window_id: None,
             observed_reset_at: Some(observed_reset_at),
+            evidence_first_sample_at: None,
+            evidence_last_sample_at: None,
             identity_provenance: QuotaIdentityProvenance::ObservedReset,
             identity_confidence: QuotaIdentityConfidence::High,
         },
@@ -300,7 +303,10 @@ mod tests {
             samples[0].reset_evidence,
             QuotaWindowIdentity::Available {
                 meter_type: QuotaMeterType::FiveHour,
+                local_window_id: None,
                 observed_reset_at: Some("2026-10-03T15:00:00Z".to_owned()),
+                evidence_first_sample_at: None,
+                evidence_last_sample_at: None,
                 identity_provenance: QuotaIdentityProvenance::ObservedReset,
                 identity_confidence: QuotaIdentityConfidence::High,
             }

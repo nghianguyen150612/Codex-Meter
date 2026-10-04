@@ -1,0 +1,80 @@
+{
+  "fixture_version": "1",
+  "sequences": [
+    {
+      "name": "same_observed_window",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "observed-a", "sampled_at": "2026-10-04T09:00:00Z", "used_percent": 20, "observed_reset_at": "2026-10-04T14:00:00Z"},
+        {"sample_id": "observed-b", "sampled_at": "2026-10-04T09:30:00Z", "used_percent": 27.5, "observed_reset_at": "2026-10-04T14:00:00Z"}
+      ]
+    },
+    {
+      "name": "observed_reset_crossing_97_to_4",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "reset-before", "sampled_at": "2026-10-04T09:59:00Z", "used_percent": 97, "observed_reset_at": "2026-10-04T10:00:00Z"},
+        {"sample_id": "reset-after", "sampled_at": "2026-10-04T10:01:00Z", "used_percent": 4, "observed_reset_at": "2026-10-04T15:01:00Z"}
+      ]
+    },
+    {
+      "name": "same_observed_reset_decrease",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "unstable-before", "sampled_at": "2026-10-04T09:00:00Z", "used_percent": 70, "observed_reset_at": "2026-10-04T14:00:00Z"},
+        {"sample_id": "unstable-after", "sampled_at": "2026-10-04T09:01:00Z", "used_percent": 65, "observed_reset_at": "2026-10-04T14:00:00Z"}
+      ]
+    },
+    {
+      "name": "reset_correction_before_boundary",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "correction-before", "sampled_at": "2026-10-04T11:00:00Z", "used_percent": 20, "observed_reset_at": "2026-10-04T15:00:00Z"},
+        {"sample_id": "correction-after", "sampled_at": "2026-10-04T12:00:00Z", "used_percent": 21, "observed_reset_at": "2026-10-04T16:00:00Z"}
+      ]
+    },
+    {
+      "name": "missing_reset_monotonic",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "local-a", "sampled_at": "2026-10-04T00:00:00Z", "used_percent": 10},
+        {"sample_id": "local-b", "sampled_at": "2026-10-04T01:00:00Z", "used_percent": 15},
+        {"sample_id": "local-c", "sampled_at": "2026-10-04T02:00:00Z", "used_percent": 17}
+      ]
+    },
+    {
+      "name": "missing_reset_decrease",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "decrease-a", "sampled_at": "2026-10-04T00:00:00Z", "used_percent": 10},
+        {"sample_id": "decrease-b", "sampled_at": "2026-10-04T01:00:00Z", "used_percent": 20},
+        {"sample_id": "decrease-c", "sampled_at": "2026-10-04T02:00:00Z", "used_percent": 3}
+      ]
+    },
+    {
+      "name": "missing_reset_long_gap",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "gap-before", "sampled_at": "2026-10-04T00:00:00Z", "used_percent": 10},
+        {"sample_id": "gap-after", "sampled_at": "2026-10-04T06:00:00Z", "used_percent": 80}
+      ]
+    },
+    {
+      "name": "independent_meters",
+      "samples": [
+        {"sample_id": "five-before", "meter_type": "five_hour", "sampled_at": "2026-10-04T09:00:00Z", "used_percent": 97, "observed_reset_at": "2026-10-04T10:00:00Z"},
+        {"sample_id": "weekly-before", "meter_type": "weekly", "sampled_at": "2026-10-04T09:00:00Z", "used_percent": 31, "observed_reset_at": "2026-10-11T09:00:00Z"},
+        {"sample_id": "five-after", "meter_type": "five_hour", "sampled_at": "2026-10-04T10:01:00Z", "used_percent": 4, "observed_reset_at": "2026-10-04T15:01:00Z"},
+        {"sample_id": "weekly-after", "meter_type": "weekly", "sampled_at": "2026-10-04T10:00:00Z", "used_percent": 32, "observed_reset_at": "2026-10-11T09:00:00Z"}
+      ]
+    },
+    {
+      "name": "known_plan_change",
+      "meter_type": "five_hour",
+      "samples": [
+        {"sample_id": "plan-before", "sampled_at": "2026-10-04T09:00:00Z", "used_percent": 20, "observed_reset_at": "2026-10-04T14:00:00Z", "plan": "plus"},
+        {"sample_id": "plan-after", "sampled_at": "2026-10-04T09:01:00Z", "used_percent": 25, "observed_reset_at": "2026-10-04T14:00:00Z", "plan": "pro"}
+      ]
+    }
+  ]
+}

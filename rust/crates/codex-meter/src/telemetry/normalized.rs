@@ -172,7 +172,13 @@ pub enum QuotaWindowIdentity {
     Available {
         meter_type: QuotaMeterType,
         #[serde(skip_serializing_if = "Option::is_none")]
+        local_window_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         observed_reset_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence_first_sample_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence_last_sample_at: Option<String>,
         identity_provenance: QuotaIdentityProvenance,
         identity_confidence: QuotaIdentityConfidence,
     },
@@ -182,12 +188,14 @@ pub enum QuotaWindowIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum QuotaIdentityProvenance {
     ObservedReset,
+    LocallyInferred,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaIdentityConfidence {
     High,
+    Medium,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

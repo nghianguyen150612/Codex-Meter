@@ -140,6 +140,14 @@ pub(crate) fn quota_sample_id(
     )
 }
 
+pub(crate) fn local_quota_window_id(meter_type: &str, anchor_sample_id: &str) -> String {
+    derive_id(
+        "window:",
+        "codex-meter/quota-window/v1",
+        &[meter_type, anchor_sample_id],
+    )
+}
+
 pub(crate) fn configuration_fingerprint(fields: &[Option<&str>]) -> String {
     let parts: Vec<String> = fields
         .iter()

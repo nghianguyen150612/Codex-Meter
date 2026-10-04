@@ -6,6 +6,7 @@ mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;
 pub mod quota_normalization;
+pub mod quota_tracking;
 pub mod token_normalization;
 
 pub use codex_rollout::{
@@ -40,6 +41,13 @@ pub use normalized::{
 
 pub use quota_normalization::{
     normalize_quota_item, QuotaNormalizationError, QuotaNormalizationOutcome,
+};
+
+pub use quota_tracking::{
+    advance_meter, track_quota_samples, BoundaryEvidence, MeterInstabilityReason,
+    MeterTrackingState, NonNegativePercentagePoints, QuotaTrackingBatch, QuotaTrackingError,
+    QuotaTrackingOutcome, QuotaTrackingState, SameWindowDelta, TrackedQuotaWindow,
+    TrackedWindowIdentity,
 };
 
 pub use token_normalization::{

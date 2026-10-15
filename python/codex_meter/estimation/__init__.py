@@ -18,6 +18,7 @@ from .result import (
     SCHEMA_VERSION,
     AnalyticsResultStatus,
     AnalyticsResultV1,
+    CapacityEvidenceAssessment,
     Confidence,
     ConfigurationProvenance,
     CurrentCapacityResultContext,
@@ -31,6 +32,7 @@ from .result import (
     ResultConfigurationMismatchError,
     ResultConfigurationValue,
     ResultInputMismatchError,
+    assess_capacity_evidence,
     build_current_capacity_result,
 )
 from .robust import (
@@ -83,5 +85,7 @@ __all__ = [
     "ResultConfigurationValue",
     "ResultInputMismatchError",
     "SCHEMA_VERSION",
+    "CapacityEvidenceAssessment",
+    "assess_capacity_evidence",
     "build_current_capacity_result",
 ]

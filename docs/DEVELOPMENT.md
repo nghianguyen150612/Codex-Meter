@@ -25,6 +25,10 @@ an internal development package at version `0.0.0`; it is not a separately relea
 The direct commands are recorded in the root `justfile`. In particular, Cargo commands use
 `--manifest-path rust/Cargo.toml`, and Python commands use `uv run --project python --frozen`.
 
+Published SQLite migration SQL is checked out with LF endings on every platform. The migration
+registry hashes the exact SQL bytes, so CRLF conversion on Windows would appear as migration drift
+and invalidate the published checksum regression tests.
+
 ## Git Workflow Policy
 
 Effective from P020A onward, this policy supersedes all earlier direct-to-main workflow

@@ -1,1 +1,2 @@
 fixtures/codex-rollout/v0.157.1/streams/crlf.jsonl binary
+rust/crates/codex-meter/migrations/*.sql text eol=lf

@@ -56,3 +56,9 @@
 - Remaining boundaries: current quota usage remains explicit caller input;
   AnalyticsRequest v1 current-position transport and process integration remain
   deferred. P021 is not authorized and was not started.
+- Windows CI correction: the follow-up commit adds the path-specific
+  `rust/crates/codex-meter/migrations/*.sql text eol=lf` rule while preserving
+  the CRLF rollout fixture's binary rule. The four migration SQL contents,
+  migration names and versions, published SHA-256 checksums, migration history,
+  and SQLite schema remain unchanged. The Windows failures were caused by
+  checkout CRLF bytes changing the exact input to the existing checksum.

@@ -1,5 +1,6 @@
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from referencing import Registry, Resource
 
 from codex_meter.estimation import (
     AnalyticsResultStatus,
+    AnalyticsResultV1,
     CandidateDecision,
     CandidateExclusionReason,
     Confidence,
@@ -15,7 +17,9 @@ from codex_meter.estimation import (
     CurrentCapacityResultContext,
     CurrentQuotaPosition,
     CurrentQuotaPositionRequiredError,
+    EstimatorInvariantError,
     MeterCandidateSet,
+    QuotaCapacityEstimate,
     RawCapacityCandidate,
     ReasonCode,
     ResultConfigurationIdentity,
@@ -452,3 +456,294 @@ def test_result_schema_validation_for_success_mixed_and_insufficient() -> None:
     assert list(validator.iter_errors(both_success)) == []
     assert list(validator.iter_errors(mixed)) == []
     assert list(validator.iter_errors(insufficient)) == []
+
+
+def _direct_estimate() -> QuotaCapacityEstimate:
+    return QuotaCapacityEstimate(
+        meter_type=QuotaMeterType.FIVE_HOUR,
+        confidence=Confidence.LOW,
+        sample_accounting=SampleAccounting(2, 2, 0, 0, 2),
+        reason_codes=(),
+        estimated_full_capacity_raw_tokens=100.0,
+        estimated_used_raw_tokens=24.0,
+        estimated_remaining_raw_tokens=76.0,
+        p25_raw_tokens=80.0,
+        p50_raw_tokens=100.0,
+        p75_raw_tokens=120.0,
+    )
+
+
+def _direct_result(
+    estimates: tuple[QuotaCapacityEstimate, ...],
+    warnings: tuple[ReasonCode, ...],
+    status: AnalyticsResultStatus = AnalyticsResultStatus.SUCCEEDED,
+) -> AnalyticsResultV1:
+    return AnalyticsResultV1(
+        request_id="request-020",
+        result_status=status,
+        dataset_configuration=_configuration_identity(),
+        generated_at=GENERATED_AT,
+        estimator_method_version="1.0.0",
+        quota_capacity_estimates=estimates,
+        warnings=warnings,
+    )
+
+
+@pytest.mark.parametrize("confidence", (Confidence.LOW, Confidence.MEDIUM, Confidence.HIGH))
+def test_direct_sufficient_estimate_and_result_are_valid(confidence: Confidence) -> None:
+    estimate = replace(_direct_estimate(), confidence=confidence)
+    result = _direct_result((estimate,), ())
+
+    assert result.quota_capacity_estimates == (estimate,)
+    assert result.result_status is AnalyticsResultStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("full", (50.0, 100.0, 150.0))
+def test_direct_weighted_center_is_independent_of_percentiles(full: float) -> None:
+    estimate = replace(
+        _direct_estimate(),
+        estimated_full_capacity_raw_tokens=full,
+        estimated_used_raw_tokens=0.0,
+        estimated_remaining_raw_tokens=full,
+    )
+
+    assert estimate.estimated_full_capacity_raw_tokens == full
+    assert estimate.p50_raw_tokens == 100.0
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("estimated_full_capacity_raw_tokens", 0.0),
+        ("estimated_full_capacity_raw_tokens", -1.0),
+        ("estimated_used_raw_tokens", 25.0),
+        ("estimated_used_raw_tokens", -1.0),
+        ("estimated_remaining_raw_tokens", 77.0),
+        ("estimated_remaining_raw_tokens", -1.0),
+        ("p25_raw_tokens", 101.0),
+        ("p75_raw_tokens", 99.0),
+    ],
+)
+def test_direct_estimate_rejects_inconsistent_capacity(field: str, value: float) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_estimate(), **{field: value})
+
+
+_NUMERIC_FIELDS = (
+    "estimated_full_capacity_raw_tokens",
+    "estimated_used_raw_tokens",
+    "estimated_remaining_raw_tokens",
+    "p25_raw_tokens",
+    "p50_raw_tokens",
+    "p75_raw_tokens",
+)
+
+
+@pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+@pytest.mark.parametrize("value", (True, False, math.nan, math.inf, -math.inf, None, 10**400))
+def test_direct_estimate_rejects_invalid_numbers(field: str, value) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_estimate(), **{field: value})
+
+
+@pytest.mark.parametrize("field", ("p25_raw_tokens", "p50_raw_tokens", "p75_raw_tokens"))
+@pytest.mark.parametrize("value", (0.0, -0.0, -1.0))
+def test_direct_estimate_rejects_nonpositive_percentiles(field: str, value: float) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_estimate(), **{field: value})
+
+
+@pytest.mark.parametrize("used, remaining", ((-0.0, 100.0), (100.0, -0.0)))
+def test_direct_estimate_accepts_edge_usage_and_normalizes_negative_zero(
+    used: float, remaining: float
+) -> None:
+    estimate = replace(
+        _direct_estimate(),
+        estimated_used_raw_tokens=used,
+        estimated_remaining_raw_tokens=remaining,
+    )
+
+    assert estimate.estimated_used_raw_tokens == used
+    assert estimate.estimated_remaining_raw_tokens == remaining
+    assert math.copysign(1.0, estimate.estimated_used_raw_tokens) == 1.0
+    assert math.copysign(1.0, estimate.estimated_remaining_raw_tokens) == 1.0
+
+
+def test_direct_estimate_capacity_sum_uses_relative_tolerance_only() -> None:
+    estimate = replace(_direct_estimate(), estimated_remaining_raw_tokens=76.0 + 5e-11)
+    assert estimate.estimated_remaining_raw_tokens > 76.0
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_estimate(), estimated_remaining_raw_tokens=76.0 + 2e-10)
+    with pytest.raises(EstimatorInvariantError):
+        replace(
+            _direct_estimate(),
+            estimated_full_capacity_raw_tokens=1e-20,
+            estimated_used_raw_tokens=0.0,
+            estimated_remaining_raw_tokens=0.0,
+        )
+
+
+@pytest.mark.parametrize("samples", (0, 1))
+@pytest.mark.parametrize("confidence", (Confidence.LOW, Confidence.MEDIUM, Confidence.HIGH))
+def test_direct_sufficient_estimate_requires_two_retained_samples(
+    samples: int, confidence: Confidence
+) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(
+            _direct_estimate(),
+            confidence=confidence,
+            sample_accounting=SampleAccounting(samples, samples, 0, 0, samples),
+        )
+
+
+def _direct_insufficient_estimate(samples: int = 1) -> QuotaCapacityEstimate:
+    return QuotaCapacityEstimate(
+        meter_type=QuotaMeterType.FIVE_HOUR,
+        confidence=Confidence.INSUFFICIENT,
+        sample_accounting=SampleAccounting(samples, samples, 0, 0, samples),
+        reason_codes=(ReasonCode.UNKNOWN_REASON,),
+        estimated_full_capacity_raw_tokens=None,
+        estimated_used_raw_tokens=None,
+        estimated_remaining_raw_tokens=None,
+        p25_raw_tokens=None,
+        p50_raw_tokens=None,
+        p75_raw_tokens=None,
+    )
+
+
+@pytest.mark.parametrize("samples", (0, 1))
+def test_direct_insufficient_estimate_is_valid(samples: int) -> None:
+    estimate = _direct_insufficient_estimate(samples)
+    result = _direct_result(
+        (estimate,), (ReasonCode.UNKNOWN_REASON,), AnalyticsResultStatus.INSUFFICIENT_EVIDENCE
+    )
+    assert result.quota_capacity_estimates == (estimate,)
+
+
+@pytest.mark.parametrize("samples", (2, 8))
+def test_direct_insufficient_estimate_rejects_multiple_retained_samples(samples: int) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        _direct_insufficient_estimate(samples)
+
+
+def test_direct_insufficient_estimate_requires_reason() -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_insufficient_estimate(), reason_codes=())
+
+
+@pytest.mark.parametrize("reason", ("unknown_reason", 1, []))
+def test_direct_estimate_rejects_untyped_reasons(reason) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_insufficient_estimate(), reason_codes=(reason,))
+
+
+@pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+def test_direct_insufficient_estimate_rejects_every_capacity_field(field: str) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        replace(_direct_insufficient_estimate(), **{field: 1.0})
+
+
+@pytest.mark.parametrize(
+    "warnings",
+    (
+        (),
+        (ReasonCode.UNKNOWN_REASON,),
+        (ReasonCode.METER_UNAVAILABLE, ReasonCode.UNKNOWN_REASON),
+        (ReasonCode.METER_UNAVAILABLE, ReasonCode.METER_UNAVAILABLE),
+    ),
+)
+def test_direct_result_rejects_missing_extra_or_duplicate_warnings(warnings) -> None:
+    estimate = replace(_direct_estimate(), reason_codes=(ReasonCode.METER_UNAVAILABLE,))
+    with pytest.raises(EstimatorInvariantError):
+        _direct_result((estimate,), warnings)
+
+
+@pytest.mark.parametrize(
+    "warnings", ((), (ReasonCode.METER_UNAVAILABLE,), (ReasonCode.UNKNOWN_REASON,) * 2)
+)
+def test_direct_empty_result_requires_exact_unknown_warning(warnings) -> None:
+    with pytest.raises(EstimatorInvariantError):
+        _direct_result((), warnings, AnalyticsResultStatus.INSUFFICIENT_EVIDENCE)
+
+
+def test_direct_empty_result_with_unknown_reason_is_valid() -> None:
+    result = _direct_result(
+        (), (ReasonCode.UNKNOWN_REASON,), AnalyticsResultStatus.INSUFFICIENT_EVIDENCE
+    )
+    assert result.quota_capacity_estimates == ()
+    assert result.to_dict()["warnings"] == ["unknown_reason"]
+
+
+def test_direct_result_normalizes_union_to_common_reason_order() -> None:
+    first = replace(
+        _direct_estimate(),
+        reason_codes=(ReasonCode.UNKNOWN_REASON, ReasonCode.QUOTA_RESET_CROSSED),
+    )
+    second = replace(
+        _direct_insufficient_estimate(),
+        meter_type=QuotaMeterType.WEEKLY,
+        reason_codes=(ReasonCode.METER_UNAVAILABLE, ReasonCode.UNKNOWN_REASON),
+    )
+    result = _direct_result(
+        (first, second),
+        (ReasonCode.UNKNOWN_REASON, ReasonCode.METER_UNAVAILABLE, ReasonCode.QUOTA_RESET_CROSSED),
+    )
+    assert first.reason_codes == (ReasonCode.QUOTA_RESET_CROSSED, ReasonCode.UNKNOWN_REASON)
+    assert result.warnings == (
+        ReasonCode.QUOTA_RESET_CROSSED,
+        ReasonCode.METER_UNAVAILABLE,
+        ReasonCode.UNKNOWN_REASON,
+    )
+    assert result.to_dict()["warnings"] == [
+        "quota_reset_crossed",
+        "meter_unavailable",
+        "unknown_reason",
+    ]
+
+
+def test_direct_result_preserves_unique_meter_and_status_rules() -> None:
+    estimate = _direct_estimate()
+    with pytest.raises(ResultInputMismatchError):
+        _direct_result((estimate, estimate), ())
+    with pytest.raises(EstimatorInvariantError):
+        _direct_result((estimate,), (), AnalyticsResultStatus.INSUFFICIENT_EVIDENCE)
+    with pytest.raises(EstimatorInvariantError):
+        _direct_result((), (ReasonCode.UNKNOWN_REASON,), AnalyticsResultStatus.SUCCEEDED)
+    with pytest.raises(EstimatorInvariantError):
+        _direct_result((estimate,), (), AnalyticsResultStatus.FAILED)
+
+
+def test_builder_serialization_remains_compatible() -> None:
+    result = _result((100.0, 100.0))
+    expected = {
+        "schema_version": "1.0.0",
+        "request_id": "request-020",
+        "analysis_type": "current_capacity_estimate",
+        "result_status": "succeeded",
+        "dataset_configuration": _configuration_identity().to_dict(),
+        "generated_at": GENERATED_AT,
+        "estimator_method_version": "1.0.0",
+        "quota_capacity_estimates": [
+            {
+                "meter_type": "five_hour",
+                "metric_kind": "estimated_raw_tokens",
+                "provider_authority": "codex_meter_empirical_estimate",
+                "confidence": "low",
+                "sample_accounting": {
+                    "candidate_observations": 2,
+                    "valid_observations": 2,
+                    "excluded_observations": 0,
+                    "outliers_removed": 0,
+                    "used_observations": 2,
+                },
+                "reason_codes": [],
+                "estimated_full_capacity_raw_tokens": 100.0,
+                "estimated_used_raw_tokens": 24.0,
+                "estimated_remaining_raw_tokens": 76.0,
+                "capacity_percentiles_raw_tokens": {"p25": 100.0, "p50": 100.0, "p75": 100.0},
+            }
+        ],
+        "warnings": [],
+    }
+    assert result.to_dict() == expected
+    assert result.to_json() == json.dumps(expected, allow_nan=False, separators=(",", ":"))

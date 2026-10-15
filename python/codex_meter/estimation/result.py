@@ -48,7 +48,7 @@ class ResultInputMismatchError(FinalEstimateError):
 
 
 class EstimatorInvariantError(FinalEstimateError):
-    """Raised when P019 output cannot be finalized into a valid v1 estimate."""
+    """Raised when final estimate or result invariants are violated."""
 
 
 class ConfigurationProvenance(StrEnum):
@@ -210,9 +210,11 @@ _REASON_ORDER = tuple(ReasonCode)
 
 
 def _ordered_reasons(reasons: set[ReasonCode] | tuple[ReasonCode, ...]) -> tuple[ReasonCode, ...]:
+    if not isinstance(reasons, (set, tuple)):
+        raise EstimatorInvariantError("reason codes must use a set or tuple of v1 enum values")
+    if any(not isinstance(reason, ReasonCode) for reason in reasons):
+        raise EstimatorInvariantError("reason codes must use v1 enum values")
     reason_set = set(reasons)
-    if any(not isinstance(reason, ReasonCode) for reason in reason_set):
-        raise FinalEstimateError("reason codes must use v1 enum values")
     return tuple(reason for reason in _REASON_ORDER if reason in reason_set)
 
 
@@ -231,7 +233,13 @@ def _validate_utc_timestamp(value: str) -> None:
 
 
 def _finite_nonnegative(value: float, label: str) -> float:
-    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EstimatorInvariantError(f"{label} must be finite and non-negative")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite or value < 0:
         raise EstimatorInvariantError(f"{label} must be finite and non-negative")
     return 0.0 if value == 0 else float(value)
 
@@ -293,10 +301,31 @@ class QuotaCapacityEstimate:
                 raise EstimatorInvariantError(
                     "insufficient estimates must omit all capacity numbers"
                 )
+            if self.sample_accounting.used_observations >= 2:
+                raise EstimatorInvariantError(
+                    "insufficient estimates require fewer than two samples"
+                )
+            if not ordered_reasons:
+                raise EstimatorInvariantError(
+                    "insufficient estimates require an explanatory reason"
+                )
             return
+        if self.sample_accounting.used_observations < 2:
+            raise EstimatorInvariantError("sufficient estimates require at least two samples")
         if any(value is None for value in values):
             raise EstimatorInvariantError("sufficient estimates require every capacity number")
         normalized = tuple(_finite_nonnegative(value, "capacity estimate") for value in values)
+        full, used, remaining, p25, p50, p75 = normalized
+        if full <= 0:
+            raise EstimatorInvariantError("full capacity must be strictly positive")
+        if not math.isclose(used + remaining, full, rel_tol=1e-12, abs_tol=0.0):
+            raise EstimatorInvariantError(
+                "used and remaining estimates do not sum to full capacity"
+            )
+        if any(value <= 0 for value in (p25, p50, p75)):
+            raise EstimatorInvariantError("capacity percentiles must be strictly positive")
+        if not p25 <= p50 <= p75:
+            raise EstimatorInvariantError("capacity percentiles must be ordered")
         object.__setattr__(self, "estimated_full_capacity_raw_tokens", normalized[0])
         object.__setattr__(self, "estimated_used_raw_tokens", normalized[1])
         object.__setattr__(self, "estimated_remaining_raw_tokens", normalized[2])
@@ -381,7 +410,17 @@ class AnalyticsResultV1:
         meters = tuple(estimate.meter_type for estimate in self.quota_capacity_estimates)
         if len(set(meters)) != len(meters):
             raise ResultInputMismatchError("result estimates must contain unique meters")
-        object.__setattr__(self, "warnings", _ordered_reasons(self.warnings))
+        ordered_warnings = _ordered_reasons(self.warnings)
+        if len(ordered_warnings) != len(self.warnings):
+            raise EstimatorInvariantError("result warnings must not contain duplicates")
+        reasons = {
+            reason for estimate in self.quota_capacity_estimates for reason in estimate.reason_codes
+        }
+        if not self.quota_capacity_estimates:
+            reasons.add(ReasonCode.UNKNOWN_REASON)
+        if ordered_warnings != _ordered_reasons(reasons):
+            raise EstimatorInvariantError("result warnings must match the per-meter reason union")
+        object.__setattr__(self, "warnings", ordered_warnings)
 
         has_sufficient = any(
             estimate.confidence is not Confidence.INSUFFICIENT

@@ -25,6 +25,32 @@ an internal development package at version `0.0.0`; it is not a separately relea
 The direct commands are recorded in the root `justfile`. In particular, Cargo commands use
 `--manifest-path rust/Cargo.toml`, and Python commands use `uv run --project python --frozen`.
 
+## Git Workflow Policy
+
+Effective from P020A onward, this policy supersedes all earlier direct-to-main workflow
+instructions. Preserve the development instructions above and the history of completed prompts.
+
+1. Never commit or push implementation changes directly to `main`.
+2. Fetch and verify the latest `origin/main`, then create a dedicated feature or fix branch
+   from it. Branch names must describe the prompt's actual function; do not use agent-generated
+   prefixes such as `codex/`, `agent/`, or `jules/`.
+3. Open a pull request targeting `main`. The title must describe the actual function, without
+   agent branding or generic labels such as `[Codex]`, `[Agent]`, or `Agent:`.
+4. Review the changed files for scope, run the full project quality gate (Python lint, format,
+   and tests; Rust format, Clippy, tests, and build; contract/fixture validation), and run
+   `git diff --check`. Do not weaken tests or CI to obtain green results.
+5. Check all available GitHub Actions results for the PR and wait for required CI checks.
+   Review the PR diff before merging. If required checks or reviews block merging, report
+   the blocker and leave the PR open; never bypass repository protection.
+6. Merge using **Create a merge commit**, equivalent to `--no-ff` or GitHub API
+   `merge_method=merge`. Never squash, rebase, or fast-forward merge.
+7. Preserve every original feature-branch commit and its SHA in `main` history. Do not
+   rewrite existing history. Verify that the merge commit has exactly two parents and
+   that all original feature commits are ancestors of `main`.
+8. After merging, fetch and update local `main`, verify `main == origin/main`, and confirm
+   a clean local worktree. Report the feature commit SHAs, PR, merge SHA and parents,
+   quality-gate outcomes, and final verification.
+
 ## Contract validation
 
 `scripts/validate_contracts.py` parses and meta-validates all six Draft 2020-12 schemas, builds an

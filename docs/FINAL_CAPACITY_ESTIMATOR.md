@@ -101,9 +101,36 @@ few retained candidates adds `unknown_reason`. Outlier removal and low
 confidence do not add warnings by themselves.
 
 Global `warnings` is the deterministic union of all per-meter reason codes.
+An empty result has exactly the `unknown_reason` warning.
 The result remains an empirical estimate of 5-hour or weekly raw-token
 capacity; it is not an official provider allowance or a claim about a Plus
 plan's token limit.
+
+## Public model invariants
+
+P020A enforces these rules even when callers construct the exported models
+directly. Violations raise `EstimatorInvariantError`.
+
+- An `insufficient` estimate has fewer than two retained observations, at
+  least one valid explanatory reason code, and `None` for every capacity and
+  percentile field. Serialization continues to omit those fields.
+- A `low`, `medium`, or `high` estimate has at least two retained observations
+  and all six finite numerical fields. Full capacity and P25/P50/P75 must be
+  strictly positive; used and remaining capacity may be zero. Boolean values
+  are rejected. Valid computational negative zero is normalized to `0.0`.
+- Used plus remaining capacity must match full capacity under
+  `math.isclose(..., rel_tol=1e-12, abs_tol=0.0)`.
+- Percentiles satisfy `p25 <= p50 <= p75`. The quality-weighted full capacity
+  may differ from P50 and may lie outside the unweighted P25–P75 interval.
+- Global warnings must contain exactly the union of per-meter reasons, with
+  no missing, extra, or duplicate warning. The empty-result exception requires
+  exactly `unknown_reason`. Valid reason arrays are normalized to the existing
+  common-schema order; per-meter reasons remain deduplicated.
+
+These checks preserve the builder's output, confidence thresholds, method
+version `1.0.0`, quality weights, MAD filtering, and weighted-median policy.
+The constructor still enforces unique meter identities and the existing
+result-status rules, and does not manufacture failed results.
 
 ## Determinism and integration boundary
 

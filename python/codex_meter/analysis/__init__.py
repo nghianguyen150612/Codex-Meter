@@ -14,6 +14,22 @@ from .models import (
     HistoricalPolicyError,
     TrendDirection,
 )
+from .regime import detect_metering_regime_signals
+from .regime_models import (
+    MAXIMUM_REGIME_INPUT_OBSERVATIONS,
+    REGIME_SIGNAL_METHOD_VERSION,
+    MeteringRegimeAnalysis,
+    MeterRegimeAnalysis,
+    RegimeAnalysisError,
+    RegimeChangeComparison,
+    RegimeCohortSummary,
+    RegimeDatasetError,
+    RegimeDetectionPolicy,
+    RegimeNumericalError,
+    RegimePolicyError,
+    RegimeSignalReason,
+    RegimeSignalStatus,
+)
 from .workload import (
     MAXIMUM_SAFE_TASK_COUNT,
     MAXIMUM_WORKLOAD_OBSERVATIONS,
@@ -73,4 +89,18 @@ __all__ = [
     "WorkloadNumericalError",
     "WorkloadPredictionStatus",
     "predict_remaining_workload",
+    "MAXIMUM_REGIME_INPUT_OBSERVATIONS",
+    "REGIME_SIGNAL_METHOD_VERSION",
+    "MeterRegimeAnalysis",
+    "MeteringRegimeAnalysis",
+    "RegimeAnalysisError",
+    "RegimeChangeComparison",
+    "RegimeCohortSummary",
+    "RegimeDatasetError",
+    "RegimeDetectionPolicy",
+    "RegimeNumericalError",
+    "RegimePolicyError",
+    "RegimeSignalReason",
+    "RegimeSignalStatus",
+    "detect_metering_regime_signals",
 ]

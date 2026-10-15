@@ -32,6 +32,7 @@ from .models import (
     HistoricalCapacitySeries,
     HistoricalCapacitySnapshot,
     HistoricalDatasetError,
+    HistoricalPolicyError,
     TrendDirection,
 )
 
@@ -110,14 +111,23 @@ def _validate_configuration(configuration: ConfigurationKey) -> None:
 def _ordered_observations(
     dataset: ObservationDataset,
     policy: HistoricalAnalysisPolicy,
+    *,
+    maximum_observations: int | None = None,
 ) -> tuple[ConfigurationKey | None, list[tuple[str, ObservationRecord]], int]:
     if not isinstance(dataset, ObservationDataset) or not isinstance(dataset.observations, tuple):
         raise HistoricalDatasetError("historical analysis requires an immutable ObservationDataset")
-    if len(dataset.observations) > policy.maximum_snapshots:
-        raise HistoricalDatasetError(
+    limit = policy.maximum_snapshots if maximum_observations is None else maximum_observations
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise HistoricalPolicyError("historical observation limit must be a positive integer")
+    if len(dataset.observations) > limit:
+        message = (
             "dataset exceeds maximum_snapshots; select a bounded dataset using P017 "
             "ObservationSelector(maximum_observations=...)"
+            if maximum_observations is None
+            else "dataset exceeds the configured observation limit; select a bounded dataset using "
+            "P017 ObservationSelector(maximum_observations=...)"
         )
+        raise HistoricalDatasetError(message)
     configuration = dataset.selected_configuration
     if configuration is not None:
         _validate_configuration(configuration)

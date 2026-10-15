@@ -4,17 +4,20 @@
 - Expected P021 merge baseline: verified fetched `origin/main` at the starting
   SHA, with a clean worktree before implementation.
 - Feature branch: `feat/p022-remaining-workload-prediction`.
-- Required implementation commit: `feat: predict remaining workload from task history`.
+- Required implementation commit: `feat: predict remaining workload from task history`
+  (`aabd4eb90d93a0aa9c8656665ed0e867d9de3e58`).
 - Required PR title: `Estimate remaining workload from historical task sizes`,
   targeting `main`.
 - PR: #12, `Estimate remaining workload from historical task sizes`,
   https://github.com/nghianguyen150612/Codex-Meter/pull/12.
-- Git workflow: follows `docs/DEVELOPMENT.md`; implementation commits remain on
-  the feature branch. The PR must pass the complete local gate and required
-  GitHub checks, receive a diff review, and merge using Create a merge commit
-  (`merge_method=merge`). Post-merge verification checks both parents, feature
-  commit reachability, `main == origin/main`, and a clean worktree. No merge SHA
-  is guessed before GitHub creates it.
+- Git workflow: follows `docs/DEVELOPMENT.md`; implementation commits remained
+  on the feature branch. PR #12 passed the complete local gate and required
+  GitHub checks, received a diff review, and merged using Create a merge commit
+  (`merge_method=merge`). Merge commit:
+  `d2ae6e3ebdf00a4a6b980a91731be4b08d929173`, with parents
+  `dc37e9e40610e78dd01707c2f0284d6a5d20f117` and
+  `a9e1d3d66df3999b1a52a10eacf4d0f0ae89983d`. Both feature commits are
+  reachable from `main`, whose tree matches the reviewed feature tree.
 - Task-size policy: terminal rows only; eligibility uses valid token telemetry,
   A/B/C token quality, and a positive integer raw total. Quota-meter validity,
   reset crossings, quota deltas, and summary quality do not gate task-size
@@ -50,11 +53,10 @@
   build passes; contract validation passes for 6 schemas, 16 positive fixtures,
   and 5 negative fixtures; `git diff --check` passes.
 - GitHub Actions run 45 on implementation commit
-  `aabd4eb90d93a0aa9c8656665ed0e867d9de3e58` passed all six jobs: Python
-  quality, contracts, Rust quality, and Rust build/tests on Ubuntu, macOS, and
-  Windows. The manifest-only PR follow-up causes CI to rerun on its updated
-  head; that latest-head result and post-merge verification are recorded in the
-  completion report.
+  `aabd4eb90d93a0aa9c8656665ed0e867d9de3e58` and PR run 47 on final PR head
+  `a9e1d3d66df3999b1a52a10eacf4d0f0ae89983d` passed all six required jobs:
+  Python quality, contracts, Rust quality, and Rust build/tests on Ubuntu,
+  macOS, and Windows.
 - Scope review: no schema, fixture, migration, Python runtime dependency,
   SQLite write path, current-quota inference, CLI integration, or P023 change.
 - Privacy: internal typed projections only; no prompts, responses, reasoning,
@@ -63,6 +65,7 @@
 - Documentation: `docs/REMAINING_WORKLOAD_PREDICTION.md` records method,
   eligibility, quantiles, scenarios, limitations, privacy, and P023 assumptions.
 - P023 deferrals: no metering-regime or quota-change detection was started.
-- The completion report records the final PR head checks, merge commit SHA and
-  both parents, feature-commit reachability, final `main` SHA, synchronization
-  with `origin/main`, and clean-worktree verification.
+- Post-merge verification confirmed exactly two merge parents, reachability of
+  both original feature commits, and equality between the reviewed feature tree
+  and the merge tree. Local `main` and `origin/main` both equal
+  `d2ae6e3ebdf00a4a6b980a91731be4b08d929173`; the worktree is clean on `main`.

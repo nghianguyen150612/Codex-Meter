@@ -747,3 +747,33 @@ def test_builder_serialization_remains_compatible() -> None:
     }
     assert result.to_dict() == expected
     assert result.to_json() == json.dumps(expected, allow_nan=False, separators=(",", ":"))
+
+
+def test_shared_evidence_assessment_matches_builder_without_position() -> None:
+    from codex_meter.estimation import aggregate_capacity_candidates, assess_capacity_evidence
+
+    for values in ((), (100.0,), (100.0, 100.0), (100.0,) * 4, (100.0,) * 8):
+        candidates = _candidate_set(values)
+        assessment = assess_capacity_evidence(candidates, aggregate_capacity_candidates(candidates))
+        estimate = _result(values).quota_capacity_estimates[0]
+        assert assessment.confidence == estimate.confidence
+        assert assessment.reason_codes == estimate.reason_codes
+        assert assessment.relative_iqr == (0.0 if len(values) >= 2 else None)
+        assert assessment.outlier_rate == 0.0
+
+
+def test_shared_evidence_assessment_rejects_mismatched_inputs() -> None:
+    from codex_meter.estimation import aggregate_capacity_candidates, assess_capacity_evidence
+
+    candidates = _candidate_set((100.0, 100.0))
+    aggregation = aggregate_capacity_candidates(candidates)
+    with pytest.raises(EstimatorInvariantError):
+        assess_capacity_evidence(None, aggregation)
+    for changes in (
+        {"meter_type": QuotaMeterType.WEEKLY},
+        {"configuration": OTHER_CONFIGURATION},
+        {"estimator_method_version": "2.0.0"},
+        {"accounting": SampleAccounting(3, 2, 1, 0, 2)},
+    ):
+        with pytest.raises(EstimatorInvariantError):
+            assess_capacity_evidence(candidates, replace(aggregation, **changes))

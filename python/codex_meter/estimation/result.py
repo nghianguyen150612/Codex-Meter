@@ -17,6 +17,7 @@ from .robust import (
     ESTIMATOR_METHOD_VERSION,
     AggregationStatus,
     RobustAggregationError,
+    RobustCapacityAggregation,
     aggregate_capacity_candidates,
 )
 
@@ -502,17 +503,52 @@ def _quality_reasons(
     return set()
 
 
-def _confidence_and_reasons(
+@dataclass(frozen=True, slots=True)
+class CapacityEvidenceAssessment:
+    """Method-v1 confidence without requiring a current quota position."""
+
+    confidence: Confidence
+    reason_codes: tuple[ReasonCode, ...]
+    relative_iqr: float | None
+    outlier_rate: float
+
+
+def assess_capacity_evidence(
     candidate_set: MeterCandidateSet,
-    aggregation,
-) -> tuple[Confidence, set[ReasonCode]]:
+    aggregation: RobustCapacityAggregation,
+) -> CapacityEvidenceAssessment:
+    """Assess a matching P018/P019 pair using the authoritative P020 policy."""
+
+    if not isinstance(candidate_set, MeterCandidateSet) or not isinstance(
+        aggregation, RobustCapacityAggregation
+    ):
+        raise EstimatorInvariantError("evidence assessment requires typed P018/P019 inputs")
+    if (
+        candidate_set.meter_type is not aggregation.meter_type
+        or candidate_set.configuration != aggregation.configuration
+        or aggregation.estimator_method_version != ESTIMATOR_METHOD_VERSION
+        or candidate_set.accounting.candidate_observations
+        != aggregation.accounting.candidate_observations
+        or candidate_set.accounting.valid_observations != aggregation.accounting.valid_observations
+        or candidate_set.accounting.excluded_observations
+        != aggregation.accounting.excluded_observations
+    ):
+        raise EstimatorInvariantError("evidence assessment inputs must match")
+    valid_observations = aggregation.accounting.valid_observations
+    outlier_rate = (
+        aggregation.accounting.outliers_removed / valid_observations
+        if valid_observations > 0
+        else 0.0
+    )
     reasons = _mapped_reasons(candidate_set)
     reasons.update(_quality_reasons(candidate_set, aggregation.used_observation_ids))
 
     if aggregation.status is AggregationStatus.INSUFFICIENT_SAMPLES:
         if aggregation.accounting.used_observations < 2 and not reasons:
             reasons.add(ReasonCode.UNKNOWN_REASON)
-        return Confidence.INSUFFICIENT, reasons
+        return CapacityEvidenceAssessment(
+            Confidence.INSUFFICIENT, _ordered_reasons(reasons), None, outlier_rate
+        )
     if aggregation.status is not AggregationStatus.SUFFICIENT:
         raise EstimatorInvariantError("P019 returned an unknown aggregation status")
 
@@ -536,12 +572,6 @@ def _confidence_and_reasons(
     relative_iqr = (p75 - p25) / p50
     if not math.isfinite(relative_iqr) or relative_iqr < 0:
         raise EstimatorInvariantError("relative IQR must be finite and non-negative")
-    valid_observations = aggregation.accounting.valid_observations
-    outlier_rate = (
-        aggregation.accounting.outliers_removed / valid_observations
-        if valid_observations > 0
-        else 0.0
-    )
     if not math.isfinite(outlier_rate) or outlier_rate < 0:
         raise EstimatorInvariantError("outlier rate must be finite and non-negative")
 
@@ -550,15 +580,21 @@ def _confidence_and_reasons(
     strong_quality_count = sum(quality in (QualityGrade.A, QualityGrade.B) for quality in qualities)
     used_observations = aggregation.accounting.used_observations
     if used_observations >= 8 and relative_iqr <= 0.20 and c_count == 0 and outlier_rate <= 0.20:
-        return Confidence.HIGH, reasons
+        return CapacityEvidenceAssessment(
+            Confidence.HIGH, _ordered_reasons(reasons), relative_iqr, outlier_rate
+        )
     if (
         used_observations >= 4
         and relative_iqr <= 0.50
         and 2 * strong_quality_count >= used_observations
         and outlier_rate <= 0.35
     ):
-        return Confidence.MEDIUM, reasons
-    return Confidence.LOW, reasons
+        return CapacityEvidenceAssessment(
+            Confidence.MEDIUM, _ordered_reasons(reasons), relative_iqr, outlier_rate
+        )
+    return CapacityEvidenceAssessment(
+        Confidence.LOW, _ordered_reasons(reasons), relative_iqr, outlier_rate
+    )
 
 
 def _used_qualities(
@@ -588,7 +624,8 @@ def _build_estimate(
     except RobustAggregationError as exc:
         raise EstimatorInvariantError("P019 aggregation could not be finalized") from exc
 
-    confidence, reasons = _confidence_and_reasons(candidate_set, aggregation)
+    assessment = assess_capacity_evidence(candidate_set, aggregation)
+    confidence, reasons = assessment.confidence, assessment.reason_codes
     if confidence is Confidence.INSUFFICIENT:
         return QuotaCapacityEstimate(
             meter_type=candidate_set.meter_type,
@@ -717,5 +754,7 @@ __all__ = [
     "ResultInputMismatchError",
     "SCHEMA_VERSION",
     "CurrentQuotaPositionRequiredError",
+    "CapacityEvidenceAssessment",
+    "assess_capacity_evidence",
     "build_current_capacity_result",
 ]

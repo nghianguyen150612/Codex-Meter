@@ -11,11 +11,9 @@
 - Required PR title: `Detect historical metering-regime change signals`,
   targeting `main`.
 - Git workflow: follows `docs/DEVELOPMENT.md`; no implementation commit or
-  push on `main`. The PR must pass the complete local gate and available
-  GitHub Actions checks, receive a complete diff review, and merge with
-  `merge_method=merge`. Required checks and reviews must not be bypassed.
-  Verified PR, feature commit, merge parents, and final `main` identifiers will
-  be recorded after those remote events occur; no future SHA is asserted here.
+  push on `main`. The PR passed the complete local gate and all required
+  GitHub Actions checks, received a complete diff review, and merged with
+  `merge_method=merge`. No required check or review was bypassed.
 
 ## Detection method
 
@@ -97,9 +95,24 @@
   public schema, fixture, migration, Python dependency, Rust source, SQLite
   write path, CLI, or Phase G implementation changed.
 - Documentation review confirms an explicit observational uncertainty
-  statement and the P024 assumptions. PR/Actions status, merge method and
-  parents, feature SHA reachability, and final clean `main == origin/main`
-  verification will be filled from actual GitHub results before completion.
+  statement and the P024 assumptions.
+
+## PR and merge verification
+
+- PR #14: [Detect historical metering-regime change signals]
+  (https://github.com/nghianguyen150612/Codex-Meter/pull/14), merged
+  2026-10-16.
+- Implementation commit: `2eab1306ed22c7c5c54d71ddaf5404db965696c9`.
+- All six PR workflow jobs passed on the implementation SHA: Python quality,
+  contracts, Rust quality, and Rust platform jobs on Ubuntu, macOS, and
+  Windows. No PR reviews were submitted, and the PR was mergeable.
+- Merge method: `merge` (Create a merge commit). Merge commit:
+  `90b59b3499547c5826b82a7154190136a96cd03e`; its two parents are the starting
+  `main` SHA `d8ded331dda3665027e76a48a1e20532a7af469d` and the implementation
+  commit `2eab1306ed22c7c5c54d71ddaf5404db965696c9`.
+- The original implementation commit remains reachable from `main`. Immediately
+  after merge verification, local `main` and `origin/main` both matched
+  `90b59b3499547c5826b82a7154190136a96cd03e`, and the worktree was clean.
 
 ## Phase G handoff
 

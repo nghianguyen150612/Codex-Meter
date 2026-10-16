@@ -185,6 +185,27 @@ pub struct NormalizedObservation {
 
 pub type Observation = NormalizedObservation;
 
+impl NormalizedObservation {
+    pub(crate) fn identity_matches(&self) -> bool {
+        let Some(task_id) = self.task_id.as_deref() else {
+            return false;
+        };
+        observation_id_for_identity(
+            task_id,
+            self.session_id.as_deref(),
+            self.timing.ended_at.as_deref(),
+        ) == self.observation_id
+    }
+}
+
+pub(crate) fn observation_id_for_identity(
+    task_id: &str,
+    session_id: Option<&str>,
+    ended_at: Option<&str>,
+) -> String {
+    identity::observation_id(task_id, session_id, ended_at)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationLifecycle {

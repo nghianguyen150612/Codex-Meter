@@ -81,6 +81,17 @@
   unchanged; the four SQL migrations remain `i/lf`, `w/lf`, with `eol=lf`.
 - `just check`: unavailable because `just` is not installed.
 - Actual live provider workload launched: no.
-- PR, six CI jobs, full PR diff review, merge method, and post-merge reachability:
-  pending workflow completion. Actual post-merge commit and parent details are
-  reported in the completion response; no future merge SHA is predicted here.
+- PR #18: [Integrate authorized benchmark runtime and evidence capture](https://github.com/nghianguyen150612/Codex-Meter/pull/18).
+- Full PR diff review: the GitHub diff matched the reviewed local diff exactly
+  (10 files); no scope, privacy, schema, migration, or provider-execution
+  blocker was found.
+- CI run `38850898587` on feature commit
+  `760dcaf0c9224f15b20b057b395893ddc6c2daae`: all six jobs passed (Rust
+  quality, Ubuntu/macOS/Windows Rust platforms, Python quality, contracts).
+- At review, GitHub reported the PR mergeable with a clean merge state and no
+  outstanding review decision. The branch-protection detail endpoint was not
+  accessible to the current GitHub token; GitHub will enforce any protection
+  rules when the authorized merge is attempted.
+- Merge method: merge commit is required. Actual merge SHA, both parents,
+  feature-commit reachability, final main equality, and clean-worktree results
+  are reported in the completion response; no future merge SHA is predicted.

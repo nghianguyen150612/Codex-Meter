@@ -53,8 +53,8 @@
 - Contract validation: 6 schemas, 16 positive fixtures, and 5 negative fixtures passed.
 - Existing SQLite migration checksum regressions: passed; no migration was added.
 - `git diff --check`: passed.
-- Local platform: Linux. macOS and Windows results are pending the required GitHub Actions matrix.
-- Review of changed-file scope and local diff: complete; the PR diff review remains pending until publication.
+- Local platform: Linux. Linux, macOS, and Windows Rust platform jobs passed in GitHub Actions.
+- Review of changed-file scope and complete PR diff: complete; the PR contains only the 10 listed files.
 
 ## P025/P026 deferrals
 
@@ -65,10 +65,8 @@
 ## PR and merge record
 
 - PR number and URL: [#16](https://github.com/nghianguyen150612/Codex-Meter/pull/16), `Add controlled benchmark experiment framework`.
-- Latest feature SHA reviewed: pending.
-- Six GitHub Actions jobs: pending.
+- All six GitHub Actions jobs passed on PR head `6708e1cd100e9dac1cae8b485d1885dc625c881d`: `rust-quality`, `rust-platforms (ubuntu-latest)`, `rust-platforms (macos-latest)`, `rust-platforms (windows-latest)`, `python-quality`, and `contracts`.
+- A final manifest-only commit will receive its own CI run; its head SHA and results are recorded in the completion report.
 - Merge method: pending; required method is `merge` (Create a merge commit).
-- Merge commit and its two parents: pending.
-- Original feature-commit reachability: pending.
-- Final `main` SHA and `origin/main` equality: pending.
-- Final worktree status: pending.
+- Merge commit and its two parents: recorded in the completion report after the merge, since those SHAs do not exist before GitHub creates the merge commit.
+- Original feature-commit reachability, final `main` SHA and `origin/main` equality, and final worktree status: recorded in the completion report after merge verification.

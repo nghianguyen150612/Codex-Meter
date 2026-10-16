@@ -6,9 +6,9 @@
 - Verified `origin/main` after fetch at the same SHA; initial worktree was clean.
 - Feature branch: `feat/p024-controlled-benchmark-framework`.
 - Implementation changes are confined to the feature branch; no implementation was pushed directly to `main`.
-- Required implementation commit: pending commit.
+- Required implementation commit: `3a9921e222f50ca3538b6da04ec9ba0205305706` (`feat: implement controlled benchmark framework`).
 - PR title: `Add controlled benchmark experiment framework`.
-- PR, review, checks, merge, and final synchronization: pending.
+- PR, review, checks, merge, and final synchronization: in progress.
 
 ## Framework and API
 
@@ -64,7 +64,7 @@
 
 ## PR and merge record
 
-- PR number and URL: pending.
+- PR number and URL: [#16](https://github.com/nghianguyen150612/Codex-Meter/pull/16), `Add controlled benchmark experiment framework`.
 - Latest feature SHA reviewed: pending.
 - Six GitHub Actions jobs: pending.
 - Merge method: pending; required method is `merge` (Create a merge commit).

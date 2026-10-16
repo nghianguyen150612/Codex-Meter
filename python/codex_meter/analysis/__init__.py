@@ -1,5 +1,30 @@
 """Pure historical empirical capacity analysis."""
 
+from .benchmark import analyze_benchmark_calibration
+from .benchmark_models import (
+    BENCHMARK_ANALYSIS_METHOD_VERSION,
+    MAXIMUM_BENCHMARK_INPUT_OBSERVATIONS,
+    BenchmarkAnalysisError,
+    BenchmarkAnalysisPolicy,
+    BenchmarkAnalysisWarning,
+    BenchmarkCalibrationAnalysis,
+    BenchmarkCalibrationComparison,
+    BenchmarkCalibrationStatus,
+    BenchmarkCapacitySummary,
+    BenchmarkCohortKind,
+    BenchmarkDatasetError,
+    BenchmarkEvidenceAccounting,
+    BenchmarkEvidenceDataset,
+    BenchmarkEvidenceProvenance,
+    BenchmarkExperimentEvidence,
+    BenchmarkIsolationStatus,
+    BenchmarkMeasurementStatus,
+    BenchmarkNumericalError,
+    BenchmarkPolicyError,
+    BenchmarkRecommendation,
+    BenchmarkRegimeBoundary,
+    BenchmarkRunEvidence,
+)
 from .historical import analyze_historical_capacity, compare_historical_snapshots
 from .models import (
     MAXIMUM_HISTORICAL_SNAPSHOTS,
@@ -55,6 +80,29 @@ from .workload import (
 )
 
 __all__ = [
+    "analyze_benchmark_calibration",
+    "BENCHMARK_ANALYSIS_METHOD_VERSION",
+    "MAXIMUM_BENCHMARK_INPUT_OBSERVATIONS",
+    "BenchmarkAnalysisError",
+    "BenchmarkDatasetError",
+    "BenchmarkPolicyError",
+    "BenchmarkNumericalError",
+    "BenchmarkEvidenceProvenance",
+    "BenchmarkMeasurementStatus",
+    "BenchmarkIsolationStatus",
+    "BenchmarkCalibrationStatus",
+    "BenchmarkAnalysisWarning",
+    "BenchmarkRecommendation",
+    "BenchmarkAnalysisPolicy",
+    "BenchmarkExperimentEvidence",
+    "BenchmarkRunEvidence",
+    "BenchmarkRegimeBoundary",
+    "BenchmarkEvidenceDataset",
+    "BenchmarkEvidenceAccounting",
+    "BenchmarkCapacitySummary",
+    "BenchmarkCohortKind",
+    "BenchmarkCalibrationComparison",
+    "BenchmarkCalibrationAnalysis",
     "MAXIMUM_HISTORICAL_SNAPSHOTS",
     "ComparisonUnavailableReason",
     "HistoricalAnalysisError",

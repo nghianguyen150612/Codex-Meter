@@ -1,13 +1,27 @@
 //! Provider-independent controlled benchmark experiment contracts.
 
+pub mod adapter;
+pub mod dispatch;
 pub mod evidence;
 pub mod lifecycle;
 pub mod model;
+pub mod runtime;
 pub mod validation;
 
 #[cfg(test)]
 mod tests;
 
+pub use adapter::{
+    AdapterExecutionResult, AdapterExecutionStatus, BenchmarkExecutionAdapter,
+    BenchmarkWorkloadResolver, CancellationPolicy, CancellationToken, ExecutionControl,
+    ExecutionCorrelationEvidence, ResolvedBenchmarkWorkload, RuntimeAdapterError,
+    RuntimeExecutionPolicy,
+};
+pub use dispatch::{
+    BenchmarkDispatchGuard, DispatchExecutionLease, DispatchJournalError, DispatchJournalState,
+    DispatchReservation, DispatchScope, DispatchTerminalOutcome, FileBenchmarkDispatchGuard,
+    BENCHMARK_DISPATCH_JOURNAL_VERSION,
+};
 pub use evidence::{
     BenchmarkDiagnostic, MeasurementCompletionStatus, ObservationId, TrustedRuntimeBinding,
     VerifiedObservationLink,
@@ -19,6 +33,13 @@ pub use lifecycle::{
 pub use model::{
     AuthorizationId, BenchmarkPlan, ExperimentId, IdentityValidationError, PlanValidationError,
     RunId, WorkloadKey, BENCHMARK_FRAMEWORK_VERSION, MAX_PLANNED_RUNS,
+};
+pub use runtime::{
+    BenchmarkAuthorizationIngress, BenchmarkObservationResolver, BenchmarkRuntimeClock,
+    BenchmarkRuntimeCoordinator, BenchmarkRuntimeEvidenceSource, ExecutionMode,
+    ResolvedAuthoritativeObservation, RunAuthorizationRequest, RuntimeCorrelationStatus,
+    RuntimeError, RuntimeEvidenceSnapshot, RuntimeExecutionReceipt, RuntimeExecutionStatus,
+    SqliteBenchmarkObservationResolver, TrustedRunAuthorization, BENCHMARK_RUNTIME_VERSION,
 };
 pub use validation::{
     BenchmarkPreflight, EvidenceBasis, GateBlockReason, GateEvidence, IsolationClassification,

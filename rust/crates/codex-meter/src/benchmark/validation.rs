@@ -219,6 +219,31 @@ impl BenchmarkPreflight {
         &self.quota_window_continuity
     }
 
+    pub(crate) fn contains_test_fixture_evidence(&self) -> bool {
+        let is_fixture = |evidence: GateEvidence| {
+            matches!(
+                evidence,
+                GateEvidence::Verified {
+                    basis: EvidenceBasis::AuthorizedTestFixture
+                }
+            )
+        };
+        is_fixture(self.configuration_readiness)
+            || is_fixture(self.telemetry_source)
+            || is_fixture(self.execution_boundary_readiness)
+            || matches!(
+                self.isolation,
+                IsolationClassification::VerifiedIsolated {
+                    basis: EvidenceBasis::AuthorizedTestFixture
+                }
+            )
+            || self
+                .quota_meter_availability
+                .iter()
+                .chain(self.quota_window_continuity.iter())
+                .any(|entry| is_fixture(entry.evidence))
+    }
+
     fn evaluate_outcome(&self) -> PreflightOutcome {
         let mut has_unknown = false;
         let evidence = [

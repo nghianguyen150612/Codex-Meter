@@ -34,6 +34,35 @@ pub struct BenchmarkObservationClaims {
     owners: BTreeMap<ObservationId, (ExperimentId, RunId, u32)>,
 }
 
+impl BenchmarkObservationClaims {
+    pub(crate) fn len(&self) -> usize {
+        self.owners.len()
+    }
+
+    pub(crate) fn contains_owner(
+        &self,
+        observation_id: &ObservationId,
+        experiment_id: &ExperimentId,
+        run_id: &RunId,
+        repetition_index: u32,
+    ) -> bool {
+        self.owners.get(observation_id)
+            == Some(&(experiment_id.clone(), run_id.clone(), repetition_index))
+    }
+
+    pub(crate) fn has_conflicting_owner(
+        &self,
+        observation_id: &ObservationId,
+        experiment_id: &ExperimentId,
+        run_id: &RunId,
+        repetition_index: u32,
+    ) -> bool {
+        self.owners.get(observation_id).is_some_and(|owner| {
+            owner.0 != *experiment_id || owner.1 != *run_id || owner.2 != repetition_index
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExplicitRunAuthorization {
     experiment_id: ExperimentId,
@@ -570,6 +599,10 @@ impl BenchmarkRun {
 
     pub fn preflight_status(&self) -> Option<PreflightOutcome> {
         self.preflight_status
+    }
+
+    pub(crate) fn preflight(&self) -> Option<&BenchmarkPreflight> {
+        self.preflight.as_ref()
     }
 
     pub fn authorization(&self) -> Option<&ExplicitRunAuthorization> {

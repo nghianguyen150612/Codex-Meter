@@ -8,7 +8,7 @@
 - Implementation changes are confined to the feature branch; no implementation was pushed directly to `main`.
 - Required implementation commit: `3a9921e222f50ca3538b6da04ec9ba0205305706` (`feat: implement controlled benchmark framework`).
 - PR title: `Add controlled benchmark experiment framework`.
-- PR, review, checks, merge, and final synchronization: in progress.
+- PR, review, checks, merge, and original P024 synchronization: complete.
 
 ## Framework and API
 
@@ -65,8 +65,9 @@
 ## PR and merge record
 
 - PR number and URL: [#16](https://github.com/nghianguyen150612/Codex-Meter/pull/16), `Add controlled benchmark experiment framework`.
-- All six GitHub Actions jobs passed on PR head `6708e1cd100e9dac1cae8b485d1885dc625c881d`: `rust-quality`, `rust-platforms (ubuntu-latest)`, `rust-platforms (macos-latest)`, `rust-platforms (windows-latest)`, `python-quality`, and `contracts`.
-- A final manifest-only commit will receive its own CI run; its head SHA and results are recorded in the completion report.
-- Merge method: pending; required method is `merge` (Create a merge commit).
-- Merge commit and its two parents: recorded in the completion report after the merge, since those SHAs do not exist before GitHub creates the merge commit.
-- Original feature-commit reachability, final `main` SHA and `origin/main` equality, and final worktree status: recorded in the completion report after merge verification.
+- All six GitHub Actions jobs passed on the final PR head `a819c842247d9bdcaf76ec80d903b605f42485d7`: `rust-quality`, `rust-platforms (ubuntu-latest)`, `rust-platforms (macos-latest)`, `rust-platforms (windows-latest)`, `python-quality`, and `contracts`.
+- Merge method: `merge` (Create a merge commit).
+- Merge commit: `0f4a5e15ac452c00940cc62b6f2326ef90126d86`; parents, in order: `9edf62a9ef30e490abd81af57f2f016300de92c9` and `a819c842247d9bdcaf76ec80d903b605f42485d7`.
+- Original feature commits `3a9921e222f50ca3538b6da04ec9ba0205305706`, `6708e1cd100e9dac1cae8b485d1885dc625c881d`, and `a819c842247d9bdcaf76ec80d903b605f42485d7` are ancestors of the merge commit and `main`.
+- After PR #16 merge verification, local `main` equaled `origin/main` at `0f4a5e15ac452c00940cc62b6f2326ef90126d86`, and the worktree was clean.
+- These post-merge facts were added through a documentation-only closeout PR because GitHub creates the merge SHA and parents only after merging.

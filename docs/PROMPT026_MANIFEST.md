@@ -145,3 +145,23 @@ Trusted Rust-to-Python benchmark provenance and transport remain outstanding;
 production benchmark execution remains disabled; statistical results are never
 automatically applied to the estimator. P027 begins Phase H — CLI and
 Runtime/Analytics Integration, and is not authorized here.
+
+## Pull request verification record
+
+- Implementation commit: `857702cf37add219461d0ffbc0e9f2dab798b6dc`
+  (`feat: analyze benchmark capacity calibration`).
+- PR [#19](https://github.com/nghianguyen150612/Codex-Meter/pull/19):
+  `Add benchmark calibration and statistical analysis`, targeting `main`.
+- Reviewed the complete six-file GitHub PR diff against the local diff; all
+  patch content matched (GitHub omits an optional hunk context label). No
+  correctness, scope, privacy, dependency, schema, migration, or execution
+  blocker was found.
+- GitHub initially reported the head mergeable with no outstanding review
+  decision. The branch-protection details endpoint returned HTTP 403 for this
+  integration; GitHub's merge API must enforce any required reviews and checks.
+  No rule bypass or administrator override is permitted.
+- All six CI jobs must pass on the final feature head before the authorized
+  `merge_method=merge` attempt. Actual final-head CI conclusions, merge SHA,
+  both parents, feature-commit reachability, reviewed-tree identity, and clean
+  synchronized `main` are reported in the completion response after GitHub
+  produces those facts. This manifest does not invent future merge facts.

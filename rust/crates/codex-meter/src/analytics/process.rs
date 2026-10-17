@@ -1376,7 +1376,7 @@ mod tests {
         let error = run_python_script(
             "import time; time.sleep(5)",
             ProcessLimits {
-                timeout: Duration::from_millis(100),
+                timeout: Duration::from_secs(1),
                 ..ProcessLimits::default()
             },
         )

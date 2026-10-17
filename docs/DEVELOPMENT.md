@@ -10,7 +10,8 @@
 
 From the repository root, `uv sync --project python --frozen` creates the project environment from
 the committed `python/uv.lock` without changing dependency resolution. The Python distribution is
-an internal development package at version `0.0.0`; it is not a separately released product.
+an internal development package at version `0.0.0`; it is not a separately released product. Its
+local wheel uses the Hatchling build backend and has no mandatory runtime dependencies.
 
 ## Developer commands
 
@@ -21,6 +22,8 @@ an internal development package at version `0.0.0`; it is not a separately relea
 | `just lint` | Check Rust formatting/Clippy and Python Ruff lint/format. |
 | `just contracts` | Validate all schemas and positive/negative fixtures. |
 | `just check` | Run the complete local quality gate. |
+| `uv build --project python --wheel --out-dir <directory>` | Build a local analytics wheel for installation/runtime validation. |
+| `python scripts/p029_runtime_smoke.py` | Build and compare two wheels, check contents, install one in a fresh venv, and test the relocated CLI. |
 
 The direct commands are recorded in the root `justfile`. In particular, Cargo commands use
 `--manifest-path rust/Cargo.toml`, and Python commands use `uv run --project python --frozen`.
@@ -28,6 +31,15 @@ The direct commands are recorded in the root `justfile`. In particular, Cargo co
 Published SQLite migration SQL is checked out with LF endings on every platform. The migration
 registry hashes the exact SQL bytes, so CRLF conversion on Windows would appear as migration drift
 and invalidate the published checksum regression tests.
+
+The default `auto` mode keeps the P028 source-first behavior; contributors may also select
+`--worker-mode source` explicitly. Use `--worker-mode installed` with an explicit `--python`
+interpreter to test a local wheel outside the source checkout. After `uv sync`, run
+`python scripts/p029_runtime_smoke.py` with the system Python executable rather than `uv run`;
+the smoke test temporarily hides the project directory to verify installed mode after relocation.
+It expects the Rust binary to have been built first and exercises paths containing spaces and
+Unicode on the current host. See [cross-platform runtime compatibility](CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md)
+for supported versions, installation steps, and platform test coverage.
 
 ## Git Workflow Policy
 

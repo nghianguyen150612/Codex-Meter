@@ -105,6 +105,12 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
         "CLI failed with categorized stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(output.stdout.len(), 1_159);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&output.stdout)),
+        "13ba5044594d01cff0313d14a6fd514883d4512b6278b5cd8db74f34be5a296a",
+        "P029 must preserve the representative AnalyticsResult bytes at the starting SHA"
+    );
     let result: Value = serde_json::from_slice(&output.stdout).expect("JSON mode emits one result");
     assert_eq!(result["result_status"], "succeeded");
     assert_eq!(result["request_id"], "p027-e2e-001");

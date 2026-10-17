@@ -21,6 +21,8 @@ just check
 See the [development guide](docs/DEVELOPMENT.md) for setup and direct commands.
 See the [CLI analytics guide](docs/CLI_ANALYTICS_INTEGRATION.md) for current-capacity usage,
 request examples, and integration limits.
+See the [cross-platform runtime guide](docs/CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md) for local
+wheel installation, installed-worker selection, and runtime compatibility coverage.
 
 ## Project documents
 

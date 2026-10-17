@@ -1,9 +1,10 @@
 //! Input preparation, analytics invocation, and result contract enforcement.
 
 use crate::analytics::{
-    invoke_worker, AnalyticsRequest, AnalyticsResult, ManualMeterPositions, ProcessLimits,
-    ResultError,
+    invoke_worker_with_mode, AnalyticsRequest, AnalyticsResult, ManualMeterPositions,
+    ProcessLimits, ResultError, WorkerInvocation,
 };
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -41,19 +42,19 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
         ));
     }
 
-    if !arguments.database.is_file() {
-        return Err(cli_error(
-            "database_missing",
-            "analytics database does not exist",
-        ));
-    }
+    validate_python_executable(&arguments.python)?;
+
+    validate_database_readable(&arguments.database)?;
     let database = absolute_database_path(&arguments.database)?;
-    let output = invoke_worker(
-        &arguments.python,
-        &database,
-        &arguments.generated_at,
-        arguments.five_hour_used_percent,
-        arguments.weekly_used_percent,
+    let output = invoke_worker_with_mode(
+        WorkerInvocation {
+            python: &arguments.python,
+            worker_mode: arguments.worker_mode,
+            database_path: &database,
+            generated_at: &arguments.generated_at,
+            five_hour_used_percent: arguments.five_hour_used_percent,
+            weekly_used_percent: arguments.weekly_used_percent,
+        },
         &request_bytes,
         ProcessLimits::default(),
     )
@@ -94,6 +95,98 @@ fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
     std::env::current_dir()
         .map(|directory| directory.join(path))
         .map_err(|_| cli_error("database_missing", "analytics database does not exist"))
+}
+
+fn validate_database_readable(path: &Path) -> Result<(), CliError> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            cli_error("database_missing", "analytics database does not exist")
+        } else {
+            cli_error(
+                "database_open_failed",
+                "analytics database could not be opened read-only",
+            )
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err(cli_error(
+            "database_missing",
+            "analytics database does not exist",
+        ));
+    }
+    File::open(path).map_err(|_| {
+        cli_error(
+            "database_open_failed",
+            "analytics database could not be opened read-only",
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_python_executable(executable: &OsStr) -> Result<(), CliError> {
+    let configured = Path::new(executable);
+    let has_directory = configured.is_absolute() || configured.components().count() > 1;
+    let usable = if has_directory {
+        executable_file_is_usable(configured)
+    } else {
+        std::env::var_os("PATH")
+            .map(|path| {
+                std::env::split_paths(&path).any(|directory| {
+                    executable_candidates(&directory.join(configured))
+                        .any(|candidate| executable_file_is_usable(&candidate))
+                })
+            })
+            .unwrap_or(false)
+    };
+    if usable {
+        Ok(())
+    } else {
+        Err(cli_error(
+            "python_unavailable",
+            "could not start the configured Python executable",
+        ))
+    }
+}
+
+fn executable_candidates(path: &Path) -> impl Iterator<Item = std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut candidates = vec![path.to_path_buf()];
+        if path.extension().is_none() {
+            let extensions = std::env::var_os("PATHEXT")
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned());
+            candidates.extend(
+                extensions
+                    .split(';')
+                    .filter(|extension| !extension.is_empty())
+                    .map(|extension| path.with_extension(extension.trim_start_matches('.'))),
+            );
+        }
+        candidates.into_iter()
+    }
+    #[cfg(not(windows))]
+    {
+        std::iter::once(path.to_path_buf())
+    }
+}
+
+fn executable_file_is_usable(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn decode_worker_result(
@@ -157,6 +250,7 @@ mod tests {
             five_hour_used_percent: None,
             weekly_used_percent: None,
             python: "missing-python".into(),
+            worker_mode: crate::analytics::PythonWorkerMode::Auto,
             json: false,
         };
         assert_eq!(run(base.clone()).unwrap_err().code, "invalid_generated_at");

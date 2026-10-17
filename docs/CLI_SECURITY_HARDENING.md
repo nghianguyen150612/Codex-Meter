@@ -54,6 +54,8 @@ The child environment is cleared and rebuilt from this allowlist:
 - `PATHEXT` on Windows executable lookup;
 - `SystemRoot` and `WINDIR` for Windows process startup;
 - `TEMP`, `TMP`, and `TMPDIR` for ordinary temporary-file behavior.
+- `CODEX_METER_PRODUCT_VERSION`, set by the native executable to its compiled Cargo package
+  version. It is never inherited from the caller and must match installed wheel metadata.
 
 No credentials or provider tokens are deliberately forwarded. The Python runtime does not depend
 on `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONINSPECT`, user-site configuration, or

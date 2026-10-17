@@ -5,6 +5,12 @@ Codex Meter is an independent, local-first project for empirically measuring Cod
 current-capacity estimates through the Python analytics pipeline. Automatic tracker startup and
 live provider quota acquisition are not connected to this command.
 
+The initial distribution candidate is version `0.1.0`. It pairs a native Rust executable with the
+`codex-meter-analytics` wheel and a Python 3.11–3.13 environment; it is not a standalone binary.
+Candidate artifacts are unpublished and require manual release review. See the
+[installation guide](docs/INSTALLATION.md), [release notes](docs/RELEASE_NOTES_0.1.0.md), and
+[release readiness report](docs/RELEASE_READINESS.md).
+
 The product loop is **Track → Measure → Estimate → Compare**, while keeping raw tokens,
 weighted/effective usage, and plan quota as distinct measurement domains.
 
@@ -30,3 +36,6 @@ wheel installation, installed-worker selection, and runtime compatibility covera
 - [Technical architecture](docs/ARCHITECTURE.md)
 - [Versioned data contracts](docs/DATA_CONTRACTS.md)
 - [Development guide](docs/DEVELOPMENT.md)
+- [Installation guide](docs/INSTALLATION.md)
+- [Release readiness](docs/RELEASE_READINESS.md)
+- [Roadmap completion audit](docs/ROADMAP_COMPLETION_AUDIT.md)

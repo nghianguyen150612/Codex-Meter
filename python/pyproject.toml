@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-meter-analytics"
-version = "0.0.0"
-description = "Internal analytics package for Codex Meter"
+version = "0.1.0"
+description = "Analytics runtime for Codex Meter current-capacity estimates"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = []

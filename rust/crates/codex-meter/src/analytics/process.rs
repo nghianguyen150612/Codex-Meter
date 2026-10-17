@@ -187,8 +187,12 @@ fn apply_minimal_environment(command: &mut Command) {
             command.env(name, value);
         }
     }
+    // The worker accepts only the analytics distribution built for this CLI.
+    // This is a fixed compile-time value, never inherited from the caller.
+    command.env("CODEX_METER_PRODUCT_VERSION", env!("CARGO_PKG_VERSION"));
 }
 
+#[cfg(not(feature = "release-artifact"))]
 fn source_tree_root() -> Result<Option<PathBuf>, ProcessError> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../python");
     if !source.is_dir() {
@@ -201,6 +205,14 @@ fn source_tree_root() -> Result<Option<PathBuf>, ProcessError> {
     Ok(Some(root))
 }
 
+#[cfg(feature = "release-artifact")]
+fn source_tree_root() -> Result<Option<PathBuf>, ProcessError> {
+    // Release bundles always select an installed wheel. Returning no checkout
+    // root also keeps temporary build paths out of the native executable.
+    Ok(None)
+}
+
+#[cfg(not(feature = "release-artifact"))]
 fn validate_worker_files(root: &Path) -> std::io::Result<()> {
     for relative in [
         "codex_meter/__init__.py",
@@ -936,7 +948,7 @@ def distribution_roots():
             fail_resolution()
         distribution = matching[0]
         metadata = distribution.metadata
-        if metadata.get("Requires-Python") != ">=3.11":
+        if metadata.get("Requires-Python") != ">=3.11" or metadata.get("Version") != os.environ.get("CODEX_METER_PRODUCT_VERSION"):
             fail_resolution()
         files = distribution.files
         if files is None:
@@ -1263,11 +1275,17 @@ mod tests {
         let source_package =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../python/codex_meter");
         copy_directory(&source_package, &package_root.join("codex_meter")).unwrap();
-        let metadata = package_root.join("codex_meter_analytics-0.0.0.dist-info");
+        let metadata = package_root.join(format!(
+            "codex_meter_analytics-{}.dist-info",
+            env!("CARGO_PKG_VERSION")
+        ));
         fs::create_dir_all(&metadata).unwrap();
         fs::write(
             metadata.join("METADATA"),
-            "Metadata-Version: 2.3\nName: codex-meter-analytics\nVersion: 0.0.0\nRequires-Python: >=3.11\n",
+            format!(
+                "Metadata-Version: 2.3\nName: codex-meter-analytics\nVersion: {}\nRequires-Python: >=3.11\n",
+                env!("CARGO_PKG_VERSION")
+            ),
         )
         .unwrap();
         let required_files = [
@@ -1286,8 +1304,14 @@ mod tests {
             .iter()
             .map(|path| format!("{path},,\n"))
             .collect::<String>();
-        record.push_str("codex_meter_analytics-0.0.0.dist-info/METADATA,,\n");
-        record.push_str("codex_meter_analytics-0.0.0.dist-info/RECORD,,\n");
+        record.push_str(&format!(
+            "codex_meter_analytics-{}.dist-info/METADATA,,\n",
+            env!("CARGO_PKG_VERSION")
+        ));
+        record.push_str(&format!(
+            "codex_meter_analytics-{}.dist-info/RECORD,,\n",
+            env!("CARGO_PKG_VERSION")
+        ));
         fs::write(metadata.join("RECORD"), record).unwrap();
         assert!(python.to_string_lossy().contains(' '));
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 PYTHON_PROJECT = ROOT / "python"
 MIGRATION_DIR = ROOT / "rust" / "crates" / "codex-meter" / "migrations"
 OBSERVATION_FIXTURE = (
@@ -72,6 +73,9 @@ def build_wheel(directory: Path) -> Path:
 
 
 def validate_wheel(wheel: Path) -> None:
+    expected_name = f"codex_meter_analytics-{VERSION}-py3-none-any.whl"
+    if wheel.name != expected_name:
+        raise AssertionError(f"local wheel filename must be {expected_name}")
     with zipfile.ZipFile(wheel) as archive:
         names = sorted(archive.namelist())
         entries = set(names)
@@ -127,6 +131,8 @@ def validate_wheel(wheel: Path) -> None:
         metadata = archive.read(metadata_files[0]).decode("utf-8")
         if "Name: codex-meter-analytics\n" not in metadata:
             raise AssertionError("wheel distribution name changed")
+        if f"Version: {VERSION}\n" not in metadata:
+            raise AssertionError("wheel product version does not match VERSION")
         if "Requires-Python: >=3.11\n" not in metadata:
             raise AssertionError("wheel Python compatibility metadata changed")
         if "Requires-Dist:" in metadata:

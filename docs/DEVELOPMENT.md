@@ -10,8 +10,10 @@
 
 From the repository root, `uv sync --project python --frozen` creates the project environment from
 the committed `python/uv.lock` without changing dependency resolution. The Python distribution is
-an internal development package at version `0.0.0`; it is not a separately released product. Its
-local wheel uses the Hatchling build backend and has no mandatory runtime dependencies.
+versioned alongside the CLI: root `VERSION` is authoritative and Cargo metadata, Python project
+metadata, and `codex_meter.__version__` must match it. The `codex-meter-analytics` wheel has no
+mandatory runtime dependencies. Version checks and unpublished candidate packaging are implemented
+in `scripts/p030_release_candidate.py`.
 
 ## Developer commands
 
@@ -24,6 +26,9 @@ local wheel uses the Hatchling build backend and has no mandatory runtime depend
 | `just check` | Run the complete local quality gate. |
 | `uv build --project python --wheel --out-dir <directory>` | Build a local analytics wheel for installation/runtime validation. |
 | `python scripts/p029_runtime_smoke.py` | Build and compare two wheels, check contents, install one in a fresh venv, and test the relocated CLI. |
+| `python scripts/p030_release_candidate.py check-version` | Check product versions and preserve schema/method/protocol versions. |
+| `python scripts/p030_release_candidate.py verify-wheel --wheel <file>` | Validate wheel naming, metadata, RECORD integrity, and package allowlist. |
+| `python scripts/p030_release_smoke.py <candidate-archive>` | Extract a candidate and exercise its installed worker using synthetic data. |
 
 The direct commands are recorded in the root `justfile`. In particular, Cargo commands use
 `--manifest-path rust/Cargo.toml`, and Python commands use `uv run --project python --frozen`.
@@ -39,7 +44,8 @@ interpreter to test a local wheel outside the source checkout. After `uv sync`, 
 the smoke test temporarily hides the project directory to verify installed mode after relocation.
 It expects the Rust binary to have been built first and exercises paths containing spaces and
 Unicode on the current host. See [cross-platform runtime compatibility](CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md)
-for supported versions, installation steps, and platform test coverage.
+for the verified Python matrix and platform test coverage. See [installation](INSTALLATION.md) for
+the unpublished 0.1.0 candidate and checksum instructions.
 
 ## Git Workflow Policy
 

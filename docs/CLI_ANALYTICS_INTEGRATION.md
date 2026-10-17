@@ -135,13 +135,13 @@ JSON output is reserialized by Rust only after strict result deserialization and
 
 Errors distinguish invalid requests, unsupported analysis/options, manual meter errors, missing/incompatible databases, migration drift, corrupt Observations, unavailable Python, worker failure, timeout, invalid result JSON, and result/request mismatch. Raw Python tracebacks and unrestricted stderr are not printed.
 
-The worker protocol limits request input to 64 KiB, result output to 2 MiB, retained diagnostics to 8 KiB, and the complete process lifecycle to 60 seconds. The isolated interpreter runs with `-I -S`; the child environment is cleared except for `PATH`, Windows startup variables, and temporary-directory variables. A fixed stderr success marker acknowledges the worker read the request through EOF. Rust reads stdout and stderr concurrently, kills the process group or Windows Job Object on timeout/size overflow, bounds cleanup, and reaps the direct child. The hardened behavior and process-escape limitations are documented in [CLI security hardening](CLI_SECURITY_HARDENING.md).
+The worker protocol limits request input to 64 KiB, result output to 2 MiB, retained diagnostics to 8 KiB, and the complete process lifecycle to 60 seconds. The isolated interpreter runs with `-I -S`; the child environment is cleared except for `PATH`, Windows startup variables, temporary-directory variables, and the executable's fixed expected product version. Installed wheel metadata must match that version. A fixed stderr success marker acknowledges the worker read the request through EOF. Rust reads stdout and stderr concurrently, kills the process group or Windows Job Object on timeout/size overflow, bounds cleanup, and reaps the direct child. The hardened behavior and process-escape limitations are documented in [CLI security hardening](CLI_SECURITY_HARDENING.md).
 
 ## Privacy and limitations
 
 Only the closed request and result structures cross the process boundary. The CLI does not log database rows, prompts, responses, repository data, account identifiers, credentials, tokens, or raw rollout content. Diagnostics use fixed categories and messages rather than displaying worker stderr or tracebacks. Successful human output states that results are Codex Meter empirical estimates, not official provider quota allowances. The CLI does not call provider services, run live benchmarks, start the tracking agent, or expose the other Python analysis types. Those APIs remain internal.
 
-`history_summary`, `quota_change_analysis`, `workload_estimate`, and `benchmark_analysis` are rejected as unsupported analysis types. Automatic quota acquisition, release packaging, and production benchmark execution remain out of scope.
+`history_summary`, `quota_change_analysis`, `workload_estimate`, and `benchmark_analysis` are rejected as unsupported analysis types. Automatic quota acquisition, public release publication, and production benchmark execution remain out of scope. P030 candidate archives are unpublished CI build artifacts.
 
 ## P028 security hardening
 

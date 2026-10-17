@@ -116,8 +116,8 @@ Object.
 Both worker modes use the same P028 invocation path:
 
 - The interpreter receives `-I -S`; no flags are removed for wheel imports.
-- The child environment contains only the documented runtime variables; inherited credentials,
-  `PYTHONPATH`, and `PYTHONHOME` are cleared.
+- The child environment contains only the documented runtime variables and the executable's fixed
+  product version; inherited credentials, `PYTHONPATH`, and `PYTHONHOME` are cleared.
 - The bootstrap imports only from the explicitly selected source root or installed package root
   plus standard-library paths. It rejects shadow files and ambiguous installations.
 - Request and result limits remain 64 KiB and 2 MiB. Retained diagnostics remain 8 KiB, the
@@ -127,8 +127,8 @@ Both worker modes use the same P028 invocation path:
 
 Path checks establish containment and package-root provenance, not cryptographic package
 authenticity. The wheel is not signed. An installation directory writable by an attacker cannot be
-treated as trustworthy. Signing and release-distribution integrity remain for P030 or a later
-security milestone.
+treated as trustworthy. P030 adds candidate checksums and exact source provenance, but publisher
+authentication and code signing remain unavailable.
 
 ## SQLite and privacy
 
@@ -163,7 +163,8 @@ tracebacks, credentials, prompts, responses, or raw telemetry.
 - Installed mode does not authenticate wheel contents cryptographically.
 - UNC shares and Windows long paths beyond the hosted runner's enabled settings are not verified.
 - Windows volume-GUID device namespace paths are not supported; use a drive-letter or UNC path.
-- No official installer, published package, or release artifact is produced.
+- P030 produces unpublished CI candidate archives and a shared wheel; no public release, tag,
+  installer, or published package is created.
 - No provider quota acquisition, automatic position inference, daemon, or live benchmark is enabled.
 
 ## Inputs for P030
@@ -184,4 +185,5 @@ P030 may assume:
 
 P030 will focus on:
 
-**Release readiness, distributable artifacts, installation documentation, versioning, reproducibility, and final project verification.**
+**Release readiness, versioned unpublished candidate artifacts, installation documentation,
+reproducibility, and final project verification.**

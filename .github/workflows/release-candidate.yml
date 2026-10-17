@@ -1,0 +1,139 @@
+name: Release candidate validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shared-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - name: Check synchronized versions
+        run: python scripts/p030_release_candidate.py check-version
+      - name: Build the shared wheel twice
+        env:
+          SOURCE_DATE_EPOCH: "1792137600"
+        run: |
+          uv build --project python --wheel --out-dir wheel-build/first
+          uv build --project python --wheel --out-dir wheel-build/second
+      - name: Validate and compare wheel bytes
+        shell: bash
+        run: |
+          wheel_name="codex_meter_analytics-$(cat VERSION)-py3-none-any.whl"
+          python scripts/p030_release_candidate.py verify-wheel --wheel "wheel-build/first/$wheel_name"
+          python scripts/p030_release_candidate.py verify-wheel --wheel "wheel-build/second/$wheel_name"
+          python -c 'import hashlib, pathlib, sys; left, right = map(pathlib.Path, sys.argv[1:]); assert hashlib.sha256(left.read_bytes()).digest() == hashlib.sha256(right.read_bytes()).digest(), "wheel builds differ"' "wheel-build/first/$wheel_name" "wheel-build/second/$wheel_name"
+          mkdir -p shared-wheel
+          cp "wheel-build/first/$wheel_name" shared-wheel/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-wheel
+          path: shared-wheel/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+  platform-bundles:
+    needs: shared-wheel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            executable: codex-meter
+          - slug: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable: codex-meter.exe
+          - slug: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: codex-meter
+          - slug: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            executable: codex-meter
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-wheel
+          path: ${{ runner.temp }}/candidate-shared-wheel
+      - name: Check versions and build native release executable
+        run: |
+          python scripts/p030_release_candidate.py check-version
+          cargo build --manifest-path rust/Cargo.toml --workspace --release --locked --target ${{ matrix.target }} --features codex-meter/release-artifact
+      - name: Build candidate bundle twice and verify reproducible archives
+        shell: bash
+        run: |
+          binary="rust/target/${{ matrix.target }}/release/${{ matrix.executable }}"
+          wheel="$RUNNER_TEMP/candidate-shared-wheel/codex_meter_analytics-$(cat VERSION)-py3-none-any.whl"
+          first="$RUNNER_TEMP/candidate-first"
+          second="$RUNNER_TEMP/candidate-second"
+          version="$(cat VERSION)"
+          suffix=tar.gz
+          if [[ "${{ matrix.slug }}" == "windows-x86_64" ]]; then suffix=zip; fi
+          archive="codex-meter-${version}-${{ matrix.slug }}.${suffix}"
+          python scripts/p030_release_candidate.py package --binary "$binary" --wheel "$wheel" --target-triple "${{ matrix.target }}" --output-directory "$first" --workflow-run-id "${{ github.run_id }}"
+          python scripts/p030_release_candidate.py package --binary "$binary" --wheel "$wheel" --target-triple "${{ matrix.target }}" --output-directory "$second" --workflow-run-id "${{ github.run_id }}"
+          python -c 'import hashlib, pathlib, sys; left, right = map(pathlib.Path, sys.argv[1:]); assert hashlib.sha256(left.read_bytes()).digest() == hashlib.sha256(right.read_bytes()).digest(), "archive builds differ"' "$first/$archive" "$second/$archive"
+          python scripts/p030_release_smoke.py "$first/$archive"
+          python -c 'import pathlib, shutil, sys; source, destination = map(pathlib.Path, sys.argv[1:]); destination.mkdir(parents=True, exist_ok=True); [shutil.copy2(path, destination / path.name) for path in source.iterdir() if path.is_file()]' "$first" "$RUNNER_TEMP/candidate-upload"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ matrix.slug }}
+          path: ${{ runner.temp }}/candidate-upload/*
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate-candidate:
+    needs: [shared-wheel, platform-bundles]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-*
+          path: candidate-artifacts
+          merge-multiple: true
+      - name: Generate and verify aggregate provenance and checksums
+        run: |
+          python scripts/p030_release_candidate.py aggregate --directory candidate-artifacts
+          python scripts/p030_release_candidate.py verify --directory candidate-artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-meter-0.1.0-candidates-run-${{ github.run_id }}
+          path: candidate-artifacts/*
+          if-no-files-found: error
+          retention-days: 30

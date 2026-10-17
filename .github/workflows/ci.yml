@@ -71,6 +71,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: uv sync --project python --frozen
       - run: cargo build --manifest-path rust/Cargo.toml --workspace
       - run: python scripts/p029_runtime_smoke.py

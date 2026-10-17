@@ -21,7 +21,7 @@ pub fn render_human(
         );
     }
     output.push_str(
-        "\nSource: Codex Meter empirical estimate\nNot an official provider quota allowance\n",
+        "\nSource: Codex Meter empirical estimate\nCodex Meter empirical estimates are not official provider quota allowances.\n",
     );
     output
 }
@@ -152,19 +152,28 @@ fn reason_name(reason: &ReasonCode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytics::AnalyticsResult;
+    use crate::analytics::{AnalyticsResult, ManualMeterPositions};
 
     #[test]
     fn manual_input_is_labeled_unverified_and_configuration_missingness_is_preserved() {
         let json = r#"{"schema_version":"1.0.0","request_id":"request-1","analysis_type":"current_capacity_estimate","result_status":"insufficient_evidence","dataset_configuration":{"plan":{"availability":"unavailable","provenance":"unavailable"},"model":{"availability":"unavailable","provenance":"unavailable"},"reasoning_level":{"availability":"unavailable","provenance":"unavailable"},"speed_mode":{"availability":"unavailable","provenance":"unavailable"},"codex_version":{"availability":"unavailable","provenance":"unavailable"}},"generated_at":"2026-10-16T07:00:00Z","estimator_method_version":"1.0.0","quota_capacity_estimates":[{"meter_type":"five_hour","metric_kind":"estimated_raw_tokens","provider_authority":"codex_meter_empirical_estimate","confidence":"insufficient","sample_accounting":{"candidate_observations":0,"valid_observations":0,"excluded_observations":0,"outliers_removed":0,"used_observations":0},"reason_codes":["unknown_reason"]}],"warnings":["unknown_reason"]}"#;
         let request = crate::analytics::AnalyticsRequest::parse(r#"{"schema_version":"1.0.0","request_id":"request-1","analysis_type":"current_capacity_estimate","dataset_selector":{"configuration":{"plan":{"availability":"unavailable","provenance":"unavailable"},"model":{"availability":"unavailable","provenance":"unavailable"},"reasoning_level":{"availability":"unavailable","provenance":"unavailable"},"speed_mode":{"availability":"unavailable","provenance":"unavailable"},"codex_version":{"availability":"unavailable","provenance":"unavailable"}}},"target_quota_windows":["five_hour"],"options":{}}"#.as_bytes()).unwrap();
-        let result =
-            AnalyticsResult::parse_and_validate(json.as_bytes(), &request, "2026-10-16T07:00:00Z")
-                .unwrap();
+        let result = AnalyticsResult::parse_and_validate(
+            json.as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions {
+                five_hour_used_percent: Some(24.0),
+                weekly_used_percent: None,
+            },
+        )
+        .unwrap();
         let rendered = render_human(&result, Some(24.0), None);
         assert!(rendered.contains("24% used (manually supplied, unverified)"));
         assert!(rendered.contains("Plan            Unavailable"));
-        assert!(rendered.contains("Not an official provider quota allowance"));
+        assert!(rendered.contains(
+            "Codex Meter empirical estimates are not official provider quota allowances."
+        ));
     }
 
     #[test]

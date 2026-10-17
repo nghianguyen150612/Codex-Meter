@@ -53,6 +53,24 @@ _REQUEST_FIELDS = {
     "target_quota_windows",
     "options",
 }
+_SAFE_DIAGNOSTICS = {
+    "invalid_request": "Python worker rejected the analytics request",
+    "unsupported_analysis_type": "only current_capacity_estimate is supported",
+    "unsupported_estimator_option": "requested estimator option is not supported",
+    "invalid_manual_meter_percentage": "manual meter percentage is invalid",
+    "unrequested_meter_position": "manual meter position targets an unrequested meter",
+    "unsupported_protocol_version": "Python worker protocol version is incompatible",
+    "database_missing": "analytics database does not exist",
+    "database_schema_incompatible": "analytics database schema is incompatible",
+    "migration_checksum_drift": "analytics database migration checksums are incompatible",
+    "corrupt_observation": "analytics database contains a corrupt observation",
+    "database_open_failed": "analytics database could not be opened read-only",
+    "database_read_failed": "analytics database could not be read",
+    "current_quota_position_required": (
+        "a current meter percentage is required for sufficient historical evidence"
+    ),
+    "analytics_failed": "Python capacity analysis failed",
+}
 
 
 class WorkerError(Exception):
@@ -173,6 +191,9 @@ def validate_request(document: Any) -> tuple[dict[str, Any], ResultConfiguration
     if not isinstance(options, dict) or set(options) - {"minimum_quality", "maximum_observations"}:
         raise WorkerError("invalid_request", "options contains an unsupported field")
     if "minimum_quality" in options:
+        minimum_quality = options["minimum_quality"]
+        if not isinstance(minimum_quality, str) or minimum_quality not in {"A", "B", "C", "D", "X"}:
+            raise WorkerError("invalid_request", "minimum_quality is invalid")
         raise WorkerError(
             "unsupported_estimator_option",
             "minimum_quality is not supported by the P027 P018 eligibility policy",
@@ -339,13 +360,18 @@ def main(argv: list[str] | None = None) -> int:
         raw = sys.stdin.buffer.read(MAXIMUM_REQUEST_BYTES + 1)
         output = execute_request(raw, context)
     except WorkerError as exc:
-        print(f"{exc.code}: {exc.message}", file=sys.stderr)
+        message = _SAFE_DIAGNOSTICS.get(exc.code)
+        if message is None:
+            print("worker_failure: analytics worker failed", file=sys.stderr)
+        else:
+            print(f"{exc.code}: {message}", file=sys.stderr)
         return 2
     except SystemExit as exc:
         return int(exc.code or 0)
     except Exception:
         print("worker_failure: analytics worker failed", file=sys.stderr)
         return 1
+    sys.stderr.write("codex_meter_worker_v1 input_complete\n")
     sys.stdout.write(output)
     sys.stdout.write("\n")
     return 0

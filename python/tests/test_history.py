@@ -20,7 +20,7 @@ from codex_meter.history import (
     StorageCompatibilityError,
     canonical_time_key,
 )
-from codex_meter.history.sqlite import MIGRATIONS
+from codex_meter.history.sqlite import MIGRATIONS, _remove_windows_extended_prefix
 
 ROOT = Path(__file__).parents[2]
 MIGRATION_DIR = ROOT / "rust" / "crates" / "codex-meter" / "migrations"
@@ -51,6 +51,20 @@ def _create_database(path: Path, latest: int = 4) -> None:
         )
     connection.commit()
     connection.close()
+
+
+def test_windows_extended_paths_are_normalized_for_file_uri_construction() -> None:
+    assert _remove_windows_extended_prefix(r"\\?\C:\Users\runner\history.sqlite") == (
+        r"C:\Users\runner\history.sqlite"
+    )
+    assert _remove_windows_extended_prefix(r"\\?\UNC\server\share\history.sqlite") == (
+        r"\\server\share\history.sqlite"
+    )
+    assert _remove_windows_extended_prefix(r"C:\Users\runner\history.sqlite") == (
+        r"C:\Users\runner\history.sqlite"
+    )
+    with pytest.raises(ValueError):
+        _remove_windows_extended_prefix(r"\\?\Volume{fixture}\history.sqlite")
 
 
 def _document(**changes: object) -> dict:

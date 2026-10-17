@@ -103,10 +103,13 @@ inferred from the caller's current directory.
 Absolute database and request paths keep their caller-supplied meaning. Relative database and
 request paths are resolved from the CLI process's current working directory. The smoke test covers
 absolute and relative paths with spaces and Unicode, and local symlink paths where the host permits
-creating symlinks. Windows CI checks local extended-length paths when its Python and OS support
-them. A network UNC share is not available in hosted CI, so UNC traversal is not claimed as a tested
-configuration. Linux/macOS process cleanup uses a process group; Windows cleanup retains the P028
-Job Object.
+creating symlinks. Windows `\\?\` drive paths are normalized for SQLite's `file:` URI after path
+resolution; the filesystem path remains the same. Windows CI checks the extended namespace and
+attempts a path longer than `MAX_PATH` when the runner supports creating one. A network UNC share is
+not available in hosted CI, so UNC traversal is not claimed as a tested configuration. The URI
+conversion handles the standard `\\?\UNC\server\share` form, but a live UNC share remains
+untested. Linux/macOS process cleanup uses a process group; Windows cleanup retains the P028 Job
+Object.
 
 ## Environment and process isolation
 
@@ -159,6 +162,7 @@ tracebacks, credentials, prompts, responses, or raw telemetry.
 - A venv is tied to its original Python installation and is not guaranteed to be relocatable.
 - Installed mode does not authenticate wheel contents cryptographically.
 - UNC shares and Windows long paths beyond the hosted runner's enabled settings are not verified.
+- Windows volume-GUID device namespace paths are not supported; use a drive-letter or UNC path.
 - No official installer, published package, or release artifact is produced.
 - No provider quota acquisition, automatic position inference, daemon, or live benchmark is enabled.
 

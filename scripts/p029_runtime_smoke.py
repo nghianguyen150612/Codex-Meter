@@ -615,6 +615,51 @@ def main() -> None:
                     f"{extended.stderr.decode('utf-8', errors='replace')}"
                 )
 
+            long_directory = Path("\\\\?\\" + str(base.resolve()))
+            for index in range(6):
+                long_directory /= f"segment-{index}-{'x' * 35}"
+            try:
+                long_directory.mkdir(parents=True)
+            except OSError:
+                print(
+                    "Windows long-path smoke skipped: runner did not create an extended path"
+                )
+            else:
+                long_database = long_directory / "synthetic history.sqlite"
+                long_request = long_directory / "analytics request.json"
+                try:
+                    create_synthetic_database(long_database)
+                    write_request(long_request, "p029-windows-long-path")
+                except (OSError, sqlite3.Error):
+                    print(
+                        "Windows long-path smoke skipped: runner SQLite rejected the extended path"
+                    )
+                else:
+                    long_result = invoke(
+                        cli_command(
+                            relocated_binary,
+                            python,
+                            long_database,
+                            long_request,
+                        ),
+                        cwd=caller_directory,
+                        env=shadow_environment,
+                    )
+                    if long_result.returncode:
+                        raise AssertionError(
+                            "Windows extended-length paths must work when the host creates "
+                            "them; "
+                            f"exit={long_result.returncode}, stderr="
+                            f"{long_result.stderr.decode('utf-8', errors='replace')}"
+                        )
+                    if (
+                        json.loads(long_result.stdout)["request_id"]
+                        != "p029-windows-long-path"
+                    ):
+                        raise AssertionError(
+                            "Windows long-path request identity must be preserved"
+                        )
+
     print(
         "P029 runtime smoke passed: reproducible wheel, isolated installation, relocation, "
         "source mode, independent cwd, paths, determinism, concurrency, and read-only SQLite"

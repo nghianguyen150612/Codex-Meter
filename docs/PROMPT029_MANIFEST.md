@@ -56,7 +56,7 @@
   1,173-byte digest does not match this fixture at the starting SHA; this check uses the verified
   starting-commit output.
 - Contract/schema versions and SQLite migrations are unchanged.
-- Local quality gate: Ruff lint and format checks passed; pytest passed (622 tests); Rust fmt and
+- Local quality gate: Ruff lint and format checks passed; pytest passed (623 tests); Rust fmt and
   Clippy passed; Rust unit tests passed (296) and CLI integration tests passed (4); Cargo workspace
   build passed; contract validation passed (6 schemas, 16 positive fixtures, 5 negative fixtures).
 - Local installed-runtime smoke passed with `python scripts/p029_runtime_smoke.py`; it built two
@@ -75,6 +75,9 @@
   Rust result validation, and manual-meter arithmetic remain enforced.
 - Rust preflight validates the request before worker launch, checks the selected interpreter path,
   and opens the existing database read-only without creating it.
+- Windows extended drive and UNC prefixes are normalized only for SQLite file-URI construction;
+  path containment and read-only access remain enforced. Live UNC shares are unavailable in the
+  hosted test environment.
 - Provider API calls, automatic quota acquisition, benchmark execution, and release publication
   remain disabled.
 

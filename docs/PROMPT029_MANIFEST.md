@@ -5,10 +5,22 @@
 - Starting `origin/main` SHA: `422b40e5316e91f1a53f8f51cdd0f9798095279a`.
 - Feature branch: `feat/p029-cross-platform-runtime-compatibility`.
 - Starting worktree: clean; branch created from the required starting SHA.
-- Git workflow: fetched `origin/main`; implementation remains on the feature branch. Commit, push,
-  PR, CI, review, merge, and final synchronization details will be recorded after those steps.
-- Feature commit SHAs, PR, merge SHA/parents, and final main SHA: not yet available; none are
-  prefilled.
+- Required implementation commit: `532661cad985a16fa04f889702ed07a17b0b4d2a`, message
+  `feat: improve installed analytics runtime compatibility`.
+- Follow-up commits before this manifest update:
+  `52ada600351ce7cdc460aeac0cba22ac9d7c8eca` (runtime matrix setup),
+  `8273d31011b8323f63d2e5497a645d646c6f1d64` (Windows-path diagnostic),
+  `a6cbc8344f33cb46a76b9057b96486afce9a6599` (Windows SQLite paths), and
+  `5efe8aa5e990a990324eaf2ea343c7cadb319087` (bounded cleanup test timing).
+- The feature branch was pushed; the pre-manifest head listed above passed CI run
+  `39013527538` (#105).
+- PR #22: `Improve cross-platform analytics runtime compatibility`, targeting `main`:
+  https://github.com/nghianguyen150612/Codex-Meter/pull/22 . The PR was open at this manifest
+  update.
+- Complete diff review found no outstanding findings. GitHub review submissions and inline review
+  threads were empty at verification time.
+- Merge commit, parents, feature-commit reachability, final `main` SHA, local/origin equality, and
+  clean-worktree verification will be recorded in the completion report after merge.
 
 ## Package build design
 
@@ -101,5 +113,8 @@
 ## PR and merge verification
 
 - Required PR title: `Improve cross-platform analytics runtime compatibility`.
-- PR URL, review findings, final-head CI results, merge method, merge parents, feature commit
-  reachability, local/origin main equality, and clean worktree: to be recorded after verification.
+- PR URL: https://github.com/nghianguyen150612/Codex-Meter/pull/22 .
+- CI run `39013527538` (#105), on feature commit `5efe8aa5e990a990324eaf2ea343c7cadb319087`, passed
+  all 15 jobs: the six original OS/quality jobs and the nine installed-runtime OS/Python cells.
+- Merge method and post-merge synchronization are pending; the completion report will record the
+  merge SHA, both parents, preserved commits, final main SHA, `main == origin/main`, and clean tree.

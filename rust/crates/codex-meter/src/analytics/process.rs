@@ -788,6 +788,32 @@ def fail_resolution():
     sys.stderr.write("worker_resolution_failed: trusted analytics worker could not be resolved\n")
     raise SystemExit(2)
 
+def path_identity(path):
+    value = os.path.normcase(os.path.normpath(str(path)))
+    if os.name == "nt":
+        if value.startswith("\\\\?\\unc\\"):
+            return "\\\\" + value[8:]
+        if value.startswith("\\\\?\\"):
+            return value[4:]
+    return value
+
+def path_for_import(path):
+    value = str(path)
+    if os.name == "nt":
+        if value.startswith("\\\\?\\UNC\\"):
+            return "\\\\" + value[8:]
+        if value.startswith("\\\\?\\"):
+            return value[4:]
+    return value
+
+def is_below(path, root):
+    try:
+        path_value = path_identity(path)
+        root_value = path_identity(root)
+        return os.path.commonpath((path_value, root_value)) == root_value
+    except ValueError:
+        return False
+
 def trusted_files(root):
     expected = (
         root / "codex_meter" / "__init__.py",
@@ -800,7 +826,7 @@ def trusted_files(root):
     except (OSError, RuntimeError):
         return None
     if not resolved_root.is_dir() or any(
-        not path.is_file() or not path.is_relative_to(resolved_root) for path in resolved
+        not path.is_file() or not is_below(path, resolved_root) for path in resolved
     ):
         return None
     return resolved_root
@@ -862,6 +888,20 @@ try:
                 standard_roots.append(Path(value).resolve())
             except (OSError, RuntimeError):
                 pass
+    windows_standard_paths = set()
+    if os.name == "nt":
+        # Windows keeps extension modules and the standard-library zip beside Lib.
+        try:
+            interpreter_root = Path(sys.base_prefix).resolve()
+            windows_standard_paths = {
+                path_identity(interpreter_root / "DLLs"),
+                path_identity(
+                    interpreter_root
+                    / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+                ),
+            }
+        except (OSError, RuntimeError):
+            pass
     safe_standard_path = []
     for entry in sys.path:
         if not entry:
@@ -870,9 +910,11 @@ try:
             resolved_entry = Path(entry).resolve()
         except (OSError, RuntimeError):
             continue
-        if any(resolved_entry == root or root in resolved_entry.parents for root in standard_roots):
-            safe_standard_path.append(str(resolved_entry))
-    sys.path[:] = [str(worker_root), *safe_standard_path]
+        if any(is_below(resolved_entry, root) for root in standard_roots) or (
+            os.name == "nt" and path_identity(resolved_entry) in windows_standard_paths
+        ):
+            safe_standard_path.append(path_for_import(resolved_entry))
+    sys.path[:] = [path_for_import(worker_root), *safe_standard_path]
     sys.argv[:] = ["codex_meter.integration.worker", *arguments]
     runpy.run_module("codex_meter.integration.worker", run_name="__main__", alter_sys=True)
 except SystemExit:
@@ -1163,7 +1205,7 @@ mod tests {
             .arg("import sys; sys.stdin.read(); import os; print(os.environ.get('SYNTHETIC_SECRET_MARKER', 'absent'))")
             .env("SYNTHETIC_SECRET_MARKER", "SYNTHETIC_SECRET_MARKER");
         let output = run_command(command, b"{}", ProcessLimits::default()).unwrap();
-        assert_eq!(output.stdout, b"absent\n");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "absent");
     }
 
     #[test]

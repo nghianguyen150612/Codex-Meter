@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
 [project]
 name = "codex-meter-analytics"
 version = "0.0.0"
@@ -20,6 +24,22 @@ testpaths = ["tests"]
 
 [tool.uv]
 package = false
+
+[tool.hatch.build.targets.wheel]
+packages = ["codex_meter"]
+exclude = [
+  "**/__pycache__/**",
+  "**/*.py[cod]",
+  "**/*.sqlite",
+  "**/*.sqlite-*",
+  "**/*.db",
+  "**/*.db-*",
+  "**/*.jsonl",
+  "**/.env",
+  "**/.env.*",
+  "**/credentials*",
+  "**/secrets*",
+]
 
 [tool.ruff]
 line-length = 100

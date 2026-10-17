@@ -56,3 +56,20 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --project python --frozen
       - run: uv run --project python --frozen python scripts/validate_contracts.py
+
+  installed-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path rust/Cargo.toml --workspace
+      - run: python scripts/p029_runtime_smoke.py

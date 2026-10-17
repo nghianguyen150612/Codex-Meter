@@ -21,6 +21,23 @@ const EXIT_PIPE_GRACE: Duration = Duration::from_millis(50);
 const CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const SUCCESS_MARKER: &[u8] = b"codex_meter_worker_v1 input_complete\n";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonWorkerMode {
+    Auto,
+    Source,
+    Installed,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WorkerInvocation<'a> {
+    pub python: &'a OsStr,
+    pub worker_mode: PythonWorkerMode,
+    pub database_path: &'a Path,
+    pub generated_at: &'a str,
+    pub five_hour_used_percent: Option<f64>,
+    pub weekly_used_percent: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessLimits {
     pub maximum_output_bytes: usize,
@@ -67,6 +84,25 @@ pub fn invoke_worker(
     request: &[u8],
     limits: ProcessLimits,
 ) -> Result<Vec<u8>, ProcessError> {
+    invoke_worker_with_mode(
+        WorkerInvocation {
+            python,
+            worker_mode: PythonWorkerMode::Auto,
+            database_path,
+            generated_at,
+            five_hour_used_percent,
+            weekly_used_percent,
+        },
+        request,
+        limits,
+    )
+}
+
+pub fn invoke_worker_with_mode(
+    invocation: WorkerInvocation<'_>,
+    request: &[u8],
+    limits: ProcessLimits,
+) -> Result<Vec<u8>, ProcessError> {
     validate_limits(limits)?;
     if request.len() > MAXIMUM_REQUEST_BYTES {
         return Err(ProcessError {
@@ -75,30 +111,31 @@ pub fn invoke_worker(
         });
     }
 
-    let mut command = Command::new(python);
-    let source_root = source_tree_root()?;
+    let mut command = Command::new(invocation.python);
     command.arg("-I").arg("-S").arg("-c").arg(WORKER_BOOTSTRAP);
-    match source_root {
-        Some(root) => {
-            command.arg("source").arg(root);
-        }
-        None => {
-            command.arg("installed");
-        }
+    let source_root = match invocation.worker_mode {
+        PythonWorkerMode::Auto => source_tree_root()?,
+        PythonWorkerMode::Source => Some(source_tree_root()?.ok_or_else(worker_resolution_error)?),
+        PythonWorkerMode::Installed => None,
+    };
+    if let Some(root) = source_root {
+        command.arg("source").arg(root);
+    } else {
+        command.arg("installed");
     }
     command
         .arg("--database")
-        .arg(database_path)
+        .arg(invocation.database_path)
         .arg("--runtime-context-version")
         .arg(ANALYTICS_PROCESS_PROTOCOL_VERSION)
         .arg("--generated-at")
-        .arg(generated_at);
-    if let Some(value) = five_hour_used_percent {
+        .arg(invocation.generated_at);
+    if let Some(value) = invocation.five_hour_used_percent {
         command
             .arg("--five-hour-used-percent")
             .arg(value.to_string());
     }
-    if let Some(value) = weekly_used_percent {
+    if let Some(value) = invocation.weekly_used_percent {
         command.arg("--weekly-used-percent").arg(value.to_string());
     }
     let output = run_command(command, request, limits)?;
@@ -587,7 +624,7 @@ fn worker_exit_error(stderr: &[u8]) -> ProcessError {
         ),
         "worker_resolution_failed" => (
             "python_worker_resolution_failed",
-            "trusted Python analytics worker could not be resolved; install it in the selected Python environment or use a source checkout",
+            "trusted Python analytics worker could not be resolved; select installed mode with a local wheel or source mode from its checkout",
         ),
         "database_missing" => ("database_missing", "analytics database does not exist"),
         "database_schema_incompatible" => (
@@ -626,7 +663,7 @@ fn worker_exit_error(stderr: &[u8]) -> ProcessError {
 fn worker_resolution_error() -> ProcessError {
     ProcessError {
         code: "python_worker_resolution_failed",
-        message: "trusted Python analytics worker could not be resolved; install it in the selected Python environment or use a source checkout",
+        message: "trusted Python analytics worker could not be resolved; select installed mode with a local wheel or source mode from its checkout",
     }
 }
 
@@ -782,6 +819,8 @@ import runpy
 import site
 import sys
 import sysconfig
+import re
+from importlib.metadata import distributions
 from pathlib import Path
 
 def fail_resolution():
@@ -833,23 +872,38 @@ def trusted_files(root):
 
 def installed_roots():
     roots = set()
-    try:
-        paths = sysconfig.get_paths()
-        roots.update(paths.get(name) for name in ("purelib", "platlib"))
-    except Exception:
-        pass
-    try:
-        roots.update(site.getsitepackages())
-    except Exception:
-        pass
+    include_system_paths = True
     executable = Path(sys.executable)
+    # Do not resolve the executable symlink: venv/bin/python and
+    # venv/Scripts/python.exe identify the selected environment even when they
+    # point at a base interpreter elsewhere.
     environment = executable.parent.parent
-    if (environment / "pyvenv.cfg").is_file():
+    config = environment / "pyvenv.cfg"
+    if config.is_file():
         if os.name == "nt":
             roots.add(str(environment / "Lib" / "site-packages"))
         else:
             version = f"python{sys.version_info.major}.{sys.version_info.minor}"
             roots.add(str(environment / "lib" / version / "site-packages"))
+        try:
+            includes_system = any(
+                line.partition("=")[0].strip().lower() == "include-system-site-packages"
+                and line.partition("=")[2].strip().lower() == "true"
+                for line in config.read_text(encoding="utf-8").splitlines()
+            )
+        except (OSError, UnicodeError):
+            fail_resolution()
+        include_system_paths = includes_system
+    if include_system_paths:
+        try:
+            configured = sysconfig.get_paths()
+            roots.update(configured.get(name) for name in ("purelib", "platlib"))
+        except Exception:
+            pass
+        try:
+            roots.update(site.getsitepackages())
+        except Exception:
+            pass
     resolved = set()
     for value in roots:
         if not value:
@@ -862,6 +916,59 @@ def installed_roots():
             resolved.add(path)
     return resolved
 
+def distribution_roots():
+    if sys.version_info < (3, 11):
+        fail_resolution()
+    candidates = []
+    for root in sorted(installed_roots(), key=lambda path: path_identity(path)):
+        package_directory = root / "codex_meter"
+        matching = []
+        try:
+            for distribution in distributions(path=[str(root)]):
+                name = distribution.metadata.get("Name", "")
+                if re.sub(r"[-_.]+", "-", name).lower() == "codex-meter-analytics":
+                    matching.append(distribution)
+        except Exception:
+            fail_resolution()
+        if not package_directory.exists() and not matching:
+            continue
+        if len(matching) != 1:
+            fail_resolution()
+        distribution = matching[0]
+        metadata = distribution.metadata
+        if metadata.get("Requires-Python") != ">=3.11":
+            fail_resolution()
+        files = distribution.files
+        if files is None:
+            fail_resolution()
+        file_names = {item.as_posix() for item in files}
+        required = {
+            "codex_meter/__init__.py",
+            "codex_meter/integration/__init__.py",
+            "codex_meter/integration/worker.py",
+            "codex_meter/history/__init__.py",
+            "codex_meter/history/models.py",
+            "codex_meter/history/sqlite.py",
+            "codex_meter/estimation/__init__.py",
+            "codex_meter/estimation/candidates.py",
+            "codex_meter/estimation/result.py",
+            "codex_meter/estimation/robust.py",
+        }
+        if not required.issubset(file_names):
+            fail_resolution()
+        for name in required:
+            try:
+                installed_file = Path(distribution.locate_file(name)).resolve(strict=True)
+            except (OSError, RuntimeError):
+                fail_resolution()
+            if not installed_file.is_file() or not is_below(installed_file, root):
+                fail_resolution()
+        candidate = trusted_files(root)
+        if candidate is None:
+            fail_resolution()
+        candidates.append(candidate)
+    return sorted(set(candidates), key=lambda path: path_identity(path))
+
 try:
     arguments = sys.argv[1:]
     strategy = arguments.pop(0)
@@ -869,11 +976,7 @@ try:
         root = trusted_files(Path(arguments.pop(0)))
         candidates = [] if root is None else [root]
     elif strategy == "installed" and not (arguments and arguments[0] == "--"):
-        candidates = [
-            root for root in installed_roots()
-            if trusted_files(root) is not None
-        ]
-        candidates = sorted(set(candidates))
+        candidates = distribution_roots()
     else:
         fail_resolution()
     if len(candidates) != 1:
@@ -1160,6 +1263,32 @@ mod tests {
         let source_package =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../python/codex_meter");
         copy_directory(&source_package, &package_root.join("codex_meter")).unwrap();
+        let metadata = package_root.join("codex_meter_analytics-0.0.0.dist-info");
+        fs::create_dir_all(&metadata).unwrap();
+        fs::write(
+            metadata.join("METADATA"),
+            "Metadata-Version: 2.3\nName: codex-meter-analytics\nVersion: 0.0.0\nRequires-Python: >=3.11\n",
+        )
+        .unwrap();
+        let required_files = [
+            "codex_meter/__init__.py",
+            "codex_meter/integration/__init__.py",
+            "codex_meter/integration/worker.py",
+            "codex_meter/history/__init__.py",
+            "codex_meter/history/models.py",
+            "codex_meter/history/sqlite.py",
+            "codex_meter/estimation/__init__.py",
+            "codex_meter/estimation/candidates.py",
+            "codex_meter/estimation/result.py",
+            "codex_meter/estimation/robust.py",
+        ];
+        let mut record = required_files
+            .iter()
+            .map(|path| format!("{path},,\n"))
+            .collect::<String>();
+        record.push_str("codex_meter_analytics-0.0.0.dist-info/METADATA,,\n");
+        record.push_str("codex_meter_analytics-0.0.0.dist-info/RECORD,,\n");
+        fs::write(metadata.join("RECORD"), record).unwrap();
         assert!(python.to_string_lossy().contains(' '));
 
         let mut command = Command::new(&python);
@@ -1247,7 +1376,7 @@ mod tests {
         let error = run_python_script(
             "import time; time.sleep(5)",
             ProcessLimits {
-                timeout: Duration::from_millis(100),
+                timeout: Duration::from_secs(1),
                 ..ProcessLimits::default()
             },
         )

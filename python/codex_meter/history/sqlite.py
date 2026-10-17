@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -26,6 +27,18 @@ from .models import (
 SUPPORTED_MIGRATION_VERSION = 4
 DEFAULT_BUSY_TIMEOUT_SECONDS = 5.0
 MAXIMUM_OBSERVATIONS_SAFETY_LIMIT = 100_000
+
+
+def _remove_windows_extended_prefix(path: str) -> str:
+    """Return the regular Windows spelling needed to build a file URI."""
+    if path.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + path[8:]
+    if path.startswith("\\\\?\\") and len(path) >= 7 and path[5:7] == ":\\":
+        return path[4:]
+    if path.startswith("\\\\?\\"):
+        raise ValueError("unsupported Windows extended path")
+    return path
+
 
 MIGRATIONS = (
     (
@@ -175,7 +188,10 @@ class ObservationDatabase:
         if not math.isfinite(busy_timeout_seconds) or busy_timeout_seconds <= 0:
             raise QueryValidationError("busy timeout must be finite and positive")
         try:
-            uri = f"{database_path.resolve().as_uri()}?mode=ro"
+            uri_path = database_path.resolve()
+            if os.name == "nt":
+                uri_path = Path(_remove_windows_extended_prefix(str(uri_path)))
+            uri = f"{uri_path.as_uri()}?mode=ro"
             connection = sqlite3.connect(
                 uri,
                 uri=True,
@@ -183,7 +199,7 @@ class ObservationDatabase:
                 isolation_level=None,
             )
             connection.row_factory = sqlite3.Row
-        except (OSError, sqlite3.Error) as exc:
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
             raise DatabaseOpenError("could not open analytics database read-only") from exc
 
         try:

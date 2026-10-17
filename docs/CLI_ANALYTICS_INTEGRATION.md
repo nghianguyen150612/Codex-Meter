@@ -8,13 +8,21 @@ P027 connects the native `codex-meter` executable to the existing Python current
 - Python 3.11 or later.
 - `uv` for the repository's locked development environment.
 
-From the repository root, create the locked Python environment with `uv sync --project python --frozen`. The worker has no Python runtime dependencies. During source-tree development, Rust resolves the package from the source root relative to its compiled crate manifest. To select the interpreter from that environment explicitly, obtain its path with:
+From the repository root, create the locked Python environment with `uv sync --project python --frozen`. The worker has no Python runtime dependencies. The default `auto` mode preserves the P028 behavior: it uses the verified `python/` source tree relative to its compiled crate manifest when that tree exists, and otherwise resolves one installed distribution in the selected interpreter. To make the source choice explicit for a contributor, use `--worker-mode source`. To select the interpreter from the development environment, obtain its path with:
 
 ```bash
 uv run --project python --frozen python -c "import sys; print(sys.executable)"
 ```
 
-Pass that path with `--python`. The default executable name is `python`. Rust never uses the working directory or `PYTHONPATH` to identify the worker. When the compiled source root is absent, the selected interpreter must have exactly one worker package in its standard or virtual-environment site-packages locations. The source tree is not bundled into the Rust binary.
+Pass that path with `--python`. Rust never uses the working directory or inherited `PYTHONPATH` to identify the worker.
+
+For a separately installed analytics package, build and install a local wheel as described in [cross-platform runtime compatibility](CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md), then select both the interpreter and installed mode:
+
+```text
+codex-meter estimate --python <installed-interpreter> --worker-mode installed ...
+```
+
+Installed mode searches only the selected interpreter's standard or virtual-environment package roots. It requires exactly one compatible `codex-meter-analytics` distribution and fails closed on missing or ambiguous metadata. It ignores the compiled development path. Source mode ignores installed distributions and fails closed if the source tree is absent. Auto mode uses a validated compiled source tree when present; if it is absent, it resolves the selected interpreter's installed distribution with the same ambiguity checks. All three strategies share the same isolated `-I -S` bootstrap and P028 process supervision.
 
 ## Command
 
@@ -33,6 +41,7 @@ Optional arguments:
 - `--five-hour-used-percent N`: manually supplied current five-hour used percentage points, from 0 through 100.
 - `--weekly-used-percent N`: manually supplied current weekly used percentage points, from 0 through 100.
 - `--python PATH`: trusted Python interpreter executable. Each process argument is passed directly; no shell is involved, and there is no fallback if this executable fails.
+- `--worker-mode auto|source|installed`: exact worker strategy. Defaults to backward-compatible `auto`; installed deployments should select `installed` explicitly so a present source checkout cannot take precedence.
 - `--json`: print only the validated AnalyticsResult v1 JSON document.
 
 The `--help` options show CLI and estimate usage. `--version` prints the executable version. Unknown commands, unknown arguments, repeated flags, and invalid values fail with a categorized diagnostic.

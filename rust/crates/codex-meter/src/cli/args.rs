@@ -1,5 +1,6 @@
 //! Small native parser with duplicate-flag rejection and no shell processing.
 
+use crate::analytics::PythonWorkerMode;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ pub struct EstimateArguments {
     pub five_hour_used_percent: Option<f64>,
     pub weekly_used_percent: Option<f64>,
     pub python: OsString,
+    pub worker_mode: PythonWorkerMode,
     pub json: bool,
 }
 
@@ -69,6 +71,7 @@ where
     let mut five_hour_used_percent = None;
     let mut weekly_used_percent = None;
     let mut python = OsString::from("python");
+    let mut worker_mode = PythonWorkerMode::Auto;
     let mut json = false;
     let mut index = 1;
     while index < arguments.len() {
@@ -90,6 +93,7 @@ where
             "--five-hour-used-percent" => 3,
             "--weekly-used-percent" => 4,
             "--python" => 5,
+            "--worker-mode" => 6,
             _ => return Err(error("unknown_argument", "unknown estimate argument")),
         };
         if !seen.insert(flag.to_owned()) {
@@ -113,6 +117,19 @@ where
             3 => five_hour_used_percent = Some(parse_percentage(&value, flag)?),
             4 => weekly_used_percent = Some(parse_percentage(&value, flag)?),
             5 => python = value,
+            6 => {
+                worker_mode = match utf8_value(&value, "worker-mode")?.as_str() {
+                    "auto" => PythonWorkerMode::Auto,
+                    "source" => PythonWorkerMode::Source,
+                    "installed" => PythonWorkerMode::Installed,
+                    _ => {
+                        return Err(error(
+                            "invalid_argument",
+                            "--worker-mode must be auto, source, or installed",
+                        ));
+                    }
+                }
+            }
             _ => unreachable!(),
         }
         index += 1;
@@ -128,6 +145,7 @@ where
         five_hour_used_percent,
         weekly_used_percent,
         python,
+        worker_mode,
         json,
     }))
 }
@@ -159,7 +177,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — empirical current-capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter estimate --help\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nOPTIONS:\n    --database PATH                 Existing Codex Meter SQLite database\n    --request FILE                  AnalyticsRequest v1 JSON file\n    --generated-at UTC_TIMESTAMP    Explicit UTC timestamp ending in Z\n    --five-hour-used-percent N      Manually supplied five-hour used percentage points\n    --weekly-used-percent N         Manually supplied weekly used percentage points\n    --python PATH                   Python interpreter executable (default: python)\n    --json                          Emit only validated AnalyticsResult v1 JSON\n    --help                          Show this help\n\nCurrent meter percentages are manual and unverified. No provider API is called.\n"
+    "Codex Meter — empirical current-capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter estimate --help\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nOPTIONS:\n    --database PATH                 Existing Codex Meter SQLite database\n    --request FILE                  AnalyticsRequest v1 JSON file\n    --generated-at UTC_TIMESTAMP    Explicit UTC timestamp ending in Z\n    --five-hour-used-percent N      Manually supplied five-hour used percentage points\n    --weekly-used-percent N         Manually supplied weekly used percentage points\n    --python PATH                   Python interpreter executable (default: python)\n    --worker-mode MODE              auto (default), source, or installed\n    --json                          Emit only validated AnalyticsResult v1 JSON\n    --help                          Show this help\n\nCurrent meter percentages are manual and unverified. No provider API is called.\n"
 }
 
 fn error(code: &'static str, message: &str) -> CliError {
@@ -259,6 +277,37 @@ mod tests {
         };
         assert_eq!(args.database, PathBuf::from("a db.sqlite"));
         assert_eq!(args.five_hour_used_percent, Some(24.25));
+        assert_eq!(args.worker_mode, PythonWorkerMode::Auto);
         assert!(args.json);
+    }
+
+    #[test]
+    fn worker_mode_selects_a_deterministic_strategy() {
+        let prefix = [
+            "estimate",
+            "--database",
+            "db",
+            "--request",
+            "req",
+            "--generated-at",
+            "2026-10-16T00:00:00Z",
+        ];
+        let mut installed = prefix.to_vec();
+        installed.extend(["--worker-mode", "installed"]);
+        let CliAction::Estimate(arguments) = parse(&installed).unwrap() else {
+            panic!("expected estimate")
+        };
+        assert_eq!(arguments.worker_mode, PythonWorkerMode::Installed);
+
+        let mut automatic = prefix.to_vec();
+        automatic.extend(["--worker-mode", "auto"]);
+        let CliAction::Estimate(arguments) = parse(&automatic).unwrap() else {
+            panic!("expected estimate")
+        };
+        assert_eq!(arguments.worker_mode, PythonWorkerMode::Auto);
+
+        let mut invalid = prefix.to_vec();
+        invalid.extend(["--worker-mode", "unexpected"]);
+        assert_eq!(parse(&invalid).unwrap_err().code, "invalid_argument");
     }
 }

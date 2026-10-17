@@ -65,7 +65,9 @@ error. An unknown or missing fixture fails validation rather than being silently
 
 ## Current scope
 
-This is bootstrap infrastructure only. The identity-only Rust executable and Python package do not
-track usage or produce estimates. Telemetry discovery and runtime implementation begin in later
-roadmap prompts; no parser, quota acquisition, database, reconciliation, estimator, benchmark, or
-user interface is present yet.
+The Rust executable exposes `codex-meter estimate` for empirical current-capacity estimates. It
+validates AnalyticsRequest v1, invokes the locked Python analytics package through a bounded local
+subprocess, reads the existing SQLite dataset strictly read-only, and validates AnalyticsResult v1
+before rendering output. See [CLI analytics integration](CLI_ANALYTICS_INTEGRATION.md) for setup,
+examples, supported options, and current limitations. Automatic quota acquisition and other
+analysis types are not exposed by this command.

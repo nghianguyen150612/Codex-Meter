@@ -8,7 +8,7 @@ This document defines the implementation boundaries for Codex Meter v1. It appli
 raw tokens != weighted/effective usage != plan quota
 ```
 
-Codex Meter remains independent and unofficial, local-first, privacy-first, Plus-first, CLI-first, empirical rather than speculative, and confidence-aware. It does not claim an undocumented fixed OpenAI token allowance. Concrete domain and interchange schemas are deferred to P003; repository bootstrap is deferred to P004.
+Codex Meter remains independent and unofficial, local-first, privacy-first, Plus-first, CLI-first, empirical rather than speculative, and confidence-aware. It does not claim an undocumented fixed OpenAI token allowance. The initial P003 contract and P004 repository bootstrap milestones are complete; versioned contracts and Rust/Python implementations are maintained in the repository.
 
 ## System architecture
 
@@ -48,7 +48,7 @@ Codex Meter remains independent and unofficial, local-first, privacy-first, Plus
                                  ▼
                  Rust validation/application services
                                  ▼
-                     CLI estimates and comparisons
+                    CLI capacity estimates
 ```
 
 No exact telemetry location, file format, field, quota endpoint, or meter behavior is asserted here. Those mechanisms are unvalidated discovery inputs hidden behind adapters.
@@ -67,7 +67,7 @@ Platform adapters similarly isolate filesystem locations, watcher behavior, opti
 
 ### Parser and ingestion
 
-Ingestion incrementally parses source records, maintains conceptual cursors/checkpoints, avoids duplicates, tolerates incomplete trailing records, classifies malformed records, and emits normalized token/session events. It must not persist prohibited source payload content. Parser implementation and cursor schemas are deferred.
+Ingestion incrementally parses source records, maintains cursors/checkpoints, avoids duplicates, tolerates incomplete trailing records, classifies malformed records, and emits normalized token/session events. It must not persist prohibited source payload content. The Rust telemetry modules implement the parser and cursor boundaries.
 
 ### Observation pipeline
 
@@ -75,7 +75,7 @@ The provider-independent pipeline turns runtime evidence into candidate and fina
 
 ### Storage
 
-SQLite is the durable local store. Future persistence covers session/task metadata, counters/deltas, quota samples, observations, per-domain quality, resets, estimator snapshots, benchmark metadata, and migration/version metadata. Rust creates the database, owns migrations and primary writes, and performs transactional runtime updates. No SQL schema is specified here.
+SQLite is the durable local store for runtime checkpoints, observations, and migration/version metadata. Rust creates the database, owns migrations and primary writes, and performs transactional runtime updates. Analytics reads existing observations through P017's strict read-only Python reader. No SQL schema is specified here.
 
 ### Analytics
 
@@ -185,7 +185,7 @@ One active Rust tracker/agent owns runtime writes. Read-only CLI queries may coe
 
 ### Idempotent ingestion
 
-Filesystem notifications are hints, not unique events. Future ingestion/storage operations should be idempotent wherever practical and preserve stable source, cursor/checkpoint, and event identity sufficient to avoid double-counting after restarts, replayed records, duplicate notifications, partial writes, re-reading, and reorderings where supportable. Checkpoints advance atomically with accepted evidence; incomplete records are not treated as complete. Concrete cursor design is deferred to P003 and implementation prompts.
+Filesystem notifications are hints, not unique events. Ingestion/storage operations should be idempotent wherever practical and preserve stable source, cursor/checkpoint, and event identity sufficient to avoid double-counting after restarts, replayed records, duplicate notifications, partial writes, re-reading, and reorderings where supportable. Checkpoints advance atomically with accepted evidence; incomplete records are not treated as complete. Rust telemetry and SQLite modules implement the current cursor and checkpoint design.
 
 ### Recovery
 
@@ -214,7 +214,7 @@ After restart, the runtime should recover persisted state, distinguish finalized
 
 ## Benchmark boundary
 
-Rust starts controlled runs, captures configuration/environment metadata, measures duration, collects telemetry, reconciles quota, and persists observations. Python compares distributions, effect sizes, calibration impact, and historical results. Benchmarking exists to improve measurement and estimation quality; it is not a general model leaderboard. Execution and analytics are deferred.
+Rust owns controlled-run boundaries, configuration/environment metadata, telemetry collection, quota reconciliation, and Observation persistence. Python provides internal historical, workload, benchmark, capacity, and regime analyses. The `codex-meter estimate` CLI currently exposes only empirical current-capacity analysis; production benchmark execution and the other analytics CLI modes remain deferred. Benchmarking exists to improve measurement and estimation quality; it is not a general model leaderboard.
 
 ## Privacy and diagnostics boundary
 

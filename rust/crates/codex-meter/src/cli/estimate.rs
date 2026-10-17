@@ -44,10 +44,7 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
             "analytics database does not exist",
         ));
     }
-    let database = arguments
-        .database
-        .canonicalize()
-        .map_err(|_| cli_error("database_missing", "analytics database does not exist"))?;
+    let database = absolute_database_path(&arguments.database)?;
     let output = invoke_worker(
         &arguments.python,
         &database,
@@ -95,6 +92,15 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
 
 fn trim_one_newline(value: &str) -> &str {
     value.strip_suffix('\n').unwrap_or(value)
+}
+
+fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|directory| directory.join(path))
+        .map_err(|_| cli_error("database_missing", "analytics database does not exist"))
 }
 
 fn read_bounded_request(path: &Path) -> Result<Vec<u8>, CliError> {
@@ -155,6 +161,20 @@ mod tests {
         assert_eq!(
             run(invalid).unwrap_err().code,
             "invalid_manual_meter_percentage"
+        );
+    }
+
+    #[test]
+    fn database_path_is_made_absolute_without_canonicalization() {
+        let relative = Path::new("data/observations.sqlite");
+        let absolute = absolute_database_path(relative).unwrap();
+        assert!(absolute.is_absolute());
+        assert!(absolute.ends_with(relative));
+
+        let already_absolute = std::env::temp_dir().join("observations.sqlite");
+        assert_eq!(
+            absolute_database_path(&already_absolute).unwrap(),
+            already_absolute
         );
     }
 }

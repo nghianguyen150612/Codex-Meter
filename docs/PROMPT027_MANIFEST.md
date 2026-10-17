@@ -29,7 +29,7 @@
 
 ## Validation, privacy, and limits
 
-- Local quality gate passed: Ruff check/format, 615 Python tests, Rust format/Clippy, 273 Rust unit tests plus 3 real subprocess integration tests, Rust build, 6-schema/16-positive/5-negative contract validation, and `git diff --check`.
+- Local quality gate passed: Ruff check/format, 615 Python tests, Rust format/Clippy, 274 Rust unit tests plus 3 real subprocess integration tests, Rust build, 6-schema/16-positive/5-negative contract validation, and `git diff --check`.
 - The real CLI integration tests use a synthetic database created through Rust `SqliteStore`, compare database bytes before/after analytics, verify zero-evidence output, and verify configuration filtering without pooling.
 - The six GitHub Actions results, including Ubuntu/macOS/Windows subprocess execution, are checked against the latest PR head before merge.
 - Database is never opened for analytics through Rust `SqliteStore`; tests compare the synthetic database before and after worker execution.

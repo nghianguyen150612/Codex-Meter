@@ -1,6 +1,8 @@
 //! Shared bootstrap identity and source-format models for Codex Meter.
 
+pub mod analytics;
 pub mod benchmark;
+pub mod cli;
 pub mod storage;
 pub mod telemetry;
 

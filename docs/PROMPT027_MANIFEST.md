@@ -7,7 +7,9 @@
 - Required implementation commit subject: `feat: integrate CLI capacity analytics`.
 - Required PR title: `Integrate CLI with Python capacity analytics`.
 - PR targets `main`; the implementation was kept off `main` and follows `docs/DEVELOPMENT.md`.
-- PR URL, check results, merge commit SHA and parents, feature-commit reachability, final `main` SHA, and final clean-tree verification are reported after remote CI and merge verification. No future identifiers are prefilled.
+- Implementation commit: `74e47d4b0bf07e55e00ab63bcd3b396968fb9121`.
+- PR #20: [Integrate CLI with Python capacity analytics](https://github.com/nghianguyen150612/Codex-Meter/pull/20), targeting `main`.
+- Latest-head CI results, merge commit SHA and parents, feature-commit reachability, final `main` SHA, and final clean-tree verification are reported after remote CI and merge verification. No future identifiers are prefilled.
 
 ## Implementation
 

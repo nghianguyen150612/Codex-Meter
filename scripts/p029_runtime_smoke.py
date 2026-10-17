@@ -610,7 +610,9 @@ def main() -> None:
             )
             if extended.returncode:
                 raise AssertionError(
-                    "Windows extended-length local paths must work when enabled"
+                    "Windows extended-length local paths must work when enabled; "
+                    f"exit={extended.returncode}, stderr="
+                    f"{extended.stderr.decode('utf-8', errors='replace')}"
                 )
 
     print(

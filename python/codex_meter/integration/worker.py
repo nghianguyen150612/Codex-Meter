@@ -371,7 +371,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("worker_failure: analytics worker failed", file=sys.stderr)
         return 1
-    sys.stderr.write("codex_meter_worker_v1 input_complete\n")
+    # The Rust parent validates this as a byte-level protocol marker. Writing
+    # through the text stream would translate LF to CRLF on Windows.
+    sys.stderr.buffer.write(b"codex_meter_worker_v1 input_complete\n")
     sys.stdout.write(output)
     sys.stdout.write("\n")
     return 0

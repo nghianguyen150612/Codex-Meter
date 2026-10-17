@@ -302,6 +302,78 @@ mod tests {
     }
 
     #[test]
+    fn typed_deserialization_rejects_duplicate_top_level_and_nested_fields() {
+        let duplicate_top = VALID.replace(
+            "\"request_id\":\"request-1\"",
+            "\"request_id\":\"request-1\",\"request_id\":\"request-1\"",
+        );
+        let duplicate_nested = VALID.replacen(
+            "\"availability\":\"available\"",
+            "\"availability\":\"available\",\"availability\":\"available\"",
+            1,
+        );
+        assert!(AnalyticsRequest::parse(duplicate_top.as_bytes()).is_err());
+        assert!(AnalyticsRequest::parse(duplicate_nested.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn analytics_request_v1_cross_language_compatibility_corpus() {
+        let cases = [
+            (VALID.to_owned(), None),
+            (VALID.replace("1.0.0", "2.0.0"), Some("invalid_request")),
+            (
+                VALID.replace("current_capacity_estimate", "history_summary"),
+                Some("unsupported_analysis_type"),
+            ),
+            (
+                VALID.replace("\"maximum_observations\":10", "\"minimum_quality\":\"C\""),
+                Some("unsupported_estimator_option"),
+            ),
+            (
+                VALID.replace("\"maximum_observations\":10", "\"minimum_quality\":null"),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace("\"maximum_observations\":10", "\"maximum_observations\":0"),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace(
+                    "\"maximum_observations\":10",
+                    "\"maximum_observations\":9007199254740992",
+                ),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace("[\"five_hour\"]", "[\"five_hour\",\"five_hour\"]"),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace("2026-10-01T00:00:00Z", "2026-10-01T00:00:00+00:00"),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace("\"value\":\"Plus\"", "\"value\":null"),
+                Some("invalid_request"),
+            ),
+            (
+                VALID.replace(
+                    "\"maximum_observations\":10",
+                    "\"maximum_observations\":NaN",
+                ),
+                Some("invalid_request"),
+            ),
+        ];
+        for (raw, expected_code) in cases {
+            let result = AnalyticsRequest::parse(raw.as_bytes());
+            match expected_code {
+                None => assert!(result.is_ok()),
+                Some(code) => assert_eq!(result.unwrap_err().code, code),
+            }
+        }
+    }
+
+    #[test]
     fn rejects_duplicate_target_and_unsupported_option() {
         let duplicate = VALID.replace("[\"five_hour\"]", "[\"five_hour\",\"five_hour\"]");
         assert_eq!(

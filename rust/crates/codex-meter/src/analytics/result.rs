@@ -5,8 +5,24 @@ use std::collections::HashSet;
 use serde::{de::Deserializer, Deserialize, Serialize};
 
 use super::request::{
-    opaque_id, utc_timestamp, AnalyticsRequest, ConfigurationIdentity, MeterType, SAFE_INTEGER_MAX,
+    opaque_id, utc_timestamp, AnalyticsRequest, ConfigurationIdentity, MeterType,
+    MAXIMUM_OBSERVATIONS, SAFE_INTEGER_MAX,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ManualMeterPositions {
+    pub five_hour_used_percent: Option<f64>,
+    pub weekly_used_percent: Option<f64>,
+}
+
+impl ManualMeterPositions {
+    fn for_meter(self, meter: &MeterType) -> Option<f64> {
+        match meter {
+            MeterType::FiveHour => self.five_hour_used_percent,
+            MeterType::Weekly => self.weekly_used_percent,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultError {
@@ -152,13 +168,19 @@ impl AnalyticsResult {
         bytes: &[u8],
         request: &AnalyticsRequest,
         expected_generated_at: &str,
+        manual_positions: ManualMeterPositions,
     ) -> Result<Self, ResultError> {
-        let _: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ResultError {
-            code: "invalid_result_json",
-            message: "Python analytics worker output is not one valid JSON document",
+        let result: Self = serde_json::from_slice(bytes).map_err(|error| {
+            if error.is_syntax() || error.is_eof() {
+                ResultError {
+                    code: "invalid_result_json",
+                    message: "Python analytics worker output is not one valid JSON document",
+                }
+            } else {
+                result_mismatch()
+            }
         })?;
-        let result: Self = serde_json::from_slice(bytes).map_err(|_| result_mismatch())?;
-        result.validate_for(request, expected_generated_at)?;
+        result.validate_for(request, expected_generated_at, manual_positions)?;
         Ok(result)
     }
 
@@ -166,6 +188,7 @@ impl AnalyticsResult {
         &self,
         request: &AnalyticsRequest,
         expected_generated_at: &str,
+        manual_positions: ManualMeterPositions,
     ) -> Result<(), ResultError> {
         if self.schema_version != "1.0.0"
             || self.request_id != request.request_id
@@ -183,6 +206,28 @@ impl AnalyticsResult {
         validate_configuration(&self.dataset_configuration)?;
 
         let expected_meters: HashSet<_> = request.target_quota_windows.iter().collect();
+        if !self
+            .quota_capacity_estimates
+            .iter()
+            .map(|estimate| &estimate.meter_type)
+            .eq(request.target_quota_windows.iter())
+        {
+            return Err(result_mismatch());
+        }
+        if (manual_positions.five_hour_used_percent.is_some()
+            && !expected_meters.contains(&MeterType::FiveHour))
+            || (manual_positions.weekly_used_percent.is_some()
+                && !expected_meters.contains(&MeterType::Weekly))
+            || [
+                manual_positions.five_hour_used_percent,
+                manual_positions.weekly_used_percent,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+        {
+            return Err(result_mismatch());
+        }
         let mut seen_meters = HashSet::new();
         if self.quota_capacity_estimates.len() != expected_meters.len() {
             return Err(result_mismatch());
@@ -201,17 +246,18 @@ impl AnalyticsResult {
                 return Err(result_mismatch());
             }
             validate_accounting(&estimate.sample_accounting)?;
-            if request
-                .options
-                .maximum_observations
-                .is_some_and(|maximum| estimate.sample_accounting.candidate_observations > maximum)
+            if estimate.sample_accounting.candidate_observations
+                > request
+                    .options
+                    .maximum_observations
+                    .unwrap_or(MAXIMUM_OBSERVATIONS)
             {
                 return Err(result_mismatch());
             }
             let reasons = estimate.reason_codes.as_deref().unwrap_or_default();
             validate_unique_reasons(reasons)?;
             reason_union.extend(reasons.iter().cloned());
-            validate_estimate(estimate)?;
+            validate_estimate(estimate, manual_positions.for_meter(&estimate.meter_type))?;
             any_sufficient |= estimate.confidence != Confidence::Insufficient;
         }
         if self.quota_capacity_estimates.is_empty() {
@@ -277,7 +323,10 @@ fn validate_accounting(accounting: &SampleAccounting) -> Result<(), ResultError>
     Ok(())
 }
 
-fn validate_estimate(estimate: &QuotaCapacityEstimate) -> Result<(), ResultError> {
+fn validate_estimate(
+    estimate: &QuotaCapacityEstimate,
+    manual_used_percent: Option<f64>,
+) -> Result<(), ResultError> {
     let numeric_values = [
         estimate.estimated_full_capacity_raw_tokens,
         estimate.estimated_used_raw_tokens,
@@ -326,6 +375,18 @@ fn validate_estimate(estimate: &QuotaCapacityEstimate) -> Result<(), ResultError
             {
                 return Err(result_mismatch());
             }
+            let Some(manual_used_percent) = manual_used_percent else {
+                return Err(result_mismatch());
+            };
+            let expected_used = full * (manual_used_percent / 100.0);
+            let expected_remaining = full - expected_used;
+            if !expected_used.is_finite()
+                || !expected_remaining.is_finite()
+                || !nearly_equal(used, expected_used)
+                || !nearly_equal(remaining, expected_remaining)
+            {
+                return Err(result_mismatch());
+            }
         }
     }
     Ok(())
@@ -370,6 +431,29 @@ mod tests {
         AnalyticsRequest::parse(REQUEST.as_bytes()).unwrap()
     }
 
+    fn validate_result(
+        bytes: &[u8],
+        request: &AnalyticsRequest,
+    ) -> Result<AnalyticsResult, ResultError> {
+        let five_hour_used_percent = request
+            .target_quota_windows
+            .contains(&MeterType::FiveHour)
+            .then_some(24.0);
+        let weekly_used_percent = request
+            .target_quota_windows
+            .contains(&MeterType::Weekly)
+            .then_some(12.5);
+        AnalyticsResult::parse_and_validate(
+            bytes,
+            request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions {
+                five_hour_used_percent,
+                weekly_used_percent,
+            },
+        )
+    }
+
     fn insufficient_result() -> String {
         r#"{"schema_version":"1.0.0","request_id":"request-1","analysis_type":"current_capacity_estimate","result_status":"insufficient_evidence","dataset_configuration":{"plan":{"availability":"available","value":"Plus","provenance":"observed"},"model":{"availability":"available","value":"gpt-5.6-sol","provenance":"observed"},"reasoning_level":{"availability":"available","value":"high","provenance":"observed"},"speed_mode":{"availability":"unavailable","provenance":"unavailable"},"codex_version":{"availability":"unavailable","provenance":"unavailable"}},"generated_at":"2026-10-16T07:00:00Z","estimator_method_version":"1.0.0","quota_capacity_estimates":[{"meter_type":"five_hour","metric_kind":"estimated_raw_tokens","provider_authority":"codex_meter_empirical_estimate","confidence":"insufficient","sample_accounting":{"candidate_observations":0,"valid_observations":0,"excluded_observations":0,"outliers_removed":0,"used_observations":0},"reason_codes":["unknown_reason"]}],"warnings":["unknown_reason"]}"#.to_owned()
     }
@@ -410,12 +494,7 @@ mod tests {
 
     fn assert_result_rejected(result: &serde_json::Value, request: &AnalyticsRequest) {
         assert!(
-            AnalyticsResult::parse_and_validate(
-                result.to_string().as_bytes(),
-                request,
-                "2026-10-16T07:00:00Z"
-            )
-            .is_err(),
+            validate_result(result.to_string().as_bytes(), request).is_err(),
             "result unexpectedly passed validation: {result}"
         );
     }
@@ -423,12 +502,7 @@ mod tests {
     #[test]
     fn accepts_a_valid_insufficient_result_and_rejects_scope_or_semantic_changes() {
         let valid = insufficient_result();
-        assert!(AnalyticsResult::parse_and_validate(
-            valid.as_bytes(),
-            &request(),
-            "2026-10-16T07:00:00Z"
-        )
-        .is_ok());
+        assert!(validate_result(valid.as_bytes(), &request()).is_ok());
         for invalid in [
             valid.replace("request-1", "request-2"),
             valid.replace("insufficient_evidence", "succeeded"),
@@ -446,12 +520,7 @@ mod tests {
                 "\"request_id\":\"request-1\",\"request_id\":\"request-1\"",
             ),
         ] {
-            assert!(AnalyticsResult::parse_and_validate(
-                invalid.as_bytes(),
-                &request(),
-                "2026-10-16T07:00:00Z"
-            )
-            .is_err());
+            assert!(validate_result(invalid.as_bytes(), &request()).is_err());
         }
 
         let constrained_request = AnalyticsRequest::parse(
@@ -472,12 +541,24 @@ mod tests {
                 "\"excluded_observations\":0",
                 "\"excluded_observations\":11",
             );
-        assert!(AnalyticsResult::parse_and_validate(
-            over_limit.as_bytes(),
-            &constrained_request,
-            "2026-10-16T07:00:00Z"
-        )
-        .is_err());
+        assert!(validate_result(over_limit.as_bytes(), &constrained_request).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_top_level_and_nested_result_fields() {
+        let request = request();
+        let valid = succeeded_result(&request).to_string();
+        let duplicate_top = valid.replace(
+            "\"request_id\":\"request-1\"",
+            "\"request_id\":\"request-1\",\"request_id\":\"request-1\"",
+        );
+        let duplicate_nested = valid.replacen(
+            "\"availability\":\"available\"",
+            "\"availability\":\"available\",\"availability\":\"available\"",
+            1,
+        );
+        assert!(validate_result(duplicate_top.as_bytes(), &request).is_err());
+        assert!(validate_result(duplicate_nested.as_bytes(), &request).is_err());
     }
 
     #[test]
@@ -487,30 +568,38 @@ mod tests {
             "\"confidence\":\"insufficient\"",
             "\"confidence\":\"insufficient\",\"estimated_full_capacity_raw_tokens\":null",
         );
-        assert!(AnalyticsResult::parse_and_validate(
-            explicit_null.as_bytes(),
-            &request(),
-            "2026-10-16T07:00:00Z"
-        )
-        .is_err());
+        assert!(validate_result(explicit_null.as_bytes(), &request()).is_err());
         assert_eq!(
-            AnalyticsResult::parse_and_validate(b"not-json", &request(), "2026-10-16T07:00:00Z")
-                .unwrap_err()
-                .code,
+            validate_result(b"not-json", &request()).unwrap_err().code,
             "invalid_result_json"
         );
+    }
+
+    #[test]
+    fn accepts_trailing_json_whitespace_and_rejects_banners_or_extra_documents() {
+        let request = request();
+        let valid = insufficient_result();
+        let whitespace = format!("{valid} \n\t");
+        assert!(validate_result(whitespace.as_bytes(), &request).is_ok());
+        for invalid in [
+            format!("banner\n{valid}"),
+            format!("{valid}{valid}"),
+            format!("{valid} extra"),
+        ] {
+            assert_eq!(
+                validate_result(invalid.as_bytes(), &request)
+                    .unwrap_err()
+                    .code,
+                "invalid_result_json"
+            );
+        }
     }
 
     #[test]
     fn accepts_succeeded_and_mixed_meter_results() {
         let one_meter_request = request();
         let succeeded = succeeded_result(&one_meter_request);
-        assert!(AnalyticsResult::parse_and_validate(
-            succeeded.to_string().as_bytes(),
-            &one_meter_request,
-            "2026-10-16T07:00:00Z"
-        )
-        .is_ok());
+        assert!(validate_result(succeeded.to_string().as_bytes(), &one_meter_request).is_ok());
 
         let two_meter_request = AnalyticsRequest::parse(
             REQUEST
@@ -540,10 +629,77 @@ mod tests {
                 "reason_codes": ["meter_unavailable"]
             }));
         mixed["warnings"] = serde_json::json!(["meter_unavailable"]);
+        assert!(validate_result(mixed.to_string().as_bytes(), &two_meter_request).is_ok());
+
+        let reversed_request = AnalyticsRequest::parse(
+            REQUEST
+                .replace(
+                    "\"target_quota_windows\":[\"five_hour\"]",
+                    "\"target_quota_windows\":[\"weekly\",\"five_hour\"]",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(validate_result(mixed.to_string().as_bytes(), &reversed_request).is_err());
+    }
+
+    #[test]
+    fn sufficient_results_require_manual_position_and_match_its_arithmetic() {
+        let request = request();
+        let valid = succeeded_result(&request).to_string();
         assert!(AnalyticsResult::parse_and_validate(
-            mixed.to_string().as_bytes(),
-            &two_meter_request,
-            "2026-10-16T07:00:00Z"
+            valid.as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions::default(),
+        )
+        .is_err());
+        assert!(AnalyticsResult::parse_and_validate(
+            valid.as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions {
+                five_hour_used_percent: Some(23.0),
+                weekly_used_percent: None,
+            },
+        )
+        .is_err());
+
+        let mut zero = succeeded_result(&request);
+        zero["quota_capacity_estimates"][0]["estimated_used_raw_tokens"] = serde_json::json!(0.0);
+        zero["quota_capacity_estimates"][0]["estimated_remaining_raw_tokens"] =
+            serde_json::json!(362500.0);
+        assert!(AnalyticsResult::parse_and_validate(
+            zero.to_string().as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions {
+                five_hour_used_percent: Some(0.0),
+                weekly_used_percent: None,
+            },
+        )
+        .is_ok());
+
+        let mut full = succeeded_result(&request);
+        full["quota_capacity_estimates"][0]["estimated_used_raw_tokens"] =
+            serde_json::json!(362500.0);
+        full["quota_capacity_estimates"][0]["estimated_remaining_raw_tokens"] =
+            serde_json::json!(0.0);
+        assert!(AnalyticsResult::parse_and_validate(
+            full.to_string().as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions {
+                five_hour_used_percent: Some(100.0),
+                weekly_used_percent: None,
+            },
+        )
+        .is_ok());
+        assert!(AnalyticsResult::parse_and_validate(
+            insufficient_result().as_bytes(),
+            &request,
+            "2026-10-16T07:00:00Z",
+            ManualMeterPositions::default(),
         )
         .is_ok());
     }
@@ -674,13 +830,9 @@ mod tests {
             "\"estimated_full_capacity_raw_tokens\":Infinity",
         );
         assert_eq!(
-            AnalyticsResult::parse_and_validate(
-                non_finite.as_bytes(),
-                &request,
-                "2026-10-16T07:00:00Z"
-            )
-            .unwrap_err()
-            .code,
+            validate_result(non_finite.as_bytes(), &request)
+                .unwrap_err()
+                .code,
             "invalid_result_json"
         );
 

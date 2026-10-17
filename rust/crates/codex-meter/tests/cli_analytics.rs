@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -88,7 +89,7 @@ fn invoke(
 
 #[test]
 fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
-    let database = temporary_path("sqlite");
+    let database = temporary_path("estimate 数据.sqlite");
     let request = temporary_path("json");
     synthetic_database(&database);
     fs::write(&request, request_json(None, "gpt-5.6-sol")).expect("request file should be created");
@@ -108,6 +109,28 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
     assert_eq!(result["result_status"], "succeeded");
     assert_eq!(result["request_id"], "p027-e2e-001");
     assert_eq!(
+        result
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [
+            "analysis_type",
+            "dataset_configuration",
+            "estimator_method_version",
+            "generated_at",
+            "quota_capacity_estimates",
+            "request_id",
+            "result_status",
+            "schema_version",
+            "warnings",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
         result["quota_capacity_estimates"][0]["meter_type"],
         "five_hour"
     );
@@ -115,6 +138,25 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
         result["dataset_configuration"]["speed_mode"]["availability"],
         "unavailable"
     );
+    let allowed_estimate_fields = [
+        "meter_type",
+        "metric_kind",
+        "provider_authority",
+        "confidence",
+        "sample_accounting",
+        "estimated_full_capacity_raw_tokens",
+        "estimated_used_raw_tokens",
+        "estimated_remaining_raw_tokens",
+        "capacity_percentiles_raw_tokens",
+        "reason_codes",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert!(result["quota_capacity_estimates"][0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|field| allowed_estimate_fields.contains(field.as_str())));
     let full_capacity = result["quota_capacity_estimates"][0]["estimated_full_capacity_raw_tokens"]
         .as_f64()
         .expect("sufficient result should contain full capacity");
@@ -122,6 +164,12 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
         .as_f64()
         .expect("manual position should produce used capacity");
     assert!((used_capacity - full_capacity * 0.24).abs() < 1e-8);
+    let replay = invoke(
+        &database,
+        &request,
+        &["--five-hour-used-percent", "24", "--json"],
+    );
+    assert_eq!(replay.stdout, output.stdout);
     assert_eq!(
         before.as_slice(),
         Sha256::digest(fs::read(&database).unwrap()).as_slice()
@@ -137,6 +185,34 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
         .contains("invalid_manual_meter_percentage"));
 
     let _ = fs::remove_file(database);
+    let _ = fs::remove_file(request);
+}
+
+#[test]
+fn rejected_request_privacy_canaries_never_reach_cli_error_output() {
+    let request = temporary_path("privacy-request.json");
+    let markers = [
+        "SYNTHETIC_SECRET_MARKER",
+        "SYNTHETIC_PROMPT_MARKER",
+        "SYNTHETIC_RESPONSE_MARKER",
+        "SYNTHETIC_SOURCE_MARKER",
+    ];
+    let invalid = format!(
+        "{{\"schema_version\":\"1.0.0\",\"request_id\":\"request-1\",\"unknown\":\"{} {} {} {}\"}}",
+        markers[0], markers[1], markers[2], markers[3]
+    );
+    fs::write(&request, invalid).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+        .args(["estimate", "--database", "missing.sqlite", "--request"])
+        .arg(&request)
+        .args(["--generated-at", GENERATED_AT, "--json"])
+        .output()
+        .expect("CLI process should start");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("invalid_request"));
+    assert!(markers.iter().all(|marker| !diagnostic.contains(marker)));
     let _ = fs::remove_file(request);
 }
 
@@ -181,6 +257,12 @@ fn empty_or_incompatible_history_returns_insufficient_evidence_without_pooling()
             ["candidate_observations"],
         0
     );
+
+    let human = invoke(&database, &request, &["--five-hour-used-percent", "24"]);
+    assert!(human.status.success());
+    let human_output = String::from_utf8_lossy(&human.stdout);
+    assert!(human_output
+        .contains("Codex Meter empirical estimates are not official provider quota allowances."));
 
     let _ = fs::remove_file(database);
     let _ = fs::remove_file(request);

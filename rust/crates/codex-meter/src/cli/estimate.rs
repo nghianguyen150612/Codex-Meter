@@ -1,7 +1,8 @@
 //! Input preparation, analytics invocation, and result contract enforcement.
 
 use crate::analytics::{
-    invoke_worker, AnalyticsRequest, AnalyticsResult, ProcessLimits, ResultError,
+    invoke_worker, AnalyticsRequest, AnalyticsResult, ManualMeterPositions, ProcessLimits,
+    ResultError,
 };
 use std::fs::File;
 use std::io::Read;
@@ -60,7 +61,15 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
         code: error.code,
         message: error.message.to_owned(),
     })?;
-    let result = decode_worker_result(&output, &request, &arguments.generated_at)?;
+    let result = decode_worker_result(
+        &output,
+        &request,
+        &arguments.generated_at,
+        ManualMeterPositions {
+            five_hour_used_percent: arguments.five_hour_used_percent,
+            weekly_used_percent: arguments.weekly_used_percent,
+        },
+    )?;
     if arguments.json {
         result
             .to_json()
@@ -78,10 +87,6 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
     }
 }
 
-fn trim_one_newline(value: &str) -> &str {
-    value.strip_suffix('\n').unwrap_or(value)
-}
-
 fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -95,18 +100,14 @@ fn decode_worker_result(
     output: &[u8],
     request: &AnalyticsRequest,
     generated_at: &str,
+    manual_positions: ManualMeterPositions,
 ) -> Result<AnalyticsResult, CliError> {
-    let output = std::str::from_utf8(output).map_err(|_| {
-        cli_error(
-            "invalid_result_json",
-            "Python analytics worker output is not UTF-8",
-        )
-    })?;
-    AnalyticsResult::parse_and_validate(trim_one_newline(output).as_bytes(), request, generated_at)
-        .map_err(|error: ResultError| CliError {
+    AnalyticsResult::parse_and_validate(output, request, generated_at, manual_positions).map_err(
+        |error: ResultError| CliError {
             code: error.code,
             message: error.message.to_owned(),
-        })
+        },
+    )
 }
 
 fn read_bounded_request(path: &Path) -> Result<Vec<u8>, CliError> {
@@ -191,21 +192,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            decode_worker_result(&[0xff], &request, "2026-10-16T07:00:00Z")
-                .unwrap_err()
-                .code,
+            decode_worker_result(
+                &[0xff],
+                &request,
+                "2026-10-16T07:00:00Z",
+                ManualMeterPositions::default(),
+            )
+            .unwrap_err()
+            .code,
             "invalid_result_json"
         );
         assert_eq!(
-            decode_worker_result(b"not-json", &request, "2026-10-16T07:00:00Z")
-                .unwrap_err()
-                .code,
+            decode_worker_result(
+                b"not-json",
+                &request,
+                "2026-10-16T07:00:00Z",
+                ManualMeterPositions::default(),
+            )
+            .unwrap_err()
+            .code,
             "invalid_result_json"
         );
         assert_eq!(
-            decode_worker_result(b"{}", &request, "2026-10-16T07:00:00Z")
-                .unwrap_err()
-                .code,
+            decode_worker_result(
+                b"{}",
+                &request,
+                "2026-10-16T07:00:00Z",
+                ManualMeterPositions::default(),
+            )
+            .unwrap_err()
+            .code,
             "result_contract_mismatch"
         );
     }

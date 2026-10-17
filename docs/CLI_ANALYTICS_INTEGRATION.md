@@ -8,13 +8,13 @@ P027 connects the native `codex-meter` executable to the existing Python current
 - Python 3.11 or later.
 - `uv` for the repository's locked development environment.
 
-From the repository root, create the locked Python environment with `uv sync --project python --frozen`. The worker has no Python runtime dependencies. To select the interpreter from that environment, obtain its path with:
+From the repository root, create the locked Python environment with `uv sync --project python --frozen`. The worker has no Python runtime dependencies. During source-tree development, Rust resolves the package from the source root relative to its compiled crate manifest. To select the interpreter from that environment explicitly, obtain its path with:
 
 ```bash
 uv run --project python --frozen python -c "import sys; print(sys.executable)"
 ```
 
-Pass that path with `--python`. The default executable name is `python`. During source-tree development, the Rust executable starts the worker with the repository's `python/` directory as its working directory so `python -m codex_meter.integration.worker` resolves consistently. The source tree is not bundled into the Rust binary.
+Pass that path with `--python`. The default executable name is `python`. Rust never uses the working directory or `PYTHONPATH` to identify the worker. When the compiled source root is absent, the selected interpreter must have exactly one worker package in its standard or virtual-environment site-packages locations. The source tree is not bundled into the Rust binary.
 
 ## Command
 
@@ -32,7 +32,7 @@ Optional arguments:
 
 - `--five-hour-used-percent N`: manually supplied current five-hour used percentage points, from 0 through 100.
 - `--weekly-used-percent N`: manually supplied current weekly used percentage points, from 0 through 100.
-- `--python PATH`: Python interpreter executable. Each process argument is passed directly; no shell is involved.
+- `--python PATH`: trusted Python interpreter executable. Each process argument is passed directly; no shell is involved, and there is no fallback if this executable fails.
 - `--json`: print only the validated AnalyticsResult v1 JSON document.
 
 The `--help` options show CLI and estimate usage. `--version` prints the executable version. Unknown commands, unknown arguments, repeated flags, and invalid values fail with a categorized diagnostic.
@@ -95,7 +95,7 @@ If the selected history has no eligible observations, P020 returns `insufficient
 
 The public AnalyticsRequest v1 remains exactly the existing closed schema. Rust deserializes it into strict typed structures, rejects unknown fields, validates identity/provenance/history/meter semantics, and rejects unsupported estimator options before starting Python.
 
-The local process context is separate and versioned as `ANALYTICS_PROCESS_PROTOCOL_VERSION = 1.0.0`. Rust passes these arguments individually to `python -m codex_meter.integration.worker`:
+The local process context is separate and versioned as `ANALYTICS_PROCESS_PROTOCOL_VERSION = 1.0.0`. Rust passes these arguments individually to a fixed, application-owned Python bootstrap. The bootstrap validates a trusted source-tree or installed-package root before running `codex_meter.integration.worker`:
 
 - `--database`: absolute path to an existing database. Relative paths are resolved from the CLI's working directory. It is not placed in AnalyticsRequest JSON.
 - `--runtime-context-version`: currently `1.0.0`; unknown versions fail closed.
@@ -122,34 +122,21 @@ The analytics process never opens the database through Rust's writable `SqliteSt
 
 Human output names the five-hour and weekly meters, raw-token units, empirical full capacity, estimated used/remaining amounts, confidence, P25/P50/P75, sample accounting, and reason codes. Missing configuration values stay unavailable. The footer states that the estimate is not an official provider allowance. A caller-supplied position is labeled manual and unverified.
 
-JSON output is reserialized by Rust only after strict result deserialization and semantic checks for schema/method versions, request ID, configuration and meter scope, confidence/status, finite numbers, capacity arithmetic, percentile order, sample accounting, reason codes, and warning consistency.
+JSON output is reserialized by Rust only after strict result deserialization and semantic checks for schema/method versions, request ID, configuration and exact requested meter scope/order, authority/method, confidence/status, finite numbers, capacity arithmetic, percentile order, sample accounting, reason codes, warning consistency, and manual-position arithmetic. Every sufficient meter result requires its explicitly supplied position; Rust independently checks used and remaining amounts using P020's `1e-12` relative tolerance.
 
 Errors distinguish invalid requests, unsupported analysis/options, manual meter errors, missing/incompatible databases, migration drift, corrupt Observations, unavailable Python, worker failure, timeout, invalid result JSON, and result/request mismatch. Raw Python tracebacks and unrestricted stderr are not printed.
 
-The worker protocol limits request input to 64 KiB, result output to 2 MiB, retained diagnostics to 8 KiB, and runtime to 60 seconds. The Rust process runner reads stdout and stderr concurrently, kills the child on timeout/size overflow, and waits for child termination.
+The worker protocol limits request input to 64 KiB, result output to 2 MiB, retained diagnostics to 8 KiB, and the complete process lifecycle to 60 seconds. The isolated interpreter runs with `-I -S`; the child environment is cleared except for `PATH`, Windows startup variables, and temporary-directory variables. A fixed stderr success marker acknowledges the worker read the request through EOF. Rust reads stdout and stderr concurrently, kills the process group or Windows Job Object on timeout/size overflow, bounds cleanup, and reaps the direct child. The hardened behavior and process-escape limitations are documented in [CLI security hardening](CLI_SECURITY_HARDENING.md).
 
 ## Privacy and limitations
 
-Only the closed request and result structures cross the process boundary. The CLI does not log database rows, prompts, responses, repository data, account identifiers, credentials, tokens, or raw rollout content. P027 does not call provider services, run live benchmarks, start the tracking agent, or expose the other Python analysis types. Those APIs remain internal.
+Only the closed request and result structures cross the process boundary. The CLI does not log database rows, prompts, responses, repository data, account identifiers, credentials, tokens, or raw rollout content. Diagnostics use fixed categories and messages rather than displaying worker stderr or tracebacks. Successful human output states that results are Codex Meter empirical estimates, not official provider quota allowances. The CLI does not call provider services, run live benchmarks, start the tracking agent, or expose the other Python analysis types. Those APIs remain internal.
 
 `history_summary`, `quota_change_analysis`, `workload_estimate`, and `benchmark_analysis` are rejected as unsupported analysis types. Automatic quota acquisition, release packaging, and production benchmark execution remain out of scope.
 
-## Inputs for P028
+## P028 security hardening
 
-P028 may assume:
-
-- Rust has a functioning current-capacity estimate CLI.
-- AnalyticsRequest v1 is parsed strictly.
-- Explicit manual current positions remain separate from the request contract.
-- Rust invokes Python safely without shell interpolation.
-- P017 reads SQLite strictly read-only.
-- P018/P019/P020 produce empirical capacity results.
-- Rust validates returned AnalyticsResult v1 semantically.
-- Human-readable and JSON output modes exist.
-- Unsupported analysis types fail explicitly.
-- Python failures do not corrupt historical Observations.
-- Provider automatic quota acquisition is not claimed.
-- Production benchmark execution remains disabled.
-- Other Python analytics APIs remain unexposed by the CLI.
-
-P028 will focus on **privacy verification, cross-boundary failure isolation, and integration security hardening**. P027 stops here.
+P028 preserves the supported command and AnalyticsRequest/Result v1 contracts while hardening
+worker resolution, interpreter environment, process cleanup, error privacy, result scope, and manual
+meter arithmetic. See [CLI security hardening](CLI_SECURITY_HARDENING.md) for the threat model,
+enforced guarantees, known limits, and P029 handoff.

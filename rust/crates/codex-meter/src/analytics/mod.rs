@@ -11,5 +11,6 @@ pub use request::{
     MAXIMUM_OBSERVATIONS, MAXIMUM_REQUEST_BYTES,
 };
 pub use result::{
-    AnalyticsResult, Confidence, QuotaCapacityEstimate, ReasonCode, ResultError, ResultStatus,
+    AnalyticsResult, Confidence, ManualMeterPositions, QuotaCapacityEstimate, ReasonCode,
+    ResultError, ResultStatus,
 };

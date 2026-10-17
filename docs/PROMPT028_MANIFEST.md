@@ -6,11 +6,13 @@
 - Required feature branch: `fix/p028-cli-boundary-security`.
 - Required implementation commit subject: `fix: harden CLI analytics process boundaries`.
 - Required PR title: `Harden CLI analytics privacy and subprocess isolation`.
+- Implementation commit: `64be318e67f7f041557f5fd5ca2790810a23380f`.
+- PR #21: [Harden CLI analytics privacy and subprocess isolation](https://github.com/nghianguyen150612/Codex-Meter/pull/21), targeting `main`.
 - The starting revision was fetched and verified on `origin/main`; the worktree was clean before
   the feature branch was created. Implementation remains off `main`.
-- The PR URL/number, feature commit SHA, latest-head CI, merge commit SHA and parents, commit
-  reachability, final `main` SHA, and final clean-tree verification are recorded after the remote
-  workflow in the completion report. No future identifiers are prefilled here.
+- Latest-head CI, merge commit SHA and parents, commit reachability, final `main` SHA, and final
+  clean-tree verification are reported after the remote workflow. No future identifiers are
+  prefilled here.
 
 ## Security findings and changes
 

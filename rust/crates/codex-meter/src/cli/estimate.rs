@@ -1,6 +1,8 @@
 //! Input preparation, analytics invocation, and result contract enforcement.
 
-use crate::analytics::{invoke_worker, AnalyticsRequest, AnalyticsResult, ProcessLimits};
+use crate::analytics::{
+    invoke_worker, AnalyticsRequest, AnalyticsResult, ProcessLimits, ResultError,
+};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -58,21 +60,7 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
         code: error.code,
         message: error.message.to_owned(),
     })?;
-    let output = std::str::from_utf8(&output).map_err(|_| {
-        cli_error(
-            "invalid_result_json",
-            "Python analytics worker output is not UTF-8",
-        )
-    })?;
-    let result = AnalyticsResult::parse_and_validate(
-        trim_one_newline(output).as_bytes(),
-        &request,
-        &arguments.generated_at,
-    )
-    .map_err(|error| CliError {
-        code: error.code,
-        message: error.message.to_owned(),
-    })?;
+    let result = decode_worker_result(&output, &request, &arguments.generated_at)?;
     if arguments.json {
         result
             .to_json()
@@ -101,6 +89,24 @@ fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
     std::env::current_dir()
         .map(|directory| directory.join(path))
         .map_err(|_| cli_error("database_missing", "analytics database does not exist"))
+}
+
+fn decode_worker_result(
+    output: &[u8],
+    request: &AnalyticsRequest,
+    generated_at: &str,
+) -> Result<AnalyticsResult, CliError> {
+    let output = std::str::from_utf8(output).map_err(|_| {
+        cli_error(
+            "invalid_result_json",
+            "Python analytics worker output is not UTF-8",
+        )
+    })?;
+    AnalyticsResult::parse_and_validate(trim_one_newline(output).as_bytes(), request, generated_at)
+        .map_err(|error: ResultError| CliError {
+            code: error.code,
+            message: error.message.to_owned(),
+        })
 }
 
 fn read_bounded_request(path: &Path) -> Result<Vec<u8>, CliError> {
@@ -175,6 +181,32 @@ mod tests {
         assert_eq!(
             absolute_database_path(&already_absolute).unwrap(),
             already_absolute
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_utf8_and_json_from_the_worker() {
+        let request = AnalyticsRequest::parse(
+            br#"{"schema_version":"1.0.0","request_id":"request-1","analysis_type":"current_capacity_estimate","dataset_selector":{"configuration":{"plan":{"availability":"unavailable","provenance":"unavailable"},"model":{"availability":"unavailable","provenance":"unavailable"},"reasoning_level":{"availability":"unavailable","provenance":"unavailable"},"speed_mode":{"availability":"unavailable","provenance":"unavailable"},"codex_version":{"availability":"unavailable","provenance":"unavailable"}}},"target_quota_windows":["five_hour"],"options":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decode_worker_result(&[0xff], &request, "2026-10-16T07:00:00Z")
+                .unwrap_err()
+                .code,
+            "invalid_result_json"
+        );
+        assert_eq!(
+            decode_worker_result(b"not-json", &request, "2026-10-16T07:00:00Z")
+                .unwrap_err()
+                .code,
+            "invalid_result_json"
+        );
+        assert_eq!(
+            decode_worker_result(b"{}", &request, "2026-10-16T07:00:00Z")
+                .unwrap_err()
+                .code,
+            "result_contract_mismatch"
         );
     }
 }

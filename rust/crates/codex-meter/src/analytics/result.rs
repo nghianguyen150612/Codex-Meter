@@ -374,6 +374,52 @@ mod tests {
         r#"{"schema_version":"1.0.0","request_id":"request-1","analysis_type":"current_capacity_estimate","result_status":"insufficient_evidence","dataset_configuration":{"plan":{"availability":"available","value":"Plus","provenance":"observed"},"model":{"availability":"available","value":"gpt-5.6-sol","provenance":"observed"},"reasoning_level":{"availability":"available","value":"high","provenance":"observed"},"speed_mode":{"availability":"unavailable","provenance":"unavailable"},"codex_version":{"availability":"unavailable","provenance":"unavailable"}},"generated_at":"2026-10-16T07:00:00Z","estimator_method_version":"1.0.0","quota_capacity_estimates":[{"meter_type":"five_hour","metric_kind":"estimated_raw_tokens","provider_authority":"codex_meter_empirical_estimate","confidence":"insufficient","sample_accounting":{"candidate_observations":0,"valid_observations":0,"excluded_observations":0,"outliers_removed":0,"used_observations":0},"reason_codes":["unknown_reason"]}],"warnings":["unknown_reason"]}"#.to_owned()
     }
 
+    fn succeeded_result(request: &AnalyticsRequest) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "1.0.0",
+            "request_id": request.request_id,
+            "analysis_type": "current_capacity_estimate",
+            "result_status": "succeeded",
+            "dataset_configuration": request.dataset_selector.configuration,
+            "generated_at": "2026-10-16T07:00:00Z",
+            "estimator_method_version": "1.0.0",
+            "quota_capacity_estimates": [{
+                "meter_type": "five_hour",
+                "metric_kind": "estimated_raw_tokens",
+                "provider_authority": "codex_meter_empirical_estimate",
+                "confidence": "medium",
+                "sample_accounting": {
+                    "candidate_observations": 4,
+                    "valid_observations": 4,
+                    "excluded_observations": 0,
+                    "outliers_removed": 0,
+                    "used_observations": 4
+                },
+                "estimated_full_capacity_raw_tokens": 362500.0,
+                "estimated_used_raw_tokens": 87000.0,
+                "estimated_remaining_raw_tokens": 275500.0,
+                "capacity_percentiles_raw_tokens": {
+                    "p25": 350000.0,
+                    "p50": 362500.0,
+                    "p75": 375000.0
+                }
+            }],
+            "warnings": []
+        })
+    }
+
+    fn assert_result_rejected(result: &serde_json::Value, request: &AnalyticsRequest) {
+        assert!(
+            AnalyticsResult::parse_and_validate(
+                result.to_string().as_bytes(),
+                request,
+                "2026-10-16T07:00:00Z"
+            )
+            .is_err(),
+            "result unexpectedly passed validation: {result}"
+        );
+    }
+
     #[test]
     fn accepts_a_valid_insufficient_result_and_rejects_scope_or_semantic_changes() {
         let valid = insufficient_result();
@@ -453,5 +499,221 @@ mod tests {
                 .code,
             "invalid_result_json"
         );
+    }
+
+    #[test]
+    fn accepts_succeeded_and_mixed_meter_results() {
+        let one_meter_request = request();
+        let succeeded = succeeded_result(&one_meter_request);
+        assert!(AnalyticsResult::parse_and_validate(
+            succeeded.to_string().as_bytes(),
+            &one_meter_request,
+            "2026-10-16T07:00:00Z"
+        )
+        .is_ok());
+
+        let two_meter_request = AnalyticsRequest::parse(
+            REQUEST
+                .replace(
+                    "\"target_quota_windows\":[\"five_hour\"]",
+                    "\"target_quota_windows\":[\"five_hour\",\"weekly\"]",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        let mut mixed = succeeded_result(&two_meter_request);
+        mixed["quota_capacity_estimates"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "meter_type": "weekly",
+                "metric_kind": "estimated_raw_tokens",
+                "provider_authority": "codex_meter_empirical_estimate",
+                "confidence": "insufficient",
+                "sample_accounting": {
+                    "candidate_observations": 1,
+                    "valid_observations": 0,
+                    "excluded_observations": 1,
+                    "outliers_removed": 0,
+                    "used_observations": 0
+                },
+                "reason_codes": ["meter_unavailable"]
+            }));
+        mixed["warnings"] = serde_json::json!(["meter_unavailable"]);
+        assert!(AnalyticsResult::parse_and_validate(
+            mixed.to_string().as_bytes(),
+            &two_meter_request,
+            "2026-10-16T07:00:00Z"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_result_scope_and_authority_changes() {
+        let request = request();
+        let valid = succeeded_result(&request);
+        let mut cases = Vec::new();
+
+        let mut changed = valid.clone();
+        changed["request_id"] = serde_json::json!("another-request");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["analysis_type"] = serde_json::json!("history_summary");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["dataset_configuration"]["plan"]["value"] = serde_json::json!("Pro");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["meter_type"] = serde_json::json!("weekly");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["metric_kind"] = serde_json::json!("tokens");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["provider_authority"] =
+            serde_json::json!("provider_official");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["estimator_method_version"] = serde_json::json!("2.0.0");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["schema_version"] = serde_json::json!("2.0.0");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["generated_at"] = serde_json::json!("2026-10-16T07:00:01Z");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["confidence"] = serde_json::json!("unrecognized");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["result_status"] = serde_json::json!("failed");
+        cases.push(changed);
+        for invalid in cases {
+            assert_result_rejected(&invalid, &request);
+        }
+
+        let two_meter_request = AnalyticsRequest::parse(
+            REQUEST
+                .replace(
+                    "\"target_quota_windows\":[\"five_hour\"]",
+                    "\"target_quota_windows\":[\"five_hour\",\"weekly\"]",
+                )
+                .as_bytes(),
+        )
+        .unwrap();
+        let mut missing = succeeded_result(&two_meter_request);
+        missing["quota_capacity_estimates"] = serde_json::json!([]);
+        assert_result_rejected(&missing, &two_meter_request);
+        let mut fabricated = succeeded_result(&two_meter_request);
+        fabricated["quota_capacity_estimates"][0]["meter_type"] = serde_json::json!("weekly");
+        let duplicate = fabricated["quota_capacity_estimates"][0].clone();
+        fabricated["quota_capacity_estimates"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert_result_rejected(&fabricated, &two_meter_request);
+    }
+
+    #[test]
+    fn rejects_invalid_numeric_and_sample_accounting_semantics() {
+        let request = request();
+        let valid = succeeded_result(&request);
+        let mut cases = Vec::new();
+
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["estimated_full_capacity_raw_tokens"] =
+            serde_json::json!(0.0);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["estimated_used_raw_tokens"] =
+            serde_json::json!(-1.0);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["estimated_remaining_raw_tokens"] =
+            serde_json::json!(275499.0);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["capacity_percentiles_raw_tokens"] =
+            serde_json::json!({"p25": 380000.0, "p50": 362500.0, "p75": 375000.0});
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["capacity_percentiles_raw_tokens"] =
+            serde_json::json!({"p25": 0.0, "p50": 362500.0, "p75": 375000.0});
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("capacity_percentiles_raw_tokens");
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["sample_accounting"]["candidate_observations"] =
+            serde_json::json!(9_007_199_254_740_992_u64);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["sample_accounting"]["excluded_observations"] =
+            serde_json::json!(1);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]["sample_accounting"]["outliers_removed"] =
+            serde_json::json!(1);
+        cases.push(changed);
+        let mut changed = valid.clone();
+        changed["quota_capacity_estimates"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("estimated_full_capacity_raw_tokens");
+        cases.push(changed);
+        for invalid in cases {
+            assert_result_rejected(&invalid, &request);
+        }
+
+        let mut non_finite = valid.to_string();
+        non_finite = non_finite.replace(
+            "\"estimated_full_capacity_raw_tokens\":362500.0",
+            "\"estimated_full_capacity_raw_tokens\":Infinity",
+        );
+        assert_eq!(
+            AnalyticsResult::parse_and_validate(
+                non_finite.as_bytes(),
+                &request,
+                "2026-10-16T07:00:00Z"
+            )
+            .unwrap_err()
+            .code,
+            "invalid_result_json"
+        );
+
+        let mut insufficient =
+            serde_json::from_str::<serde_json::Value>(&insufficient_result()).unwrap();
+        insufficient["quota_capacity_estimates"][0]["estimated_full_capacity_raw_tokens"] =
+            serde_json::json!(0.0);
+        assert_result_rejected(&insufficient, &request);
+    }
+
+    #[test]
+    fn rejects_invalid_reason_warning_and_unknown_field_semantics() {
+        let request = request();
+        let valid = succeeded_result(&request);
+        let mut invalid_reason = valid.clone();
+        invalid_reason["quota_capacity_estimates"][0]["reason_codes"] =
+            serde_json::json!(["made_up"]);
+        assert_result_rejected(&invalid_reason, &request);
+
+        let mut inconsistent_warnings = valid.clone();
+        inconsistent_warnings["quota_capacity_estimates"][0]["reason_codes"] =
+            serde_json::json!(["meter_unavailable"]);
+        inconsistent_warnings["warnings"] = serde_json::json!([]);
+        assert_result_rejected(&inconsistent_warnings, &request);
+
+        let mut unordered = valid.clone();
+        unordered["quota_capacity_estimates"][0]["reason_codes"] =
+            serde_json::json!(["meter_unstable", "quota_reset_crossed"]);
+        unordered["warnings"] = serde_json::json!(["quota_reset_crossed", "meter_unstable"]);
+        assert_result_rejected(&unordered, &request);
+
+        let mut unknown = valid;
+        unknown["untrusted_extra"] = serde_json::json!(true);
+        assert_result_rejected(&unknown, &request);
     }
 }

@@ -82,6 +82,14 @@ pub fn invoke_worker(
     if source_directory.is_dir() {
         command.current_dir(source_directory);
     }
+    run_command(command, request, limits)
+}
+
+fn run_command(
+    mut command: Command,
+    request: &[u8],
+    limits: ProcessLimits,
+) -> Result<Vec<u8>, ProcessError> {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -281,6 +289,13 @@ fn worker_failed() -> ProcessError {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::time::Instant;
+
+    fn run_python_script(script: &str, limits: ProcessLimits) -> Result<Vec<u8>, ProcessError> {
+        let mut command = Command::new("python");
+        command.arg("-c").arg(script);
+        run_command(command, b"{}", limits)
+    }
 
     #[test]
     fn bounded_reader_retains_only_the_configured_limit() {
@@ -326,6 +341,75 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(unavailable.code, "python_unavailable");
+    }
+
+    #[test]
+    fn subprocess_failure_and_empty_output_are_categorized_without_echoing_tracebacks() {
+        let import_failure =
+            run_python_script("import p027_missing_test_module", ProcessLimits::default())
+                .unwrap_err();
+        assert_eq!(import_failure.code, "python_worker_failed");
+        assert!(!import_failure
+            .to_string()
+            .contains("p027_missing_test_module"));
+
+        let nonzero =
+            run_python_script("raise SystemExit(7)", ProcessLimits::default()).unwrap_err();
+        assert_eq!(nonzero.code, "python_worker_failed");
+
+        let empty = run_python_script("pass", ProcessLimits::default()).unwrap_err();
+        assert_eq!(empty.code, "invalid_result_json");
+    }
+
+    #[test]
+    fn output_and_diagnostic_limits_terminate_the_worker() {
+        let output = run_python_script(
+            "import sys; sys.stdout.buffer.write(b'x' * 32)",
+            ProcessLimits {
+                maximum_output_bytes: 16,
+                ..ProcessLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(output.code, "process_output_too_large");
+
+        let diagnostics = run_python_script(
+            "import sys; sys.stderr.write('x' * 32)",
+            ProcessLimits {
+                maximum_diagnostic_bytes: 16,
+                ..ProcessLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(diagnostics.code, "process_diagnostics_too_large");
+    }
+
+    #[test]
+    fn concurrent_pipe_draining_prevents_stdout_stderr_deadlock() {
+        let output = run_python_script(
+            "import sys; sys.stderr.write('e' * 131072); sys.stderr.flush(); sys.stdout.write('ok')",
+            ProcessLimits {
+                maximum_diagnostic_bytes: 256 * 1024,
+                ..ProcessLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(output, b"ok");
+    }
+
+    #[test]
+    fn timeout_terminates_and_reaps_worker_within_the_execution_bound() {
+        let started = Instant::now();
+        let error = run_python_script(
+            "import time; time.sleep(5)",
+            ProcessLimits {
+                timeout: Duration::from_millis(100),
+                ..ProcessLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "process_timeout");
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]

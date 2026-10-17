@@ -115,10 +115,26 @@ fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
         result["dataset_configuration"]["speed_mode"]["availability"],
         "unavailable"
     );
+    let full_capacity = result["quota_capacity_estimates"][0]["estimated_full_capacity_raw_tokens"]
+        .as_f64()
+        .expect("sufficient result should contain full capacity");
+    let used_capacity = result["quota_capacity_estimates"][0]["estimated_used_raw_tokens"]
+        .as_f64()
+        .expect("manual position should produce used capacity");
+    assert!((used_capacity - full_capacity * 0.24).abs() < 1e-8);
     assert_eq!(
         before.as_slice(),
         Sha256::digest(fs::read(&database).unwrap()).as_slice()
     );
+
+    let unrequested_position = invoke(
+        &database,
+        &request,
+        &["--weekly-used-percent", "20", "--json"],
+    );
+    assert!(!unrequested_position.status.success());
+    assert!(String::from_utf8_lossy(&unrequested_position.stderr)
+        .contains("invalid_manual_meter_percentage"));
 
     let _ = fs::remove_file(database);
     let _ = fs::remove_file(request);

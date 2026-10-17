@@ -230,3 +230,55 @@ def test_history_timestamp_bounds_compare_chronologically() -> None:
     request["dataset_selector"]["observed_through"] = "2026-10-01T00:00:00Z"
     with pytest.raises(WorkerError, match="must not be after"):
         parse_request(json.dumps(request).encode())
+
+
+@pytest.mark.parametrize(
+    ("targets", "five_hour", "weekly"),
+    [
+        (["five_hour"], 24.0, None),
+        (["weekly"], None, 12.5),
+        (["five_hour", "weekly"], 24.0, 12.5),
+    ],
+)
+def test_each_requested_meter_uses_only_its_manual_position(
+    tmp_path: Path,
+    targets: list[str],
+    five_hour: float | None,
+    weekly: float | None,
+) -> None:
+    database = tmp_path / "synthetic.sqlite"
+    _create_database(database)
+    request = _request(targets=targets)
+    context = LocalExecutionContext(
+        database_path=database,
+        generated_at=GENERATED_AT,
+        five_hour_used_percent=five_hour,
+        weekly_used_percent=weekly,
+    )
+
+    result = json.loads(execute_request(json.dumps(request).encode(), context))
+
+    assert result["result_status"] == "succeeded"
+    assert [item["meter_type"] for item in result["quota_capacity_estimates"]] == targets
+    for estimate in result["quota_capacity_estimates"]:
+        expected_position = five_hour if estimate["meter_type"] == "five_hour" else weekly
+        assert estimate["estimated_used_raw_tokens"] == pytest.approx(
+            estimate["estimated_full_capacity_raw_tokens"] * expected_position / 100
+        )
+    assert result["generated_at"] == GENERATED_AT
+
+
+def test_manual_position_for_unrequested_meter_is_rejected(tmp_path: Path) -> None:
+    database = tmp_path / "synthetic.sqlite"
+    _create_database(database)
+    with pytest.raises(WorkerError) as error:
+        execute_request(
+            json.dumps(_request(targets=["five_hour"])).encode(),
+            LocalExecutionContext(
+                database_path=database,
+                generated_at=GENERATED_AT,
+                five_hour_used_percent=24.0,
+                weekly_used_percent=10.0,
+            ),
+        )
+    assert error.value.code == "unrequested_meter_position"

@@ -201,6 +201,16 @@ mod tests {
         .unwrap_err()
         .message
         .contains("--database"));
+        assert!(parse(&[
+            "estimate",
+            "--database",
+            "db.sqlite",
+            "--generated-at",
+            "2026-10-16T00:00:00Z"
+        ])
+        .unwrap_err()
+        .message
+        .contains("--request"));
     }
 
     #[test]
@@ -214,13 +224,15 @@ mod tests {
             "--generated-at",
             "2026-10-16T00:00:00Z",
         ];
-        for percentage in ["-1", "101", "NaN", "Infinity", "not-a-number"] {
-            let mut args = prefix.to_vec();
-            args.extend(["--five-hour-used-percent", percentage]);
-            assert_eq!(
-                parse(&args).unwrap_err().code,
-                "invalid_manual_meter_percentage"
-            );
+        for flag in ["--five-hour-used-percent", "--weekly-used-percent"] {
+            for percentage in ["-1", "101", "NaN", "Infinity", "not-a-number"] {
+                let mut args = prefix.to_vec();
+                args.extend([flag, percentage]);
+                assert_eq!(
+                    parse(&args).unwrap_err().code,
+                    "invalid_manual_meter_percentage"
+                );
+            }
         }
         let mut duplicate = prefix.to_vec();
         duplicate.extend(["--weekly-used-percent", "20", "--weekly-used-percent", "30"]);

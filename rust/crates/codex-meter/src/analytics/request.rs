@@ -329,6 +329,18 @@ mod tests {
         ] {
             assert!(AnalyticsRequest::parse(text.as_bytes()).is_err());
         }
+        for maximum in [0, (MAXIMUM_OBSERVATIONS + 1) as i64] {
+            let request = VALID.replace(
+                "\"maximum_observations\":10",
+                &format!("\"maximum_observations\":{maximum}"),
+            );
+            assert_eq!(
+                AnalyticsRequest::parse(request.as_bytes())
+                    .unwrap_err()
+                    .code,
+                "invalid_request"
+            );
+        }
     }
 
     #[test]

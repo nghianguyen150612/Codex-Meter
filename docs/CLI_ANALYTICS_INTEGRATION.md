@@ -97,7 +97,7 @@ The public AnalyticsRequest v1 remains exactly the existing closed schema. Rust 
 
 The local process context is separate and versioned as `ANALYTICS_PROCESS_PROTOCOL_VERSION = 1.0.0`. Rust passes these arguments individually to `python -m codex_meter.integration.worker`:
 
-- `--database`: canonical path to an existing database. It is not placed in AnalyticsRequest JSON.
+- `--database`: absolute path to an existing database. Relative paths are resolved from the CLI's working directory. It is not placed in AnalyticsRequest JSON.
 - `--runtime-context-version`: currently `1.0.0`; unknown versions fail closed.
 - `--generated-at`: explicit deterministic UTC result timestamp.
 - `--five-hour-used-percent` and `--weekly-used-percent`: optional manually supplied percentage points.

@@ -1,0 +1,120 @@
+name: Publish Codex Meter v0.1.0
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/publish-v0.1.0.yml
+      - docs/GITHUB_RELEASE_NOTES_0.1.0.md
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v0.1.0.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: codex-meter-publish-v0.1.0
+  cancel-in-progress: false
+
+jobs:
+  verify-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-meter-0.1.0-candidates-run-39022653731
+          run-id: 39022653731
+          github-token: ${{ github.token }}
+          path: release-assets
+      - name: Verify P030 release candidate integrity and source identity
+        shell: bash
+        run: |
+          python scripts/p030_release_candidate.py verify --directory release-assets
+          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("release-assets")
+          expected = {
+              "codex-meter-0.1.0-linux-x86_64.tar.gz": "a0f14b1fb10c38f971113363ada8bf0fc9fe4f5a7c1c7998b358e541c443b758",
+              "codex-meter-0.1.0-windows-x86_64.zip": "b6295c8522ca7b4c0bea03d8582d7153d6dba6a5aa372dccfa429b9982024d68",
+              "codex-meter-0.1.0-macos-x86_64.tar.gz": "0bf11a808375a8578b9dbde755cf9f100675941d6a2b448f103872bbcd6cb06c",
+              "codex-meter-0.1.0-macos-arm64.tar.gz": "1789d1385b6d8be18a95f77526ee01c5e48d6feb300c765266daee8e3429ba48",
+              "codex_meter_analytics-0.1.0-py3-none-any.whl": "98777ada1c620ecc390b8d1f67d0c6b5312b13e30b6211eff95b33879e62c39f",
+              "artifact-manifest.json": "b21fe159d51e51702a219f527f4d5afdc91e0e653ccd5c19d15d2621503ee3d5",
+          }
+          actual = {p.name for p in root.iterdir()}
+          assert actual == set(expected) | {"SHA256SUMS.txt"}, actual
+          for name, digest in expected.items():
+              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
+          manifest = json.loads((root / "artifact-manifest.json").read_text())
+          assert manifest["product_version"] == "0.1.0"
+          assert manifest["source_commit_sha"] == "171b54ee4f80c007ab6e0b4af3cd1bb22613e755"
+          assert manifest["workflow_run_id"] == "39022653731"
+          assert manifest["source_ref"] == "refs/heads/main"
+          assert len(manifest["artifacts"]) == 4
+          PY
+
+  publish:
+    needs: verify-candidate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-meter-0.1.0-candidates-run-39022653731
+          run-id: 39022653731
+          github-token: ${{ github.token }}
+          path: release-assets
+      - name: Verify release assets again before creating the tag
+        shell: bash
+        run: |
+          python scripts/p030_release_candidate.py verify --directory release-assets
+          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+      - name: Create draft, verify uploaded files, and publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v0.1.0
+          source_sha=171b54ee4f80c007ab6e0b4af3cd1bb22613e755
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Refusing to overwrite an existing GitHub Release"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Refusing to overwrite an existing Git tag"
+            exit 1
+          fi
+          gh release create "$tag" release-assets/* \
+            --target "$source_sha" \
+            --title "Codex Meter v0.1.0 — Technical Preview" \
+            --notes-file docs/GITHUB_RELEASE_NOTES_0.1.0.md \
+            --draft \
+            --prerelease
+          actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+          expected="$(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "Uploaded release asset inventory mismatch; draft left unpublished"
+            exit 1
+          fi
+          gh release edit "$tag" --draft=false
+          gh release view "$tag" --json url,tagName,isDraft,isPrerelease,assets \
+            --jq '{url, tagName, isDraft, isPrerelease, asset_count: (.assets | length)}'

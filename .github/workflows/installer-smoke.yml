@@ -1,0 +1,60 @@
+name: Installer smoke
+
+on:
+  pull_request:
+    paths:
+      - scripts/install.sh
+      - scripts/install.ps1
+      - docs/SCRIPT_INSTALLATION.md
+      - .github/workflows/installer-smoke.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - scripts/install.ps1
+      - .github/workflows/installer-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  user-local-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unix syntax and isolated user-local install
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash -n scripts/install.sh
+          mkdir -p "$RUNNER_TEMP/codex-meter-userhome"
+          export HOME="$RUNNER_TEMP/codex-meter-userhome"
+          export CODEX_METER_PYTHON="$(command -v python)"
+          bash scripts/install.sh
+          "$HOME/.local/bin/codex-meter" --version
+          "$HOME/.local/bin/codex-meter" estimate --help
+      - name: Windows PowerShell syntax and isolated user-local install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "codex-meter-test-appdata"
+          New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path .\scripts\install.ps1).Path, [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { throw "PowerShell installer syntax check failed" }
+          & .\scripts\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Installer execution failed" }
+          & (Join-Path $env:LOCALAPPDATA 'Programs\Codex Meter\bin\codex-meter.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed binary version check failed" }

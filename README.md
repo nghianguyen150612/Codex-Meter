@@ -14,6 +14,10 @@ Candidate artifacts are unpublished and require manual release review. See the
 The product loop is **Track → Measure → Estimate → Compare**, while keeping raw tokens,
 weighted/effective usage, and plan quota as distinct measurement domains.
 
+## Quick install (v0.1.0 technical preview)
+
+User-local scripts for Linux/macOS and Windows are in [script installation](docs/SCRIPT_INSTALLATION.md). They download pinned v0.1.0 assets, verify SHA-256 hashes, and install the native CLI plus matching Python wheel. No root/Administrator permissions or provider credentials are needed. An existing compatible SQLite database remains necessary for estimates.
+
 ## Development
 
 The repository contains a Rust `codex-meter` CLI, an internal Python analytics package, versioned

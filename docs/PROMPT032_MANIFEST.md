@@ -8,8 +8,9 @@
   the two-parent P031 merge commit.
 - Feature branch: `feat/p032-usage-history-cli`.
 - P031's v0.1.0 tag `171b54ee4f80c007ab6e0b4af3cd1bb22613e755` was preserved.
-- Pull request and final commit SHAs: recorded after the feature branch is
-  pushed and the PR is opened.
+- Pull request #27: https://github.com/nghianguyen150612/Codex-Meter/pull/27
+  (Draft; not merged).
+- Implementation commit: `90b575200057af36738db2bc7dc0793c2956a108`.
 - The reference Arch device is not attached to this environment. Live Codex
   version compatibility and real-device quota accuracy remain unverified.
 
@@ -69,13 +70,15 @@ Local validation completed on the feature branch:
 - P030 version check, local Linux x86_64 candidate packaging, and extracted
   candidate smoke — passed. The candidate was not published.
 - `git diff --check` — passed.
+- GitHub Actions for PR #27 passed: Rust quality, Rust tests on Linux/macOS/
+  Windows, Python quality, contracts, installed-runtime matrix, shared wheel,
+  and Linux/macOS/Windows platform bundle jobs.
 
 An additional test invocation with `--all-features` enables the
 `release-artifact` feature and fails two existing analytics tests that require
 source-checkout worker discovery. That feature deliberately disables source
 mode. The repository's prescribed default workspace test command passes, and
-the release-artifact behavior passes the P030 installed-worker smoke. GitHub
-Actions results are recorded after the Draft PR is opened.
+the release-artifact behavior passes the P030 installed-worker smoke.
 
 ## Reference Arch live-device gate
 

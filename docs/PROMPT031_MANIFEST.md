@@ -5,7 +5,9 @@
 - Status: **PARTIAL** until the Arch device gate, required GitHub checks, and PR closeout have been completed.
 - Verified starting `origin/main` SHA: `bcabc4c20b0e4f877c2e01e936ddd79a1b10799e0`.
 - Feature branch: `feat/p031-real-codex-ingestion`.
-- Intended commit: `feat: ingest real Codex telemetry into durable SQLite history`.
+- Implementation commits:
+  - `7870caeb995a47d4e18448144221e0abe75a1e7f` — `feat: ingest real Codex telemetry into durable SQLite history`.
+  - `7dde98879d71d11288170b81bc501ef16aa379ed` — `fix: preserve estimator command help after sync addition`.
 - PR title: `Integrate real Codex telemetry ingestion and persistent usage history`.
 - PR URL and CI results: pending.
 - Merge: intentionally pending while the required live-device gate is unavailable.
@@ -33,8 +35,9 @@ Local feature-branch gates passed in the implementation environment:
 - `uv sync --project python --frozen` and `uv lock --check --project python`.
 - Rust format check, Clippy with `-D warnings`, and workspace tests: 300 unit tests, 4 analytics CLI integration tests, and 19 sync CLI integration tests passed.
 - Locked workspace build, Python suite (637 passed), Ruff lint/format, and contract validation (6 schemas, 16 positive fixtures, 5 negative fixtures).
-- P029 installed-runtime smoke and P030 release-version policy check.
-- P030 candidate installed-runtime smoke and PR CI remain pending until after the implementation commit and Draft PR are created.
+- P029 installed-runtime smoke and P030 release-version policy check passed.
+- P030 x86_64 Linux release-artifact candidate package and installed-runtime smoke passed, including relocation, installed worker, sufficient/insufficient estimates, determinism, compatibility, and read-only SQLite.
+- PR CI remains pending until a Draft PR is created.
 
 These are fixture and local-runtime results only. No test output is claimed as real-device evidence.
 

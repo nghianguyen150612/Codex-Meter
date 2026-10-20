@@ -24,7 +24,7 @@ from .models import (
     ResetStatus,
 )
 
-SUPPORTED_MIGRATION_VERSION = 4
+SUPPORTED_MIGRATION_VERSION = 5
 DEFAULT_BUSY_TIMEOUT_SECONDS = 5.0
 MAXIMUM_OBSERVATIONS_SAFETY_LIMIT = 100_000
 
@@ -60,6 +60,11 @@ MIGRATIONS = (
         4,
         "0004_observation_time_keys",
         "97aaebf9ca9c856b42cd88089ee17f84cbe3010ad4e37246ecd7118417d14f6c",
+    ),
+    (
+        5,
+        "0005_usage_evidence",
+        "7cbe9431d18df52608fdd90b43f029ff06e11c954558d5c74e1338fd644b7abd",
     ),
 )
 
@@ -359,7 +364,7 @@ def _validate_storage(connection: sqlite3.Connection) -> int:
         if version != index or expected is None or name != expected[0] or checksum != expected[1]:
             raise MigrationDriftError(f"migration history drift at version {version}")
     latest = migration_rows[-1][0] if migration_rows else 0
-    if latest != SUPPORTED_MIGRATION_VERSION:
+    if latest < 4:
         raise StorageCompatibilityError("database migration version is not supported")
 
     try:

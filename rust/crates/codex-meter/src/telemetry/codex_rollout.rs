@@ -466,13 +466,13 @@ fn parse_session_meta(
     Ok(SessionMetaRecord {
         session_id: required_string(object, Some(record_type), "session_id", MAX_SAFE_ID_LENGTH)?,
         thread_id: required_string(object, Some(record_type), "id", MAX_SAFE_ID_LENGTH)?,
-        cli_version: required_string(
+        cli_version: required_safe_label(
             object,
             Some(record_type),
             "cli_version",
             MAX_SAFE_TEXT_LENGTH,
         )?,
-        model_provider: optional_string(
+        model_provider: optional_safe_label(
             object,
             Some(record_type),
             "model_provider",
@@ -495,8 +495,8 @@ fn parse_turn_context(
             "root_turn_id",
             MAX_SAFE_ID_LENGTH,
         )?,
-        model: required_string(object, Some(record_type), "model", MAX_SAFE_TEXT_LENGTH)?,
-        reasoning_effort: optional_string(
+        model: required_safe_label(object, Some(record_type), "model", MAX_SAFE_TEXT_LENGTH)?,
+        reasoning_effort: optional_safe_label(
             object,
             Some(record_type),
             "effort",
@@ -516,20 +516,20 @@ fn parse_thread_settings(
     )?;
     Ok(ThreadSettingsAppliedRecord {
         thread_id: optional_string(object, Some(record_type), "thread_id", MAX_SAFE_ID_LENGTH)?,
-        model: required_string(settings, Some(record_type), "model", MAX_SAFE_TEXT_LENGTH)?,
-        model_provider: required_string(
+        model: required_safe_label(settings, Some(record_type), "model", MAX_SAFE_TEXT_LENGTH)?,
+        model_provider: required_safe_label(
             settings,
             Some(record_type),
             "model_provider_id",
             MAX_SAFE_TEXT_LENGTH,
         )?,
-        reasoning_effort: optional_string(
+        reasoning_effort: optional_safe_label(
             settings,
             Some(record_type),
             "reasoning_effort",
             MAX_SAFE_TEXT_LENGTH,
         )?,
-        service_tier: optional_string(
+        service_tier: optional_safe_label(
             settings,
             Some(record_type),
             "service_tier",
@@ -904,6 +904,64 @@ fn optional_string(
     }
     let record_type = record_type.unwrap_or("rollout");
     parse_string(value, record_type, field, max_length, false).map(Some)
+}
+
+fn required_safe_label(
+    object: &Map<String, Value>,
+    record_type: Option<&str>,
+    field: &'static str,
+    max_length: usize,
+) -> Result<String, RolloutDecodeError> {
+    let record_name = record_type.unwrap_or("rollout");
+    let value = required_string(object, Some(record_name), field, max_length)?;
+    if is_safe_metadata_label(&value) {
+        Ok(value)
+    } else {
+        Err(invalid_value(
+            record_name,
+            field,
+            InvalidFieldReason::UnsafeString,
+        ))
+    }
+}
+
+fn optional_safe_label(
+    object: &Map<String, Value>,
+    record_type: Option<&str>,
+    field: &'static str,
+    max_length: usize,
+) -> Result<Option<String>, RolloutDecodeError> {
+    let record_name = record_type.unwrap_or("rollout");
+    let value = optional_string(object, Some(record_name), field, max_length)?;
+    if value
+        .as_deref()
+        .is_some_and(|value| !is_safe_metadata_label(value))
+    {
+        return Err(invalid_value(
+            record_name,
+            field,
+            InvalidFieldReason::UnsafeString,
+        ));
+    }
+    Ok(value)
+}
+
+/// Configuration labels are identifiers, not free text. Restrict their
+/// alphabet before they enter persistent runtime state or evidence rows.
+fn is_safe_metadata_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
 }
 
 fn parse_string(

@@ -18,9 +18,19 @@ pub struct EstimateArguments {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SyncArguments {
+    pub codex_home: Option<PathBuf>,
+    pub database: Option<PathBuf>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     Help,
+    SyncHelp,
+    EstimateHelp,
     Version,
+    Sync(SyncArguments),
     Estimate(EstimateArguments),
 }
 
@@ -50,6 +60,9 @@ where
     if arguments == [OsStr::new("--version")] {
         return Ok(CliAction::Version);
     }
+    if arguments[0] == OsStr::new("sync") {
+        return parse_sync_args(&arguments[1..]);
+    }
     if arguments[0] != OsStr::new("estimate") {
         return Err(error(
             "unknown_command",
@@ -61,7 +74,7 @@ where
         .skip(1)
         .any(|argument| argument == OsStr::new("--help"))
     {
-        return Ok(CliAction::Help);
+        return Ok(CliAction::EstimateHelp);
     }
 
     let mut seen = HashSet::new();
@@ -150,6 +163,63 @@ where
     }))
 }
 
+fn parse_sync_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments
+        .iter()
+        .any(|argument| argument == OsStr::new("--help"))
+    {
+        return Ok(CliAction::SyncHelp);
+    }
+    let mut seen = HashSet::new();
+    let mut codex_home = None;
+    let mut database = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = arguments[index]
+            .to_str()
+            .ok_or_else(|| error("invalid_argument", "command flags must be valid UTF-8"))?;
+        if flag == "--json" {
+            if !seen.insert(flag.to_owned()) {
+                return Err(error("invalid_argument", "duplicate --json flag"));
+            }
+            json = true;
+            index += 1;
+            continue;
+        }
+        let target = match flag {
+            "--codex-home" => 0,
+            "--database" => 1,
+            _ => return Err(error("unknown_argument", "unknown sync argument")),
+        };
+        if !seen.insert(flag.to_owned()) {
+            return Err(error("invalid_argument", "duplicate sync argument"));
+        }
+        index += 1;
+        let value = arguments
+            .get(index)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                error(
+                    "invalid_argument",
+                    "sync argument requires a non-empty value",
+                )
+            })?
+            .clone();
+        match target {
+            0 => codex_home = Some(PathBuf::from(value)),
+            1 => database = Some(PathBuf::from(value)),
+            _ => unreachable!(),
+        }
+        index += 1;
+    }
+    Ok(CliAction::Sync(SyncArguments {
+        codex_home,
+        database,
+        json,
+    }))
+}
+
 fn parse_percentage(value: &OsStr, label: &str) -> Result<f64, CliError> {
     let value = utf8_value(value, label)?;
     let parsed = value.parse::<f64>().map_err(|_| {
@@ -177,7 +247,15 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — empirical current-capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter estimate --help\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nOPTIONS:\n    --database PATH                 Existing Codex Meter SQLite database\n    --request FILE                  AnalyticsRequest v1 JSON file\n    --generated-at UTC_TIMESTAMP    Explicit UTC timestamp ending in Z\n    --five-hour-used-percent N      Manually supplied five-hour used percentage points\n    --weekly-used-percent N         Manually supplied weekly used percentage points\n    --python PATH                   Python interpreter executable (default: python)\n    --worker-mode MODE              auto (default), source, or installed\n    --json                          Emit only validated AnalyticsResult v1 JSON\n    --help                          Show this help\n\nCurrent meter percentages are manual and unverified. No provider API is called.\n"
+    "Codex Meter — local Codex usage evidence and empirical capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter sync [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    sync                            Ingest local Codex rollout evidence into SQLite\n    estimate                        Estimate current capacity from an existing dataset\n\nUse `codex-meter sync --help` or `codex-meter estimate --help` for command options.\nNo provider API is called.\n"
+}
+
+pub fn sync_help_text() -> &'static str {
+    "Codex Meter — local Codex usage sync\n\nUSAGE:\n    codex-meter sync [OPTIONS]\n\nOPTIONS:\n    --codex-home PATH    Read a specific local Codex home\n    --database PATH      Use an explicit Codex Meter SQLite database\n    --json               Emit a privacy-safe JSON summary\n    --help               Show this help\n\nSupported input: plain Codex rollout JSONL for the audited Codex CLI 0.157.1 format.\nCompressed .jsonl.zst files are detected and reported as skipped.\n"
+}
+
+pub fn estimate_help_text() -> &'static str {
+    "Codex Meter — empirical current-capacity estimates\n\nUSAGE:\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nOPTIONS:\n    --database PATH                 Existing Codex Meter SQLite database\n    --request FILE                  AnalyticsRequest v1 JSON file\n    --generated-at UTC_TIMESTAMP    Explicit UTC timestamp ending in Z\n    --five-hour-used-percent N      Manually supplied five-hour used percentage points\n    --weekly-used-percent N         Manually supplied weekly used percentage points\n    --python PATH                   Python interpreter executable (default: python)\n    --worker-mode MODE              auto (default), source, or installed\n    --json                          Emit only validated AnalyticsResult v1 JSON\n    --help                          Show this help\n\nCurrent meter percentages are manual and unverified. No provider API is called.\n"
 }
 
 fn error(code: &'static str, message: &str) -> CliError {
@@ -199,7 +277,10 @@ mod tests {
     fn handles_help_version_and_estimate_help() {
         assert_eq!(parse(&["--help"]).unwrap(), CliAction::Help);
         assert_eq!(parse(&["--version"]).unwrap(), CliAction::Version);
-        assert_eq!(parse(&["estimate", "--help"]).unwrap(), CliAction::Help);
+        assert_eq!(
+            parse(&["estimate", "--help"]).unwrap(),
+            CliAction::EstimateHelp
+        );
     }
 
     #[test]

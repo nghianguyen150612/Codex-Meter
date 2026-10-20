@@ -32,7 +32,7 @@ def _migration_sql(version: int, name: str) -> str:
     return path.read_text()
 
 
-def _create_database(path: Path, latest: int = 4) -> None:
+def _create_database(path: Path, latest: int = 5) -> None:
     connection = sqlite3.connect(path)
     connection.executescript(
         """
@@ -194,10 +194,17 @@ def test_old_database_is_rejected(tmp_path: Path) -> None:
         ObservationDatabase.open(path)
 
 
+def test_version_four_database_remains_readable(tmp_path: Path) -> None:
+    path = tmp_path / "version-four.sqlite"
+    _create_database(path, latest=4)
+    with ObservationDatabase.open(path) as database:
+        assert database.load_dataset().migration_version == 4
+
+
 def test_new_database_is_rejected(database_path: Path) -> None:
     connection = sqlite3.connect(database_path)
     connection.execute(
-        "INSERT INTO schema_migrations VALUES (5, '0005_future', '" + "0" * 64 + "')"
+        "INSERT INTO schema_migrations VALUES (6, '0006_future', '" + "0" * 64 + "')"
     )
     connection.commit()
     connection.close()

@@ -83,9 +83,13 @@ error. An unknown or missing fixture fails validation rather than being silently
 
 ## Current scope
 
-The Rust executable exposes `codex-meter estimate` for empirical current-capacity estimates. It
-validates AnalyticsRequest v1, invokes the locked Python analytics package through a bounded local
-subprocess, reads the existing SQLite dataset strictly read-only, and validates AnalyticsResult v1
-before rendering output. See [CLI analytics integration](CLI_ANALYTICS_INTEGRATION.md) for setup,
-examples, supported options, and current limitations. Automatic quota acquisition and other
-analysis types are not exposed by this command.
+The Rust executable exposes `codex-meter sync` for one-shot, local Codex rollout ingestion and
+`codex-meter estimate` for empirical current-capacity estimates. `sync` is native Rust, migrates its
+per-user SQLite database, and currently accepts the audited Codex CLI 0.157.1 plain JSONL format;
+it does not run a watcher. See [v0.2 real telemetry ingestion](V02_REAL_TELEMETRY_INGESTION.md) for
+discovery, storage, privacy, and compatibility limits. `estimate` validates AnalyticsRequest v1,
+invokes the locked Python analytics package through a bounded local subprocess, reads the selected
+SQLite dataset strictly read-only, and validates AnalyticsResult v1 before rendering output. See
+[CLI analytics integration](CLI_ANALYTICS_INTEGRATION.md) for setup, examples, supported options,
+and current limitations. Automatic quota acquisition and other analysis types are not exposed by
+these commands.

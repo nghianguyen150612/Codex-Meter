@@ -7,9 +7,14 @@
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 
+use sha2::{Digest, Sha256};
+
 use super::codex_rollout::{parse_rollout_record, RolloutDecodeError, RolloutRecord};
 
 const MAX_ID_LENGTH: usize = 128;
+const MAX_RECORD_BYTES: usize = 1024 * 1024;
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BATCH_RECORDS: usize = 2_048;
 
 /// Opaque caller-supplied identity for one logical rollout and its physical generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +114,9 @@ pub struct ReadBatch {
     pub items: Vec<ReadItem>,
     pub next_cursor: RolloutCursor,
     pub has_incomplete_tail: bool,
+    /// Hash of the last complete raw line read in this batch. The raw line is
+    /// discarded immediately and is never exposed through the source model.
+    pub last_line_sha256: Option<String>,
 }
 
 /// Safe result for one complete newline-terminated line.
@@ -159,6 +167,9 @@ pub enum IncrementalReadError {
     SourceTruncated {
         committed_offset: u64,
         current_length: u64,
+    },
+    RecordTooLarge {
+        maximum_bytes: usize,
     },
     OffsetOverflow {
         offset: u64,
@@ -228,6 +239,10 @@ impl fmt::Display for IncrementalReadError {
                 formatter,
                 "source length {current_length} is below committed offset {committed_offset}"
             ),
+            Self::RecordTooLarge { maximum_bytes } => write!(
+                formatter,
+                "rollout record exceeds the {maximum_bytes}-byte source limit"
+            ),
             Self::OffsetOverflow {
                 offset,
                 line_length,
@@ -287,16 +302,31 @@ pub fn read_available<R: Read + Seek>(
     let mut next_cursor = cursor.clone();
     let mut items = Vec::new();
     let mut has_incomplete_tail = false;
+    let mut last_line_sha256 = None;
     let mut line = Vec::new();
+    let mut batch_bytes = 0_usize;
 
     loop {
+        if items.len() >= MAX_BATCH_RECORDS || batch_bytes >= MAX_BATCH_BYTES {
+            break;
+        }
+        // Leave room for one maximum-sized record. The next call resumes at
+        // the current complete-line cursor when a batch reaches its byte cap.
+        if MAX_BATCH_BYTES - batch_bytes < MAX_RECORD_BYTES {
+            break;
+        }
         line.clear();
         let start_offset = next_cursor.committed_offset;
-        let bytes_read = buffered
-            .read_until(b'\n', &mut line)
+        let line_status = read_bounded_line(&mut buffered, &mut line, MAX_RECORD_BYTES)
             .map_err(|error| io_error(IoOperation::ReadLine, error))?;
-        if bytes_read == 0 {
+        let bytes_read = line.len();
+        if bytes_read == 0 && line_status == BoundedLineStatus::Eof {
             break;
+        }
+        if line_status == BoundedLineStatus::TooLarge {
+            return Err(IncrementalReadError::RecordTooLarge {
+                maximum_bytes: MAX_RECORD_BYTES,
+            });
         }
 
         let line_length =
@@ -311,12 +341,14 @@ pub fn read_available<R: Read + Seek>(
                     offset: start_offset,
                     line_length: bytes_read,
                 })?;
-        if line.last() != Some(&b'\n') {
+        if line_status == BoundedLineStatus::Incomplete {
             has_incomplete_tail = true;
             break;
         }
 
         next_cursor.committed_offset = end_offset;
+        batch_bytes = batch_bytes.saturating_add(bytes_read);
+        last_line_sha256 = Some(sha256_hex(&line));
         let record_bytes = &line[..line.len() - 1];
         let record_bytes = record_bytes.strip_suffix(b"\r").unwrap_or(record_bytes);
         let outcome = if record_bytes.is_empty() {
@@ -365,7 +397,57 @@ pub fn read_available<R: Read + Seek>(
         items,
         next_cursor,
         has_incomplete_tail,
+        last_line_sha256,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoundedLineStatus {
+    Eof,
+    Complete,
+    Incomplete,
+    TooLarge,
+}
+
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    maximum_bytes: usize,
+) -> io::Result<BoundedLineStatus> {
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(if line.is_empty() {
+                BoundedLineStatus::Eof
+            } else {
+                BoundedLineStatus::Incomplete
+            });
+        }
+        let available_len = available.len();
+        let remaining = maximum_bytes.saturating_sub(line.len());
+        if remaining == 0 {
+            return Ok(BoundedLineStatus::TooLarge);
+        }
+        let inspect = available.len().min(remaining);
+        if let Some(newline) = available[..inspect].iter().position(|byte| *byte == b'\n') {
+            let count = newline + 1;
+            line.extend_from_slice(&available[..count]);
+            reader.consume(count);
+            return Ok(BoundedLineStatus::Complete);
+        }
+        line.extend_from_slice(&available[..inspect]);
+        reader.consume(inspect);
+        if inspect < available_len || line.len() == maximum_bytes {
+            return Ok(BoundedLineStatus::TooLarge);
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn validate_cursor_identity(cursor: &RolloutCursor) -> Result<(), IncrementalReadError> {

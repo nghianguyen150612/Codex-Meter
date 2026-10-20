@@ -780,8 +780,20 @@ fn concurrent_sync_processes_share_single_writer_history_without_duplicate_event
     let second = sync_command(&home, &database).spawn().unwrap();
     let first = first.wait_with_output().unwrap();
     let second = second.wait_with_output().unwrap();
-    assert!(first.status.success());
-    assert!(second.status.success());
+    assert!(
+        first.status.success(),
+        "first concurrent sync failed (status: {}): stdout={}, stderr={}",
+        first.status,
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second concurrent sync failed (status: {}): stdout={}, stderr={}",
+        second.status,
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
     let connection = Connection::open(&database).unwrap();
     let responses: i64 = connection
         .query_row(

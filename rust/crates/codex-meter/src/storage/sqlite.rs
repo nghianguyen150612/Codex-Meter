@@ -24,6 +24,8 @@ use super::usage_evidence::{
 use crate::telemetry::{RolloutCursor, SourceIdentity};
 
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const WAL_MODE_RETRY_LIMIT: usize = 40;
+const WAL_MODE_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -480,23 +482,69 @@ fn configure_connection(connection: &Connection, in_memory: bool) -> Result<(), 
     }
 
     if !in_memory {
-        let journal_mode: String = connection
-            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
-            .map_err(|source| StorageError::ConnectionConfiguration {
-                operation: "journal mode",
-                detail: "could not configure WAL",
-                source: Some(source),
-            })?;
-        if !journal_mode.eq_ignore_ascii_case("wal") {
-            return Err(StorageError::ConnectionConfiguration {
-                operation: "journal mode",
-                detail: "SQLite did not activate WAL",
-                source: None,
-            });
-        }
+        configure_wal_mode(connection)?;
     }
 
     Ok(())
+}
+
+fn configure_wal_mode(connection: &Connection) -> Result<(), StorageError> {
+    connection
+        .busy_timeout(WAL_MODE_RETRY_DELAY)
+        .map_err(|source| StorageError::ConnectionConfiguration {
+            operation: "busy timeout",
+            detail: "could not configure bounded WAL lock retries",
+            source: Some(source),
+        })?;
+    let result = configure_wal_mode_with_retries(connection);
+    connection
+        .busy_timeout(DEFAULT_BUSY_TIMEOUT)
+        .map_err(|source| StorageError::ConnectionConfiguration {
+            operation: "busy timeout",
+            detail: "could not restore the database busy timeout",
+            source: Some(source),
+        })?;
+    result
+}
+
+fn configure_wal_mode_with_retries(connection: &Connection) -> Result<(), StorageError> {
+    let mut retries = 0;
+    loop {
+        match connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        }) {
+            Ok(journal_mode) if journal_mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(_) => {
+                return Err(StorageError::ConnectionConfiguration {
+                    operation: "journal mode",
+                    detail: "SQLite did not activate WAL",
+                    source: None,
+                });
+            }
+            Err(source) if is_retryable_lock_error(&source) && retries < WAL_MODE_RETRY_LIMIT => {
+                retries += 1;
+                std::thread::sleep(WAL_MODE_RETRY_DELAY);
+            }
+            Err(source) => {
+                return Err(StorageError::ConnectionConfiguration {
+                    operation: "journal mode",
+                    detail: "could not configure WAL",
+                    source: Some(source),
+                });
+            }
+        }
+    }
+}
+
+fn is_retryable_lock_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, _)
+            if matches!(
+                code.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 #[cfg(test)]

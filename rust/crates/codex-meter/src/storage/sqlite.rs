@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use super::checkpoints::{
     encode_state, load_runtime_checkpoint,
@@ -14,6 +14,10 @@ use super::migrations::{migrate, validate_registry, Migration, MIGRATIONS};
 use super::observations::{
     list_observations_from_connection, load_observation_from_connection,
     save_observation_in_transaction, ObservationPage, ObservationQuery, StoredObservation,
+};
+use super::reporting::{
+    self, EvidenceDetail, EvidenceQualitySummary, QuotaHistoryCursor, QuotaTimeline,
+    TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
 };
 use super::usage_evidence::{
     commit_usage_batch, has_other_rollout_generation, history_summary, load_source_boundary,
@@ -97,6 +101,10 @@ pub enum StorageError {
     ObservationIdentityConflict,
     ObservationFormatUnsupported,
     ObservationQueryInvalid,
+    ReportingQueryInvalid,
+    ReportingEvidenceNotFound,
+    ReportingEvidenceAmbiguous,
+    ReportingTotalOverflow,
 }
 
 impl StorageError {
@@ -118,6 +126,10 @@ impl StorageError {
             Self::CheckpointSourceMismatch | Self::SourceBoundaryConflict => "source_changed",
             Self::CheckpointRevisionConflict { .. } => "checkpoint_conflict",
             Self::EvidenceConflict => "evidence_conflict",
+            Self::ReportingEvidenceNotFound => "event_not_found",
+            Self::ReportingEvidenceAmbiguous => "event_ambiguous",
+            Self::ReportingQueryInvalid => "invalid_query",
+            Self::ReportingTotalOverflow => "token_total_overflow",
             Self::EvidenceInvalid => "evidence_invalid",
             Self::CheckpointCursorInvalid
             | Self::CheckpointDecode
@@ -192,6 +204,10 @@ impl fmt::Display for StorageError {
             Self::ObservationIdentityConflict => write!(formatter, "observation identity does not match durable identity"),
             Self::ObservationFormatUnsupported => write!(formatter, "observation format is unsupported"),
             Self::ObservationQueryInvalid => write!(formatter, "observation query is invalid"),
+            Self::ReportingQueryInvalid => write!(formatter, "reporting query is invalid"),
+            Self::ReportingEvidenceNotFound => write!(formatter, "usage evidence was not found"),
+            Self::ReportingEvidenceAmbiguous => write!(formatter, "usage evidence identifier is ambiguous"),
+            Self::ReportingTotalOverflow => write!(formatter, "token total exceeds the supported integer range"),
         }
     }
 }
@@ -231,7 +247,11 @@ impl Error for StorageError {
             | Self::ObservationProjectionMismatch
             | Self::ObservationIdentityConflict
             | Self::ObservationFormatUnsupported
-            | Self::ObservationQueryInvalid => None,
+            | Self::ObservationQueryInvalid
+            | Self::ReportingQueryInvalid
+            | Self::ReportingEvidenceNotFound
+            | Self::ReportingEvidenceAmbiguous
+            | Self::ReportingTotalOverflow => None,
         }
     }
 }
@@ -431,6 +451,179 @@ impl SqliteStore {
     #[cfg(test)]
     pub(crate) fn connection(&self) -> &Connection {
         &self.connection
+    }
+}
+
+/// A schema-validated SQLite repository opened with read-only SQLite flags.
+/// It never creates files or applies migrations.
+#[derive(Debug)]
+pub struct SqliteReadStore {
+    connection: Connection,
+    info: StorageInfo,
+}
+
+impl SqliteReadStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|source| StorageError::Open { source })?;
+        connection
+            .busy_timeout(DEFAULT_BUSY_TIMEOUT)
+            .map_err(StorageError::sqlite)?;
+        connection
+            .pragma_update(None, "query_only", true)
+            .map_err(StorageError::sqlite)?;
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .map_err(StorageError::sqlite)?;
+        let info =
+            super::migrations::validate_readonly(&connection, super::migrations::MIGRATIONS)?;
+        let required_tables = [
+            "storage_metadata",
+            "runtime_checkpoints",
+            "observations",
+            "token_usage_evidence",
+            "quota_snapshot_evidence",
+            "ingestion_diagnostics",
+            "source_boundary_fingerprints",
+        ];
+        for table in required_tables {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .map_err(StorageError::sqlite)?;
+            if !exists {
+                return Err(StorageError::MigrationHistoryCorrupt {
+                    detail: "database schema is incomplete",
+                    source: None,
+                });
+            }
+        }
+        let required_columns: [(&str, &[&str]); 3] = [
+            (
+                "token_usage_evidence",
+                &[
+                    "event_id",
+                    "source_id",
+                    "session_id",
+                    "task_id",
+                    "observed_at",
+                    "record_semantic",
+                    "model",
+                    "reasoning_level",
+                    "service_tier",
+                    "codex_version",
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "cache_write_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "raw_total",
+                    "evidence_status",
+                    "schema_version",
+                    "evidence_sha256",
+                ],
+            ),
+            (
+                "quota_snapshot_evidence",
+                &[
+                    "sample_id",
+                    "source_id",
+                    "session_id",
+                    "observed_at",
+                    "meter_type",
+                    "used_percent",
+                    "reset_at",
+                    "plan",
+                    "codex_version",
+                    "evidence_status",
+                    "schema_version",
+                    "evidence_sha256",
+                ],
+            ),
+            (
+                "ingestion_diagnostics",
+                &[
+                    "diagnostic_id",
+                    "source_id",
+                    "observed_at",
+                    "record_semantic",
+                    "diagnostic_code",
+                    "schema_version",
+                    "evidence_sha256",
+                ],
+            ),
+        ];
+        for (table, columns) in required_columns {
+            let sql = format!("PRAGMA table_info('{table}')");
+            let actual = connection
+                .prepare(&sql)
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([], |row| row.get::<_, String>(1))
+                        .and_then(|rows| {
+                            rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+                        })
+                })
+                .map_err(StorageError::sqlite)?;
+            if columns.iter().any(|column| !actual.contains(*column)) {
+                return Err(StorageError::MigrationHistoryCorrupt {
+                    detail: "database schema is incomplete",
+                    source: None,
+                });
+            }
+        }
+        let query_only: i64 = connection
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .map_err(StorageError::sqlite)?;
+        if query_only != 1 {
+            return Err(StorageError::ConnectionConfiguration {
+                operation: "read-only mode",
+                detail: "SQLite query-only mode could not be enabled",
+                source: None,
+            });
+        }
+        Ok(Self { connection, info })
+    }
+
+    pub fn info(&self) -> StorageInfo {
+        self.info
+    }
+
+    pub fn token_statistics(
+        &mut self,
+        query: &TokenStatisticsQuery,
+    ) -> Result<TokenStatistics, StorageError> {
+        reporting::token_statistics(&mut self.connection, query)
+    }
+
+    pub fn token_history(
+        &mut self,
+        query: &TokenHistoryQuery,
+    ) -> Result<TokenHistoryPage, StorageError> {
+        reporting::token_history(&mut self.connection, query)
+    }
+
+    pub fn quota_timeline(
+        &mut self,
+        include_history: bool,
+        limit: u32,
+        cursor: Option<&QuotaHistoryCursor>,
+    ) -> Result<QuotaTimeline, StorageError> {
+        reporting::quota_timeline(&mut self.connection, include_history, limit, cursor)
+    }
+
+    pub fn inspect(&mut self, evidence_id: &str) -> Result<EvidenceDetail, StorageError> {
+        reporting::inspect(&mut self.connection, evidence_id)
+    }
+
+    pub fn evidence_quality(&mut self) -> Result<EvidenceQualitySummary, StorageError> {
+        reporting::evidence_quality(&mut self.connection)
     }
 }
 
@@ -657,8 +850,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 5,
-                latest_applied_migration: 5,
+                latest_supported_migration: 6,
+                latest_applied_migration: 6,
             }
         );
         let tables = store
@@ -688,7 +881,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 5);
+        assert_eq!(migration_count, 6);
     }
 
     #[test]
@@ -720,27 +913,27 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 5);
+            assert_eq!(migration_count, 6);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
     }
 
     #[test]
-    fn production_open_upgrades_a_version_one_database_to_version_three() {
+    fn production_open_upgrades_a_version_one_database_to_latest_schema() {
         let path = database_path();
         let version_one = open_with_migrations(&path, false, ONE_MIGRATION).unwrap();
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 5);
+        assert_eq!(upgraded.info().latest_applied_migration, 6);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 5);
+        assert_eq!(migration_count, 6);
         drop(upgraded);
         remove_database(&path);
     }
@@ -761,7 +954,7 @@ mod tests {
             stored.payload_sha256
         };
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 5);
+        assert_eq!(store.info().latest_applied_migration, 6);
         let (json, checksum, started, ended, finalized): (String, String, String, String, String) = store.connection().query_row("SELECT observation_json, observation_sha256, started_at, ended_at, finalized_at FROM observations", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
         assert_eq!(checksum, payload_checksum);
         assert_eq!(json, serde_json::to_string(&observation).unwrap());
@@ -788,6 +981,44 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
             .unwrap();
         assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn read_only_repository_never_creates_or_writes_a_database() {
+        let path = database_path();
+        remove_database(&path);
+        assert!(matches!(
+            SqliteReadStore::open(&path),
+            Err(StorageError::Open { .. })
+        ));
+        assert!(!path.exists());
+
+        let store = SqliteStore::open(&path).unwrap();
+        drop(store);
+        let reader = SqliteReadStore::open(&path).unwrap();
+        let query_only: i64 = reader
+            .connection
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(query_only, 1);
+        assert!(reader
+            .connection
+            .execute(
+                "INSERT INTO storage_metadata (key, value) VALUES ('read-only-test', 'x')",
+                []
+            )
+            .is_err());
+        drop(reader);
+        let writer = SqliteStore::open(&path).unwrap();
+        let count: i64 = writer
+            .connection()
+            .query_row("SELECT count(*) FROM storage_metadata", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(writer);
+        remove_database(&path);
     }
 
     #[test]
@@ -873,7 +1104,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 5
+                latest_supported_migration: 6
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -882,7 +1113,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         drop(connection);
         remove_database(&path);
     }

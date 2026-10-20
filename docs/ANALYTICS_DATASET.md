@@ -33,10 +33,12 @@ writable or general-purpose connection API. A missing path raises a typed
 error and never creates an empty database file.
 
 Before reading rows, the reader requires `schema_migrations` and
-`observations`, then validates migration history versions 1 through 4 in
-order. Each version must have the expected name and SHA-256 checksum. A gap,
+`observations`, then validates the recorded migration history in order through
+version 6. Each version must have the expected name and SHA-256 checksum. A gap,
 name/checksum drift, missing migration, migration version below 4, or a
-database newer than 4 is rejected. The reader does not execute migration SQL;
+database newer than 6 is rejected. Migration 6 adds only time-ordered history
+indexes for native reporting; it does not alter Observation or analytics
+semantics. The reader does not execute migration SQL;
 Rust is the only migration owner. The required Observation projection columns
 are also checked before loading.
 

@@ -148,7 +148,7 @@ impl IngestionDiagnosticCode {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "malformed_record" => Self::MalformedRecord,
             "empty_record" => Self::EmptyRecord,
@@ -236,7 +236,7 @@ pub struct UsageEvidenceBatch<'a> {
 }
 
 impl TokenUsageEvidence {
-    fn validate(&self) -> Result<(), StorageError> {
+    pub(crate) fn validate(&self) -> Result<(), StorageError> {
         validate_identifier(&self.event_id)?;
         validate_identifier(&self.source_id)?;
         validate_optional_identifier(self.session_id.as_deref())?;
@@ -263,7 +263,7 @@ impl TokenUsageEvidence {
 }
 
 impl QuotaSnapshotEvidence {
-    fn validate(&self) -> Result<(), StorageError> {
+    pub(crate) fn validate(&self) -> Result<(), StorageError> {
         validate_identifier(&self.sample_id)?;
         validate_identifier(&self.source_id)?;
         validate_optional_identifier(self.session_id.as_deref())?;
@@ -281,7 +281,7 @@ impl QuotaSnapshotEvidence {
 }
 
 impl IngestionDiagnostic {
-    fn validate(&self) -> Result<(), StorageError> {
+    pub(crate) fn validate(&self) -> Result<(), StorageError> {
         validate_identifier(&self.diagnostic_id)?;
         validate_identifier(&self.source_id)?;
         if let Some(timestamp) = self.observed_at.as_deref() {
@@ -712,7 +712,7 @@ fn verify_immutable_hash(
     }
 }
 
-fn canonical_hash<T: Serialize>(value: &T) -> Result<String, StorageError> {
+pub(crate) fn canonical_hash<T: Serialize>(value: &T) -> Result<String, StorageError> {
     let encoded = serde_json::to_vec(value).map_err(|_| StorageError::EvidenceInvalid)?;
     Ok(Sha256::digest(encoded)
         .iter()

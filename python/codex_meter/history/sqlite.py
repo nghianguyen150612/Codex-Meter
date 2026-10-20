@@ -24,7 +24,7 @@ from .models import (
     ResetStatus,
 )
 
-SUPPORTED_MIGRATION_VERSION = 5
+SUPPORTED_MIGRATION_VERSION = 6
 DEFAULT_BUSY_TIMEOUT_SECONDS = 5.0
 MAXIMUM_OBSERVATIONS_SAFETY_LIMIT = 100_000
 
@@ -65,6 +65,11 @@ MIGRATIONS = (
         5,
         "0005_usage_evidence",
         "7cbe9431d18df52608fdd90b43f029ff06e11c954558d5c74e1338fd644b7abd",
+    ),
+    (
+        6,
+        "0006_usage_history_indexes",
+        "d54003a1e27b9689729dd7dcfc296e98d1d25709c50c9f5e99152ddc4ae59edc",
     ),
 )
 

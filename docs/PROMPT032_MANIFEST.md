@@ -51,8 +51,31 @@ availability, unknown versus corrupt IDs, integer overflow, empty databases,
 read-only v5 compatibility, unchanged database bytes, privacy-safe structured
 output, and malformed/conflicting CLI options.
 
-Quality-gate results, full command output, diff review, and PR checks are
-recorded in the final closeout for this manifest after validation completes.
+Local validation completed on the feature branch:
+
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` — passed.
+- `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets
+  --all-features -- -D warnings` — passed.
+- `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets
+  --locked` — passed: 320 library tests, 4 analytics CLI integration tests,
+  and 19 sync CLI regression tests.
+- `cargo build --manifest-path rust/Cargo.toml --workspace --locked` and the
+  locked release-artifact build — passed.
+- `uv sync --project python --frozen`, Python tests (638 passed), Ruff lint and
+  format checks, `uv lock --project python --check`, and contract validation
+  (6 schemas, 16 positive fixtures, 5 negative fixtures) — passed.
+- P029 installed-runtime smoke — passed, including relocation, source mode,
+  deterministic output, concurrency, and read-only SQLite checks.
+- P030 version check, local Linux x86_64 candidate packaging, and extracted
+  candidate smoke — passed. The candidate was not published.
+- `git diff --check` — passed.
+
+An additional test invocation with `--all-features` enables the
+`release-artifact` feature and fails two existing analytics tests that require
+source-checkout worker discovery. That feature deliberately disables source
+mode. The repository's prescribed default workspace test command passes, and
+the release-artifact behavior passes the P030 installed-worker smoke. GitHub
+Actions results are recorded after the Draft PR is opened.
 
 ## Reference Arch live-device gate
 

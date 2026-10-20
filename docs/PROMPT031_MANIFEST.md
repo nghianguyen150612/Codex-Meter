@@ -9,7 +9,8 @@
   - `7870caeb995a47d4e18448144221e0abe75a1e7f` — `feat: ingest real Codex telemetry into durable SQLite history`.
   - `7dde98879d71d11288170b81bc501ef16aa379ed` — `fix: preserve estimator command help after sync addition`.
 - PR title: `Integrate real Codex telemetry ingestion and persistent usage history`.
-- PR URL and CI results: pending.
+- Draft PR: https://github.com/nghianguyen150612/Codex-Meter/pull/26.
+- CI: required checks are queued or running; results are pending.
 - Merge: intentionally pending while the required live-device gate is unavailable.
 - v0.1.0 tag, published assets, installer behavior, estimator mathematics, Python analytics schemas, and method versions were not changed.
 

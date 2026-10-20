@@ -2,15 +2,20 @@
 
 ## Status and Git workflow
 
-- Status: **PARTIAL** until the Arch device gate, required GitHub checks, and PR closeout have been completed.
+- Status: **PARTIAL**; implementation and automated gates are complete, with the Arch live-device gate still pending.
 - Verified starting `origin/main` SHA: `bcabc4c20b0e4f877c2e01e936ddd79a1b10799e0`.
 - Feature branch: `feat/p031-real-codex-ingestion`.
 - Implementation commits:
   - `7870caeb995a47d4e18448144221e0abe75a1e7f` — `feat: ingest real Codex telemetry into durable SQLite history`.
   - `7dde98879d71d11288170b81bc501ef16aa379ed` — `fix: preserve estimator command help after sync addition`.
+  - `12920b0911f16e95a1b1217656759463ec15d5f9` — `docs: record P031 local validation closeout`.
+  - `94b949b162d39677a7704ca12eff4fcf0c27117d` — `docs: link P031 draft pull request`.
+  - `8beb11a1a9bc02719fe2ce18a1a52c71c60ce6ce` — `fix: support platform-specific sync builds and paths`.
+  - `20ef8cb132ab088ab9265c726fbcff8d515b75aa` — `fix: retry concurrent SQLite WAL initialization`.
 - PR title: `Integrate real Codex telemetry ingestion and persistent usage history`.
 - Draft PR: https://github.com/nghianguyen150612/Codex-Meter/pull/26.
-- CI: required checks are queued or running; results are pending.
+- GitHub CI passed at head `20ef8cb132ab088ab9265c726fbcff8d515b75aa`: Rust quality, Linux/macOS/Windows Rust tests, Python quality, and contract validation.
+- Release-candidate validation passed at the same head, including reproducible candidate builds for Linux x86_64, macOS ARM64/x86_64, Windows x86_64, and the shared wheel. No release was published.
 - Merge: intentionally pending while the required live-device gate is unavailable.
 - v0.1.0 tag, published assets, installer behavior, estimator mathematics, Python analytics schemas, and method versions were not changed.
 
@@ -38,7 +43,8 @@ Local feature-branch gates passed in the implementation environment:
 - Locked workspace build, Python suite (637 passed), Ruff lint/format, and contract validation (6 schemas, 16 positive fixtures, 5 negative fixtures).
 - P029 installed-runtime smoke and P030 release-version policy check passed.
 - P030 x86_64 Linux release-artifact candidate package and installed-runtime smoke passed, including relocation, installed worker, sufficient/insufficient estimates, determinism, compatibility, and read-only SQLite.
-- PR CI remains pending until a Draft PR is created.
+- Two complete PR CI runs passed on implementation head `20ef8cb`; all Rust, Python, contract, installed-runtime, and platform bundle checks are green.
+- The Windows concurrency test exposed a real startup race when concurrent first-run commands both configured SQLite WAL mode. Bounded busy/locked retries were added, and the concurrency integration test passed 30 consecutive local runs plus both platform CI runs.
 
 These are fixture and local-runtime results only. No test output is claimed as real-device evidence.
 
@@ -108,11 +114,13 @@ claiming live support.
 
 ## Quality gates and P032 handoff
 
-Required Rust/Python/contracts/release-runtime gates, diff review, PR CI, and
-final main synchronization are pending until implementation is committed and
-published as a Draft PR. The PR must remain Draft if live-device validation is
-still outstanding. It must not be merged or published as v0.2.0 while that gate
-is pending.
+Rust/Python/contracts/release-runtime gates and feature diff review are complete.
+The PR is open as Draft because the reference Arch device is not attached to
+this environment. Live source compatibility, real event ingestion, exact replay,
+post-restart recovery, and follow-up after normal user activity have not been
+verified. Keep the PR in Draft and do not merge or publish v0.2.0 until that
+device gate is completed and reviewed. Final main synchronization and merge
+verification are consequently pending.
 
 P032 can build token history/inspection over `token_usage_evidence` and
 `quota_snapshot_evidence`. Keep raw per-response usage distinct from cumulative

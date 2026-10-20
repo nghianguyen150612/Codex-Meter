@@ -12,6 +12,59 @@ pub(crate) fn source_instance_id(source: &SourceIdentity) -> String {
     )
 }
 
+pub(crate) fn rollout_identity(session_id: &str) -> String {
+    derive_id("rollout:", "codex-meter/rollout/v1", &[session_id])
+}
+
+pub(crate) fn source_generation_identity(
+    session_id: &str,
+    thread_id: &str,
+    cli_version: &str,
+    first_timestamp: &str,
+) -> String {
+    derive_id(
+        "generation:",
+        "codex-meter/source-generation/v1",
+        &[session_id, thread_id, cli_version, first_timestamp],
+    )
+}
+
+pub(crate) fn token_snapshot_semantic_id(
+    source: &SourceIdentity,
+    start_offset: u64,
+    end_offset: u64,
+    ordinal: Option<u64>,
+    semantic: &str,
+) -> String {
+    let position = snapshot_evidence_id(source, start_offset, end_offset, ordinal);
+    derive_id(
+        "evidence:",
+        "codex-meter/token-snapshot-semantic/v1",
+        &[&position, semantic],
+    )
+}
+
+pub(crate) fn diagnostic_id(
+    source: &SourceIdentity,
+    start_offset: u64,
+    end_offset: u64,
+    ordinal: Option<u64>,
+    code: &str,
+) -> String {
+    derive_id(
+        "diag:",
+        "codex-meter/ingestion-diagnostic/v1",
+        &[
+            source.rollout_id(),
+            source.source_generation(),
+            &start_offset.to_string(),
+            &end_offset.to_string(),
+            &ordinal.map_or_else(String::new, |value| value.to_string()),
+            code,
+        ],
+    )
+}
+
 pub(crate) fn token_event_id(
     source: &SourceIdentity,
     start_offset: u64,

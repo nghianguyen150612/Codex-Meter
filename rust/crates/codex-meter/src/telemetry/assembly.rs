@@ -665,6 +665,7 @@ mod tests {
             items,
             next_cursor: RolloutCursor::at_start(&source),
             has_incomplete_tail: false,
+            last_line_sha256: None,
         }
     }
 

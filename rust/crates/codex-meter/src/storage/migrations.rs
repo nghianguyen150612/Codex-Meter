@@ -24,6 +24,8 @@ pub(crate) const OBSERVATIONS_MIGRATION: &str =
     include_str!("../../migrations/0003_observations.sql");
 pub(crate) const OBSERVATION_TIME_KEYS_MIGRATION: &str =
     include_str!("../../migrations/0004_observation_time_keys.sql");
+pub(crate) const USAGE_EVIDENCE_MIGRATION: &str =
+    include_str!("../../migrations/0005_usage_evidence.sql");
 
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -45,6 +47,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 4,
         name: "0004_observation_time_keys",
         sql: OBSERVATION_TIME_KEYS_MIGRATION,
+    },
+    Migration {
+        version: 5,
+        name: "0005_usage_evidence",
+        sql: USAGE_EVIDENCE_MIGRATION,
     },
 ];
 
@@ -389,6 +396,14 @@ mod tests {
         assert_eq!(
             checksum(OBSERVATION_TIME_KEYS_MIGRATION),
             "97aaebf9ca9c856b42cd88089ee17f84cbe3010ad4e37246ecd7118417d14f6c"
+        );
+    }
+
+    #[test]
+    fn migration_five_checksum_is_regression_stable() {
+        assert_eq!(
+            checksum(USAGE_EVIDENCE_MIGRATION),
+            "7cbe9431d18df52608fdd90b43f029ff06e11c954558d5c74e1338fd644b7abd"
         );
     }
 }

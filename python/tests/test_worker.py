@@ -345,7 +345,7 @@ def test_corrupt_database_failures_are_categorized_private_and_read_only(tmp_pat
     future_version = tmp_path / "future migration.sqlite"
     _create_database(future_version)
     connection = sqlite3.connect(future_version)
-    connection.execute("INSERT INTO schema_migrations VALUES (5, '0005_future', ?)", ("0" * 64,))
+    connection.execute("INSERT INTO schema_migrations VALUES (6, '0006_future', ?)", ("0" * 64,))
     connection.commit()
     connection.close()
     cases.append(("future migration", "database_schema_incompatible", future_version))

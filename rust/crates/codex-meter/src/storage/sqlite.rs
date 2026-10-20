@@ -15,6 +15,12 @@ use super::observations::{
     list_observations_from_connection, load_observation_from_connection,
     save_observation_in_transaction, ObservationPage, ObservationQuery, StoredObservation,
 };
+use super::usage_evidence::{
+    commit_usage_batch, has_other_rollout_generation, history_summary, load_source_boundary,
+    load_task_response_evidence, save_ingestion_diagnostic, EvidenceInsertCounts,
+    IngestionDiagnostic, SourceBoundaryFingerprint, TokenUsageEvidence, UsageEvidenceBatch,
+    UsageHistorySummary,
+};
 use crate::telemetry::{RolloutCursor, SourceIdentity};
 
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -72,6 +78,10 @@ pub enum StorageError {
     CheckpointDecode,
     CheckpointStateInvalid,
     CheckpointCursorInvalid,
+    SourceBoundaryConflict,
+    EvidenceConflict,
+    EvidenceInvalid,
+    EvidenceCorrupt,
     ObservationRevisionConflict {
         expected: Option<u64>,
         actual: Option<u64>,
@@ -90,6 +100,43 @@ pub enum StorageError {
 impl StorageError {
     pub(crate) fn sqlite(source: rusqlite::Error) -> Self {
         Self::Sqlite { source }
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Open { source } | Self::Sqlite { source } => sqlite_error_code(source),
+            Self::MigrationFailed { source, .. } => sqlite_error_code(source),
+            Self::MigrationHistoryCorrupt { .. }
+            | Self::MigrationDrift { .. }
+            | Self::CheckpointCorrupt
+            | Self::EvidenceCorrupt => "database_corrupt",
+            Self::DatabaseTooNew { .. }
+            | Self::CheckpointFormatTooNew { .. }
+            | Self::CheckpointFormatUnsupported { .. } => "database_format_unsupported",
+            Self::CheckpointSourceMismatch | Self::SourceBoundaryConflict => "source_changed",
+            Self::CheckpointRevisionConflict { .. } => "checkpoint_conflict",
+            Self::EvidenceConflict => "evidence_conflict",
+            Self::EvidenceInvalid => "evidence_invalid",
+            Self::CheckpointCursorInvalid
+            | Self::CheckpointDecode
+            | Self::CheckpointStateInvalid => "checkpoint_corrupt",
+            _ => "storage_operation_failed",
+        }
+    }
+}
+
+fn sqlite_error_code(error: &rusqlite::Error) -> &'static str {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, _) => match failure.code {
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
+                "database_locked"
+            }
+            rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase => {
+                "database_corrupt"
+            }
+            _ => "database_operation_failed",
+        },
+        _ => "database_operation_failed",
     }
 }
 
@@ -129,6 +176,10 @@ impl fmt::Display for StorageError {
             Self::CheckpointDecode => write!(formatter, "runtime checkpoint could not be decoded"),
             Self::CheckpointStateInvalid => write!(formatter, "runtime checkpoint state is invalid"),
             Self::CheckpointCursorInvalid => write!(formatter, "runtime checkpoint cursor is invalid"),
+            Self::SourceBoundaryConflict => write!(formatter, "source boundary conflicts with committed history"),
+            Self::EvidenceConflict => write!(formatter, "immutable usage evidence conflicts with prior history"),
+            Self::EvidenceInvalid => write!(formatter, "usage evidence is invalid"),
+            Self::EvidenceCorrupt => write!(formatter, "usage evidence storage is corrupt"),
             Self::ObservationRevisionConflict { .. } => write!(formatter, "observation revision conflict"),
             Self::ObservationRevisionOverflow => write!(formatter, "observation revision overflowed"),
             Self::ObservationTerminalConflict => write!(formatter, "terminal observation cannot be changed"),
@@ -165,6 +216,10 @@ impl Error for StorageError {
             | Self::CheckpointDecode
             | Self::CheckpointStateInvalid
             | Self::CheckpointCursorInvalid
+            | Self::SourceBoundaryConflict
+            | Self::EvidenceConflict
+            | Self::EvidenceInvalid
+            | Self::EvidenceCorrupt
             | Self::ObservationRevisionConflict { .. }
             | Self::ObservationRevisionOverflow
             | Self::ObservationTerminalConflict
@@ -240,6 +295,57 @@ impl SqliteStore {
             state,
             expected_revision,
         )
+    }
+
+    pub fn load_source_boundary(
+        &self,
+        source: &SourceIdentity,
+    ) -> Result<Option<SourceBoundaryFingerprint>, StorageError> {
+        load_source_boundary(&self.connection, source)
+    }
+
+    pub fn commit_usage_batch(
+        &mut self,
+        source: &SourceIdentity,
+        cursor: &RolloutCursor,
+        state: &RuntimeRecoveryState,
+        expected_checkpoint_revision: Option<u64>,
+        batch: UsageEvidenceBatch<'_>,
+    ) -> Result<(RuntimeCheckpoint, EvidenceInsertCounts), StorageError> {
+        commit_usage_batch(
+            &mut self.connection,
+            source,
+            cursor,
+            state,
+            expected_checkpoint_revision,
+            batch,
+        )
+    }
+
+    pub fn save_ingestion_diagnostic(
+        &mut self,
+        diagnostic: &IngestionDiagnostic,
+    ) -> Result<bool, StorageError> {
+        save_ingestion_diagnostic(&mut self.connection, diagnostic)
+    }
+
+    pub fn task_response_evidence(
+        &self,
+        task_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<Vec<TokenUsageEvidence>, StorageError> {
+        load_task_response_evidence(&self.connection, task_id, session_id)
+    }
+
+    pub fn has_other_rollout_generation(
+        &self,
+        source: &SourceIdentity,
+    ) -> Result<bool, StorageError> {
+        has_other_rollout_generation(&self.connection, source)
+    }
+
+    pub fn usage_history_summary(&self) -> Result<UsageHistorySummary, StorageError> {
+        history_summary(&self.connection)
     }
 
     pub fn save_observation(
@@ -503,8 +609,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 4,
-                latest_applied_migration: 4,
+                latest_supported_migration: 5,
+                latest_applied_migration: 5,
             }
         );
         let tables = store
@@ -518,10 +624,14 @@ mod tests {
         assert_eq!(
             tables,
             vec![
+                "ingestion_diagnostics",
                 "observations",
+                "quota_snapshot_evidence",
                 "runtime_checkpoints",
                 "schema_migrations",
-                "storage_metadata"
+                "source_boundary_fingerprints",
+                "storage_metadata",
+                "token_usage_evidence"
             ]
         );
         let migration_count: i64 = store
@@ -530,7 +640,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 5);
     }
 
     #[test]
@@ -562,7 +672,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 4);
+            assert_eq!(migration_count, 5);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
@@ -575,14 +685,14 @@ mod tests {
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 4);
+        assert_eq!(upgraded.info().latest_applied_migration, 5);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 5);
         drop(upgraded);
         remove_database(&path);
     }
@@ -603,7 +713,7 @@ mod tests {
             stored.payload_sha256
         };
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 4);
+        assert_eq!(store.info().latest_applied_migration, 5);
         let (json, checksum, started, ended, finalized): (String, String, String, String, String) = store.connection().query_row("SELECT observation_json, observation_sha256, started_at, ended_at, finalized_at FROM observations", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
         assert_eq!(checksum, payload_checksum);
         assert_eq!(json, serde_json::to_string(&observation).unwrap());
@@ -715,7 +825,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 4
+                latest_supported_migration: 5
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -724,7 +834,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
         drop(connection);
         remove_database(&path);
     }

@@ -2,13 +2,14 @@
 
 pub mod assembly;
 pub mod codex_rollout;
-mod identity;
+pub(crate) mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;
 pub mod observation;
 pub mod quota_normalization;
 pub mod quota_reconciliation;
 pub mod quota_tracking;
+pub(crate) mod source_discovery;
 pub mod token_normalization;
 
 pub use codex_rollout::{

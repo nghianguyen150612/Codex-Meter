@@ -1,9 +1,10 @@
 # Codex Meter
 
-Codex Meter is an independent, local-first project for empirically measuring Codex usage. The
-`codex-meter estimate` CLI reads an existing Codex Meter SQLite dataset and reports empirical
-current-capacity estimates through the Python analytics pipeline. Automatic tracker startup and
-live provider quota acquisition are not connected to this command.
+Codex Meter is an independent, unofficial, local-first project for measuring Codex usage. The
+native Rust `codex-meter sync` command discovers supported local Codex rollout files and saves
+privacy-filtered token and quota evidence in a per-user SQLite database. The existing
+`codex-meter estimate` command continues to read a supplied Codex Meter SQLite dataset and report
+empirical current-capacity estimates through the Python analytics pipeline.
 
 The initial distribution candidate is version `0.1.0`. It pairs a native Rust executable with the
 `codex-meter-analytics` wheel and a Python 3.11–3.13 environment; it is not a standalone binary.
@@ -13,6 +14,15 @@ Candidate artifacts are unpublished and require manual release review. See the
 
 The product loop is **Track → Measure → Estimate → Compare**, while keeping raw tokens,
 weighted/effective usage, and plan quota as distinct measurement domains.
+
+P031's `sync` is an on-demand, one-shot operation. It does not run a background tracker or acquire
+authenticated quota data. Initial rollout parsing is verified only for the audited Codex CLI
+`0.157.1` format; compressed `.jsonl.zst` files are reported as unsupported. See the
+[v0.2 real telemetry ingestion guide](docs/V02_REAL_TELEMETRY_INGESTION.md) for source coverage,
+privacy behavior, storage, and validation status.
+
+Run from a development checkout with `cargo run --manifest-path rust/Cargo.toml -- sync`. This
+P031 command is not part of the published v0.1.0 assets, installers, or release behavior.
 
 ## Quick install (v0.1.0 technical preview)
 
@@ -31,6 +41,8 @@ just check
 See the [development guide](docs/DEVELOPMENT.md) for setup and direct commands.
 See the [CLI analytics guide](docs/CLI_ANALYTICS_INTEGRATION.md) for current-capacity usage,
 request examples, and integration limits.
+See the [P031 implementation manifest](docs/PROMPT031_MANIFEST.md) for the branch, gates, and
+outstanding device-validation status.
 See the [cross-platform runtime guide](docs/CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md) for local
 wheel installation, installed-worker selection, and runtime compatibility coverage.
 

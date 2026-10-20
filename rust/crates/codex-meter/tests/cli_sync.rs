@@ -344,7 +344,15 @@ fn default_codex_home_and_default_sqlite_location_are_per_user() {
     let tree = TempTree::new();
     let home_directory = tree.path().join("user home μ");
     let codex_home = home_directory.join(".codex");
+    #[cfg(target_os = "linux")]
     let expected_database = home_directory.join(".local/share/codex-meter/codex-meter.sqlite3");
+    #[cfg(target_os = "macos")]
+    let expected_database =
+        home_directory.join("Library/Application Support/codex-meter/codex-meter.sqlite3");
+    #[cfg(target_os = "windows")]
+    let local_app_data = tree.path().join("local app data");
+    #[cfg(target_os = "windows")]
+    let expected_database = local_app_data.join("codex-meter/codex-meter.sqlite3");
     write_basic_rollout(&codex_home, "default.jsonl");
     let mut command = Command::new(env!("CARGO_BIN_EXE_codex-meter"));
     command
@@ -353,6 +361,10 @@ fn default_codex_home_and_default_sqlite_location_are_per_user() {
         .env("HOME", &home_directory)
         .env_remove("CODEX_HOME")
         .env_remove("XDG_DATA_HOME");
+    #[cfg(target_os = "windows")]
+    command
+        .env("USERPROFILE", &home_directory)
+        .env("LOCALAPPDATA", &local_app_data);
     let output = command.output().expect("native sync process should start");
     assert!(output.status.success());
     assert!(expected_database.exists());
@@ -382,6 +394,7 @@ fn default_codex_home_and_default_sqlite_location_are_per_user() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn absolute_xdg_data_home_selects_the_linux_application_database_directory() {
     let tree = TempTree::new();
     let home_directory = tree.path().join("user home");

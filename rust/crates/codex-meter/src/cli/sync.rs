@@ -1266,6 +1266,7 @@ fn prepare_private_data_directory(directory: &Path) -> Result<(), CliError> {
 }
 
 fn prepare_private_database_file(path: &Path) -> Result<(), CliError> {
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};

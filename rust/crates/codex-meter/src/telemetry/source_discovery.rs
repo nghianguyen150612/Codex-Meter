@@ -558,11 +558,54 @@ pub(crate) fn file_identity_sha256(file: &File) -> Option<String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        let metadata = file.metadata().ok()?;
-        let volume = metadata.volume_serial_number()?;
-        let index = metadata.file_index()?;
-        let identity = format!("{volume}:{index}");
+        use std::ffi::c_void;
+        use std::os::windows::io::AsRawHandle;
+
+        #[repr(C)]
+        struct FileTime {
+            low_date_time: u32,
+            high_date_time: u32,
+        }
+
+        #[repr(C)]
+        struct ByHandleFileInformation {
+            _file_attributes: u32,
+            _creation_time: FileTime,
+            _last_access_time: FileTime,
+            _last_write_time: FileTime,
+            volume_serial_number: u32,
+            _file_size_high: u32,
+            _file_size_low: u32,
+            _number_of_links: u32,
+            file_index_high: u32,
+            file_index_low: u32,
+        }
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandle(
+                file: *mut c_void,
+                information: *mut ByHandleFileInformation,
+            ) -> i32;
+        }
+
+        let mut information = std::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+        // SAFETY: `file` is an open Windows file handle and `information` points to
+        // writable storage with the documented BY_HANDLE_FILE_INFORMATION layout.
+        if unsafe {
+            GetFileInformationByHandle(file.as_raw_handle().cast(), information.as_mut_ptr())
+        } == 0
+        {
+            return None;
+        }
+        // SAFETY: GetFileInformationByHandle succeeded and initialized the structure.
+        let information = unsafe { information.assume_init() };
+        let identity = format!(
+            "{}:{}:{}",
+            information.volume_serial_number,
+            information.file_index_high,
+            information.file_index_low
+        );
         Some(
             Sha256::digest(identity.as_bytes())
                 .iter()

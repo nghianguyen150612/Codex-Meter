@@ -28,6 +28,7 @@ pub struct SyncArguments {
 pub enum CliAction {
     Help,
     SyncHelp,
+    EstimateHelp,
     Version,
     Sync(SyncArguments),
     Estimate(EstimateArguments),
@@ -73,7 +74,7 @@ where
         .skip(1)
         .any(|argument| argument == OsStr::new("--help"))
     {
-        return Ok(CliAction::Help);
+        return Ok(CliAction::EstimateHelp);
     }
 
     let mut seen = HashSet::new();
@@ -253,6 +254,10 @@ pub fn sync_help_text() -> &'static str {
     "Codex Meter — local Codex usage sync\n\nUSAGE:\n    codex-meter sync [OPTIONS]\n\nOPTIONS:\n    --codex-home PATH    Read a specific local Codex home\n    --database PATH      Use an explicit Codex Meter SQLite database\n    --json               Emit a privacy-safe JSON summary\n    --help               Show this help\n\nSupported input: plain Codex rollout JSONL for the audited Codex CLI 0.157.1 format.\nCompressed .jsonl.zst files are detected and reported as skipped.\n"
 }
 
+pub fn estimate_help_text() -> &'static str {
+    "Codex Meter — empirical current-capacity estimates\n\nUSAGE:\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nOPTIONS:\n    --database PATH                 Existing Codex Meter SQLite database\n    --request FILE                  AnalyticsRequest v1 JSON file\n    --generated-at UTC_TIMESTAMP    Explicit UTC timestamp ending in Z\n    --five-hour-used-percent N      Manually supplied five-hour used percentage points\n    --weekly-used-percent N         Manually supplied weekly used percentage points\n    --python PATH                   Python interpreter executable (default: python)\n    --worker-mode MODE              auto (default), source, or installed\n    --json                          Emit only validated AnalyticsResult v1 JSON\n    --help                          Show this help\n\nCurrent meter percentages are manual and unverified. No provider API is called.\n"
+}
+
 fn error(code: &'static str, message: &str) -> CliError {
     CliError {
         code,
@@ -272,7 +277,10 @@ mod tests {
     fn handles_help_version_and_estimate_help() {
         assert_eq!(parse(&["--help"]).unwrap(), CliAction::Help);
         assert_eq!(parse(&["--version"]).unwrap(), CliAction::Version);
-        assert_eq!(parse(&["estimate", "--help"]).unwrap(), CliAction::Help);
+        assert_eq!(
+            parse(&["estimate", "--help"]).unwrap(),
+            CliAction::EstimateHelp
+        );
     }
 
     #[test]

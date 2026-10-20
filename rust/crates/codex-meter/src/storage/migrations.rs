@@ -26,6 +26,8 @@ pub(crate) const OBSERVATION_TIME_KEYS_MIGRATION: &str =
     include_str!("../../migrations/0004_observation_time_keys.sql");
 pub(crate) const USAGE_EVIDENCE_MIGRATION: &str =
     include_str!("../../migrations/0005_usage_evidence.sql");
+pub(crate) const USAGE_HISTORY_INDEXES_MIGRATION: &str =
+    include_str!("../../migrations/0006_usage_history_indexes.sql");
 
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -52,6 +54,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 5,
         name: "0005_usage_evidence",
         sql: USAGE_EVIDENCE_MIGRATION,
+    },
+    Migration {
+        version: 6,
+        name: "0006_usage_history_indexes",
+        sql: USAGE_HISTORY_INDEXES_MIGRATION,
     },
 ];
 
@@ -194,6 +201,45 @@ pub(crate) fn migrate(
             });
         }
     }
+}
+
+/// Validate the recorded migration history without creating tables or applying migrations.
+pub(crate) fn validate_readonly(
+    connection: &Connection,
+    migrations: &[Migration],
+) -> Result<StorageInfo, StorageError> {
+    validate_registry(migrations)?;
+    let history = read_history_from_connection(connection)?;
+    let latest_applied_migration = validate_history(&history, migrations)?;
+    Ok(StorageInfo {
+        latest_supported_migration: migrations
+            .last()
+            .map(|migration| migration.version)
+            .unwrap_or_default(),
+        latest_applied_migration,
+    })
+}
+
+fn read_history_from_connection(
+    connection: &Connection,
+) -> Result<Vec<AppliedMigration>, StorageError> {
+    let mut statement = connection
+        .prepare("SELECT version, name, checksum_sha256 FROM schema_migrations ORDER BY version")
+        .map_err(|source| StorageError::MigrationHistoryCorrupt {
+            detail: "schema_migrations has an unreadable shape",
+            source: Some(source),
+        })?;
+    let rows = statement
+        .query_map([], migration_from_row)
+        .map_err(|source| StorageError::MigrationHistoryCorrupt {
+            detail: "schema_migrations rows could not be read",
+            source: Some(source),
+        })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|source| StorageError::MigrationHistoryCorrupt {
+            detail: "schema_migrations contains an unreadable row",
+            source: Some(source),
+        })
 }
 
 fn read_history(transaction: &Transaction<'_>) -> Result<Vec<AppliedMigration>, StorageError> {
@@ -404,6 +450,14 @@ mod tests {
         assert_eq!(
             checksum(USAGE_EVIDENCE_MIGRATION),
             "7cbe9431d18df52608fdd90b43f029ff06e11c954558d5c74e1338fd644b7abd"
+        );
+    }
+
+    #[test]
+    fn migration_six_checksum_is_regression_stable() {
+        assert_eq!(
+            checksum(USAGE_HISTORY_INDEXES_MIGRATION),
+            "d54003a1e27b9689729dd7dcfc296e98d1d25709c50c9f5e99152ddc4ae59edc"
         );
     }
 }

@@ -3,9 +3,9 @@
 ## Ownership and boundary
 
 Codex Meter has one Rust-owned SQLite writer. Rust opens the database, configures
-the writer connection, owns schema migrations, and will own primary application
-writes. Future CLI and Python analytics processes are read-only consumers; Python
-must not become a migration owner or normal SQLite writer. Migration locking is
+the writer connection, owns schema migrations, and owns primary application
+writes. Reporting CLI commands and Python analytics use separate read-only
+connections; neither applies migrations or writes history. Migration locking is
 not the complete future daemon-singleton/process-lock mechanism.
 
 P014 does not choose a production database location. The caller supplies an
@@ -115,6 +115,18 @@ P016 extends the P015 storage infrastructure with durable Observation history:
 - `observations`: canonical P013 Observation JSON plus derived indexed
   projections, checksum, and positive storage revision from migrations
   `0003_observations` and `0004_observation_time_keys`.
+- `token_usage_evidence`, `quota_snapshot_evidence`, `ingestion_diagnostics`,
+  and `source_boundary_fingerprints`: typed P031 evidence from migration
+  `0005_usage_evidence`.
+- Migration `0006_usage_history_indexes` adds UTC timestamp-normalized keyset
+  indexes for global event and quota history ordering. The SQL history ledger
+  remains unchanged by the index migration.
+
+The native reporting repository opens SQLite with `SQLITE_OPEN_READ_ONLY`,
+enables `query_only`, validates the recorded migration checksums and required
+tables without running migrations, and verifies checksums on evidence rows it
+returns or aggregates. It can read a supported P031 version 5 database without
+upgrading it; the default `sync` writer applies version 6 when it next runs.
 
 Migration 0001 creates:
 

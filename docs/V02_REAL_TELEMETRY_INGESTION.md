@@ -115,6 +115,14 @@ all migration checksums remain recorded and verified. Rust alone runs
 migrations. The database rejects token counters outside the safe integer
 range, and every row is checksummed over its typed privacy-safe values.
 
+P032 adds migration 6, `0006_usage_history_indexes.sql`, with normalized-time
+indexes for global token and quota history ordering. It does not change P031
+evidence rows or their checksums. The native `tokens`, `history`, `inspect`, and
+`quota` commands read the evidence ledger through a separate strictly read-only
+SQLite connection. See the [usage history CLI guide](V02_USAGE_HISTORY_CLI.md)
+for filters, pagination, missing-value behavior, JSON output, and quota
+freshness policy.
+
 Each source has a hashed rollout identity and generation, an incremental reader
 cursor, the last complete line fingerprint, and a platform file-identity
 fingerprint where available. Token/quota/record-level diagnostic evidence,

@@ -2,7 +2,7 @@
 
 ## Status and Git workflow
 
-- Status: **PARTIAL**; implementation and automated gates are complete, with the Arch live-device gate still pending.
+- Status: **PARTIAL**; P031 was integrated into `main` at merge commit `d375328ff0c92a186be8b621e7f2bdd6cef087f8` by explicit user instruction. Its required Arch live-device gate remains unverified.
 - Verified starting `origin/main` SHA: `bcabc4c20b0e4f877c2e01e936ddd79a1b10799e0`.
 - Feature branch: `feat/p031-real-codex-ingestion`.
 - Implementation commits:
@@ -13,10 +13,10 @@
   - `8beb11a1a9bc02719fe2ce18a1a52c71c60ce6ce` — `fix: support platform-specific sync builds and paths`.
   - `20ef8cb132ab088ab9265c726fbcff8d515b75aa` — `fix: retry concurrent SQLite WAL initialization`.
 - PR title: `Integrate real Codex telemetry ingestion and persistent usage history`.
-- Draft PR: https://github.com/nghianguyen150612/Codex-Meter/pull/26.
+- PR #26: https://github.com/nghianguyen150612/Codex-Meter/pull/26 (merged with a two-parent merge commit; the live-device gate remained outstanding).
 - GitHub CI passed at head `20ef8cb132ab088ab9265c726fbcff8d515b75aa`: Rust quality, Linux/macOS/Windows Rust tests, Python quality, and contract validation.
 - Release-candidate validation passed at the same head, including reproducible candidate builds for Linux x86_64, macOS ARM64/x86_64, Windows x86_64, and the shared wheel. No release was published.
-- Merge: intentionally pending while the required live-device gate is unavailable.
+- Merge commit: `d375328ff0c92a186be8b621e7f2bdd6cef087f8`; the live-device validation was not performed by that merge and must not be treated as passed.
 - v0.1.0 tag, published assets, installer behavior, estimator mathematics, Python analytics schemas, and method versions were not changed.
 
 ## Implementation
@@ -114,13 +114,14 @@ claiming live support.
 
 ## Quality gates and P032 handoff
 
-Rust/Python/contracts/release-runtime gates and feature diff review are complete.
-The PR is open as Draft because the reference Arch device is not attached to
-this environment. Live source compatibility, real event ingestion, exact replay,
-post-restart recovery, and follow-up after normal user activity have not been
-verified. Keep the PR in Draft and do not merge or publish v0.2.0 until that
-device gate is completed and reviewed. Final main synchronization and merge
-verification are consequently pending.
+Rust/Python/contracts/release-runtime gates and feature diff review were complete
+before the P031 merge. The reference Arch device was not attached, so live source
+compatibility, real event ingestion, exact replay, post-restart recovery, and
+follow-up after normal user activity remain unverified. P031's merge did not
+discharge this gate. Under the project validation policy, the unresolved device
+gate blocks P032 integration; keep the P032 pull request in Draft and do not
+merge it until the device validation is completed and reviewed. No v0.2 release
+was published.
 
 P032 can build token history/inspection over `token_usage_evidence` and
 `quota_snapshot_evidence`. Keep raw per-response usage distinct from cumulative

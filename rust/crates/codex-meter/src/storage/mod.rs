@@ -3,6 +3,7 @@
 mod checkpoints;
 mod migrations;
 mod observations;
+mod reporting;
 mod sqlite;
 mod usage_evidence;
 
@@ -12,7 +13,13 @@ pub use checkpoints::{
 pub use observations::{
     ObservationPage, ObservationPageCursor, ObservationQuery, StoredObservation,
 };
-pub use sqlite::{SqliteStore, StorageError, StorageInfo, DEFAULT_BUSY_TIMEOUT};
+pub use reporting::{
+    ConfigurationBreakdown, DiagnosticCount, EvidenceDetail, EvidenceQualitySummary,
+    MetricCoverage, MetricTotal, QuotaHistoryCursor, QuotaHistoryPage, QuotaTimeline,
+    TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
+    ValueCount,
+};
+pub use sqlite::{SqliteReadStore, SqliteStore, StorageError, StorageInfo, DEFAULT_BUSY_TIMEOUT};
 pub use usage_evidence::{
     EvidenceInsertCounts, IngestionDiagnostic, IngestionDiagnosticCode, QuotaSnapshotEvidence,
     SourceBoundaryFingerprint, StoredQuotaSnapshot, TokenRecordSemantic, TokenUsageEvidence,

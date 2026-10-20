@@ -31,7 +31,7 @@ use super::args::{CliError, SyncArguments};
 
 const MAX_SOURCE_BYTES_PER_SYNC: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_RECORDS_PER_SYNC: usize = 100_000;
-const DEFAULT_DATABASE_NAME: &str = "codex-meter.sqlite3";
+pub(super) const DEFAULT_DATABASE_NAME: &str = "codex-meter.sqlite3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1209,7 +1209,7 @@ fn apply_history(
     });
 }
 
-fn default_database_path() -> Result<PathBuf, ()> {
+pub(super) fn default_database_path() -> Result<PathBuf, ()> {
     let data_directory = if cfg!(target_os = "linux") {
         let xdg = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
         match xdg.filter(|path| path.is_absolute()) {

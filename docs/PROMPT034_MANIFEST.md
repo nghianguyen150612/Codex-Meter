@@ -8,8 +8,10 @@
 - Feature branch: `feat/p034-ratatui-dashboard`.
 - The published v0.1.0 tag `171b54ee4f80c007ab6e0b4af3cd1bb22613e755` and its release assets
   are preserved. P034 does not change product, binary, schema, or Python method versions.
-- Pull request and implementation commit identifiers are recorded after publication of the draft
-  PR below.
+- Draft PR #29: https://github.com/nghianguyen150612/Codex-Meter/pull/29, targeting `main`.
+- Core source commits: `e53b4c48d49038dbafea7de8f868c22825a63b1e` (narrow release-artifact test
+  gating) and `14f17946caf9b800f8bc9261cd77d1029171a840` (TUI implementation). Validation-record
+  commit: `35fa3dbda889aeb9a77e72afbd8787fc3e6539d0`.
 - The Arch reference desktop is not attached to this environment. Its actual Codex version, real
   quota observations, and live terminal compatibility remain unverified.
 
@@ -76,7 +78,7 @@ Local validation completed in the managed Linux container:
 | P030 extracted candidate smoke | Passed: local Linux bundle exercised after fresh extraction/relocation, installed worker, sufficient and insufficient estimates, deterministic JSON, version compatibility, and read-only SQLite |
 | P030 aggregate candidate | Pending platform matrix; only the Linux bundle was built locally, and aggregate verification requires Linux, macOS x86_64/arm64, Windows, and wheel artifacts |
 | `git diff --check` | Passed before final review |
-| GitHub Linux/macOS/Windows CI | Pending Draft PR checks |
+| GitHub Linux/macOS/Windows CI | Running on Draft PR #29; latest check state is reported in the PR |
 
 P032/P033 documented an `--all-features` test conflict: `release-artifact` intentionally omits
 checkout worker discovery, while source-mode tests require it. P034 narrowly cfg-gates only those

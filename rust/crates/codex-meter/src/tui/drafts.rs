@@ -401,7 +401,7 @@ mod platform {
                         | libc::O_EXCL
                         | libc::O_CLOEXEC
                         | libc::O_NOFOLLOW,
-                    FILE_MODE,
+                    FILE_MODE as libc::c_uint,
                 )
             };
             if fd < 0 {
@@ -654,7 +654,7 @@ mod platform {
                     self.directory.as_raw_fd(),
                     name.as_ptr(),
                     libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                    FILE_MODE,
+                    FILE_MODE as libc::c_uint,
                 )
             };
             if fd < 0 {

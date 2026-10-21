@@ -1138,7 +1138,8 @@ mod tests {
     }
 
     #[test]
-    fn isolated_worker_rejects_invalid_requests_and_missing_python_is_typed() {
+    #[cfg(not(feature = "release-artifact"))]
+    fn source_worker_rejects_invalid_requests() {
         let error = invoke_worker(
             OsStr::new("python"),
             Path::new("missing-database.sqlite"),
@@ -1150,7 +1151,10 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "invalid_request");
+    }
 
+    #[test]
+    fn missing_python_is_typed_and_command_values_never_use_a_shell() {
         let unavailable = invoke_worker(
             OsStr::new("codex-meter-python-executable-does-not-exist"),
             Path::new("missing-database.sqlite"),
@@ -1216,6 +1220,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "release-artifact"))]
     fn working_directory_pythonpath_and_pythonhome_cannot_shadow_worker_resolution() {
         let shadow = temporary_directory("module shadow");
         let package = shadow.join("codex_meter");

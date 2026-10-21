@@ -100,6 +100,11 @@ pub struct ProjectsArguments {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiArguments {
+    pub database: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     Help,
@@ -116,6 +121,7 @@ pub enum CliAction {
     HistoryHelp,
     InspectHelp,
     QuotaHelp,
+    TuiHelp,
     Version,
     Sync(SyncArguments),
     Estimate(EstimateArguments),
@@ -129,6 +135,7 @@ pub enum CliAction {
     SessionFork(SessionForkArguments),
     Models(ModelsArguments),
     Projects(ProjectsArguments),
+    Tui(TuiArguments),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +166,9 @@ where
     }
     if arguments[0] == OsStr::new("sync") {
         return parse_sync_args(&arguments[1..]);
+    }
+    if arguments[0] == OsStr::new("tui") {
+        return parse_tui_args(&arguments[1..]);
     }
     if arguments[0] == OsStr::new("tokens") {
         return parse_tokens_args(&arguments[1..]);
@@ -282,6 +292,40 @@ where
         worker_mode,
         json,
     }))
+}
+
+fn parse_tui_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments
+        .iter()
+        .any(|argument| argument == OsStr::new("--help"))
+    {
+        return Ok(CliAction::TuiHelp);
+    }
+    let mut database = None;
+    let mut seen_database = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = arguments[index]
+            .to_str()
+            .ok_or_else(|| error("invalid_argument", "command flags must be valid UTF-8"))?;
+        if flag != "--database" {
+            return Err(error("unknown_argument", "unknown tui argument"));
+        }
+        if seen_database {
+            return Err(error("invalid_argument", "duplicate --database flag"));
+        }
+        seen_database = true;
+        index += 1;
+        let value = arguments
+            .get(index)
+            .ok_or_else(|| error("invalid_argument", "--database requires a path"))?;
+        if value.is_empty() {
+            return Err(error("invalid_argument", "--database path cannot be empty"));
+        }
+        database = Some(PathBuf::from(value));
+        index += 1;
+    }
+    Ok(CliAction::Tui(TuiArguments { database }))
 }
 
 fn parse_sync_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
@@ -889,7 +933,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Session and model commands use Codex App Server; they do not submit model turns. Reporting commands read SQLite strictly read-only.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Session and model commands use Codex App Server; they do not submit model turns. Reporting commands read SQLite strictly read-only.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {
@@ -944,6 +988,10 @@ pub fn quota_help_text() -> &'static str {
     "Codex Meter — local quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n\nOPTIONS:\n    --history         Include timestamped quota samples\n    --limit N         History page size (default 20, range 1–1000)\n    --after SAMPLE_ID Continue after a sample from the previous page\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nQuota values are persisted account-meter snapshots, not live values or task-specific attribution. A 24-hour freshness label is a presentation policy.\n"
 }
 
+pub fn tui_help_text() -> &'static str {
+    "Codex Meter — interactive local usage dashboard\n\nUSAGE:\n    codex-meter tui [--database PATH]\n\nOPTIONS:\n    --database PATH   Read a specific existing Codex Meter database\n    --help            Show this help\n\nThe dashboard requires stdin and stdout to be terminals. It uses local Codex telemetry and Codex App Server metadata; missing evidence is shown as unavailable.\n"
+}
+
 fn error(code: &'static str, message: &str) -> CliError {
     CliError {
         code,
@@ -961,11 +1009,37 @@ mod tests {
 
     #[test]
     fn handles_help_version_and_estimate_help() {
+        assert_eq!(parse(&[]).unwrap(), CliAction::Help);
         assert_eq!(parse(&["--help"]).unwrap(), CliAction::Help);
         assert_eq!(parse(&["--version"]).unwrap(), CliAction::Version);
         assert_eq!(
             parse(&["estimate", "--help"]).unwrap(),
             CliAction::EstimateHelp
+        );
+    }
+
+    #[test]
+    fn tui_arguments_have_help_database_and_duplicate_validation() {
+        assert_eq!(
+            parse(&["tui"]).unwrap(),
+            CliAction::Tui(TuiArguments { database: None })
+        );
+        assert_eq!(
+            parse(&["tui", "--database", "local evidence.sqlite3"]).unwrap(),
+            CliAction::Tui(TuiArguments {
+                database: Some(PathBuf::from("local evidence.sqlite3"))
+            })
+        );
+        assert_eq!(parse(&["tui", "--help"]).unwrap(), CliAction::TuiHelp);
+        assert_eq!(
+            parse(&["tui", "--database"]).unwrap_err().code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            parse(&["tui", "--database", "one", "--database", "two"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
         );
     }
 

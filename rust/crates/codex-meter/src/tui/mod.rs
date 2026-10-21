@@ -1,0 +1,10 @@
+//! Interactive terminal dashboard over Codex Meter's existing local services.
+
+mod app;
+mod backend;
+mod layout;
+mod render;
+mod state;
+mod theme;
+
+pub use app::run;

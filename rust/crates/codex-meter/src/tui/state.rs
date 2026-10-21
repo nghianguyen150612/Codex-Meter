@@ -6,6 +6,11 @@ use crate::codex_app_server::{
 use crate::storage::{EvidenceDetail, QuotaHistoryPage, TokenHistoryCursor, TokenHistoryPage};
 
 use super::backend::OverviewData;
+use super::composer::{
+    ComposerFocus, DraftState, ModelSelection, PreparedTask, PromptEditor, ReasoningSelection,
+    TargetKind, WorkspaceSelection,
+};
+use super::drafts::{DraftListing, DraftSummary};
 
 pub const LIST_PAGE_SIZE: usize = 50;
 
@@ -16,15 +21,17 @@ pub enum Screen {
     Projects,
     Models,
     History,
+    Composer,
 }
 
 impl Screen {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Overview,
         Self::Sessions,
         Self::Projects,
         Self::Models,
         Self::History,
+        Self::Composer,
     ];
 
     pub const fn index(self) -> usize {
@@ -34,6 +41,7 @@ impl Screen {
             Self::Projects => 2,
             Self::Models => 3,
             Self::History => 4,
+            Self::Composer => 5,
         }
     }
 
@@ -44,6 +52,7 @@ impl Screen {
             Self::Projects => "Projects",
             Self::Models => "Models",
             Self::History => "History",
+            Self::Composer => "Composer",
         }
     }
 
@@ -147,6 +156,102 @@ pub enum Overlay {
     ModelDetail,
     ProjectDetail,
     EvidenceDetail,
+    ComposerModelPicker,
+    ComposerReasoningPicker,
+    ComposerTargetPicker,
+    ComposerDraftTitle,
+    ComposerDraftLibrary,
+    ComposerDraftDeleteConfirm,
+    ComposerTemplatePicker,
+    ComposerPreflight,
+    UnsavedDraftExit,
+}
+
+pub struct ComposerState {
+    pub editor: PromptEditor,
+    pub focus: ComposerFocus,
+    pub target_kind: TargetKind,
+    pub selected_thread_id: Option<String>,
+    pub workspace: WorkspaceSelection,
+    pub model_selection: ModelSelection,
+    pub reasoning_selection: ReasoningSelection,
+    pub draft_state: DraftState,
+    pub dirty: bool,
+    pub prepared_task: Option<PreparedTask>,
+    pub model_filter: String,
+    pub model_picker_selected: usize,
+    pub session_picker_selected: usize,
+    pub draft_listing: Option<DraftListing>,
+    pub draft_selected: usize,
+    pub loaded_draft_id: Option<String>,
+    pub loaded_draft_digest: Option<String>,
+    pub draft_title: String,
+    pub selected_template: usize,
+    pub action_selected: usize,
+    pub preflight_scroll: u16,
+    pub status: Option<String>,
+}
+
+impl Default for ComposerState {
+    fn default() -> Self {
+        Self {
+            editor: PromptEditor::new(),
+            focus: ComposerFocus::Prompt,
+            target_kind: TargetKind::NewThread,
+            selected_thread_id: None,
+            workspace: WorkspaceSelection::Unselected,
+            model_selection: ModelSelection::Inherit,
+            reasoning_selection: ReasoningSelection::Inherit,
+            draft_state: DraftState::Empty,
+            dirty: false,
+            prepared_task: None,
+            model_filter: String::new(),
+            model_picker_selected: 0,
+            session_picker_selected: 0,
+            draft_listing: None,
+            draft_selected: 0,
+            loaded_draft_id: None,
+            loaded_draft_digest: None,
+            draft_title: String::new(),
+            selected_template: 0,
+            action_selected: 0,
+            preflight_scroll: 0,
+            status: None,
+        }
+    }
+}
+
+impl ComposerState {
+    pub fn invalidate(&mut self) {
+        self.prepared_task = None;
+        self.dirty = true;
+        self.draft_state = if self.editor.text().is_empty() {
+            DraftState::Editing
+        } else {
+            DraftState::Modified
+        };
+        self.status = None;
+    }
+
+    pub fn has_unsaved_content(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn current_reasoning_name(&self) -> &str {
+        match &self.reasoning_selection {
+            ReasoningSelection::Inherit => "Inherit from Codex configuration",
+            ReasoningSelection::ModelDefault => "Model reported default",
+            ReasoningSelection::Explicit(effort) => effort,
+            ReasoningSelection::NeedsChoice(_) => "Choose a supported effort",
+            ReasoningSelection::Unavailable => "Unavailable",
+        }
+    }
+
+    pub fn saved_drafts(&self) -> &[DraftSummary] {
+        self.draft_listing
+            .as_ref()
+            .map_or(&[], |listing| listing.drafts.as_slice())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,6 +277,7 @@ pub struct AppState {
     pub history: Resource<TokenHistoryPage>,
     pub quota_history: Resource<QuotaHistoryPage>,
     pub evidence_detail: Resource<EvidenceDetail>,
+    pub composer: ComposerState,
     pub session_archive_filter: ArchiveFilter,
     pub sessions_active_only: bool,
     pub session_page: usize,
@@ -209,6 +315,7 @@ impl Default for AppState {
             history: Resource::default(),
             quota_history: Resource::default(),
             evidence_detail: Resource::default(),
+            composer: ComposerState::default(),
             session_archive_filter: ArchiveFilter::NonArchived,
             sessions_active_only: false,
             session_page: 0,
@@ -397,7 +504,7 @@ impl AppState {
 
     pub fn move_selection(&mut self, delta: isize) {
         let length = match self.active {
-            Screen::Overview => return,
+            Screen::Overview | Screen::Composer => return,
             Screen::Sessions => self.visible_sessions_page().len(),
             Screen::Projects => self.visible_projects_page().len(),
             Screen::Models => self.visible_models_page().len(),
@@ -411,7 +518,7 @@ impl AppState {
             }
         };
         let selected = match self.active {
-            Screen::Overview => return,
+            Screen::Overview | Screen::Composer => return,
             Screen::Sessions => &mut self.selected_session,
             Screen::Projects => &mut self.selected_project,
             Screen::Models => &mut self.selected_model,
@@ -464,7 +571,7 @@ impl AppState {
             Screen::Sessions => self.selected_session = 0,
             Screen::Projects => self.selected_project = 0,
             Screen::Models => self.selected_model = 0,
-            _ => {}
+            Screen::Overview | Screen::History | Screen::Composer => {}
         }
     }
 
@@ -519,10 +626,11 @@ mod tests {
     fn screen_tabs_wrap_and_keep_stable_numbering() {
         assert_eq!(Screen::from_index(0), Screen::Overview);
         assert_eq!(Screen::from_index(4), Screen::History);
-        assert_eq!(Screen::from_index(5), Screen::Overview);
+        assert_eq!(Screen::from_index(5), Screen::Composer);
+        assert_eq!(Screen::from_index(6), Screen::Overview);
         assert_eq!(
             Screen::ALL.map(Screen::label),
-            ["Overview", "Sessions", "Projects", "Models", "History"]
+            ["Overview", "Sessions", "Projects", "Models", "History", "Composer"]
         );
     }
 

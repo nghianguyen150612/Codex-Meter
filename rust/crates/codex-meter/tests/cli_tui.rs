@@ -14,6 +14,28 @@ fn tui_help_is_available_without_a_terminal() {
 }
 
 #[test]
+fn compose_help_is_available_without_a_terminal_and_keeps_no_arg_help() {
+    let output = cli().args(["compose", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("codex-meter compose [--database PATH]"));
+    assert!(stdout.contains("never starts a thread or model turn"));
+    assert!(!stdout.contains('\u{1b}'));
+}
+
+#[test]
+fn redirected_composer_fails_before_emitting_terminal_control_sequences() {
+    let output = cli().args(["compose"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("tui_requires_tty"));
+    assert!(stderr.contains("codex-meter compose"));
+    assert!(stderr.contains("requires stdin and stdout to be interactive terminals"));
+    assert!(!stderr.contains('\u{1b}'));
+}
+
+#[test]
 fn redirected_tui_fails_before_emitting_terminal_control_sequences() {
     let output = cli()
         .args(["tui", "--database", "local evidence.sqlite3"])

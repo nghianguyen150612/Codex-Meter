@@ -2,9 +2,11 @@
 
 mod app;
 mod backend;
+mod composer;
+mod drafts;
 mod layout;
 mod render;
 mod state;
 mod theme;
 
-pub use app::run;
+pub use app::{run, run_composer};

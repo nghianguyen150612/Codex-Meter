@@ -106,7 +106,8 @@ while True:
             time.sleep(30)
     elif not initialized:
         raise SystemExit(14)
-    elif method in ("turn/start", "turn/steer"):
+    elif method in ("thread/start", "turn/start", "turn/steer"):
+        # Preparation-only tests must fail loudly if a thread or model turn is started.
         raise SystemExit(30)
     elif mode == "unsupported":
         send({"id": message["id"], "error": {"code": -32601, "message": "unsupported"}})

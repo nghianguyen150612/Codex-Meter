@@ -122,6 +122,7 @@ pub enum CliAction {
     InspectHelp,
     QuotaHelp,
     TuiHelp,
+    ComposeHelp,
     Version,
     Sync(SyncArguments),
     Estimate(EstimateArguments),
@@ -136,6 +137,7 @@ pub enum CliAction {
     Models(ModelsArguments),
     Projects(ProjectsArguments),
     Tui(TuiArguments),
+    Compose(TuiArguments),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +170,10 @@ where
         return parse_sync_args(&arguments[1..]);
     }
     if arguments[0] == OsStr::new("tui") {
-        return parse_tui_args(&arguments[1..]);
+        return parse_tui_args(&arguments[1..], false);
+    }
+    if arguments[0] == OsStr::new("compose") {
+        return parse_tui_args(&arguments[1..], true);
     }
     if arguments[0] == OsStr::new("tokens") {
         return parse_tokens_args(&arguments[1..]);
@@ -294,12 +299,16 @@ where
     }))
 }
 
-fn parse_tui_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+fn parse_tui_args(arguments: &[OsString], composer: bool) -> Result<CliAction, CliError> {
     if arguments
         .iter()
         .any(|argument| argument == OsStr::new("--help"))
     {
-        return Ok(CliAction::TuiHelp);
+        return Ok(if composer {
+            CliAction::ComposeHelp
+        } else {
+            CliAction::TuiHelp
+        });
     }
     let mut database = None;
     let mut seen_database = false;
@@ -325,7 +334,12 @@ fn parse_tui_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
         database = Some(PathBuf::from(value));
         index += 1;
     }
-    Ok(CliAction::Tui(TuiArguments { database }))
+    let arguments = TuiArguments { database };
+    Ok(if composer {
+        CliAction::Compose(arguments)
+    } else {
+        CliAction::Tui(arguments)
+    })
 }
 
 fn parse_sync_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
@@ -933,7 +947,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Session and model commands use Codex App Server; they do not submit model turns. Reporting commands read SQLite strictly read-only.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {
@@ -992,6 +1006,10 @@ pub fn tui_help_text() -> &'static str {
     "Codex Meter — interactive local usage dashboard\n\nUSAGE:\n    codex-meter tui [--database PATH]\n\nOPTIONS:\n    --database PATH   Read a specific existing Codex Meter database\n    --help            Show this help\n\nThe dashboard requires stdin and stdout to be terminals. It uses local Codex telemetry and Codex App Server metadata; missing evidence is shown as unavailable.\n"
 }
 
+pub fn compose_help_text() -> &'static str {
+    "Codex Meter — prepare a local Codex task\n\nUSAGE:\n    codex-meter compose [--database PATH]\n\nOPTIONS:\n    --database PATH   Read an explicit Codex Meter SQLite database for quota evidence\n    --help            Show this help\n\nCompose opens the Ratatui composer with live model and session metadata. It prepares a typed task, reads quota evidence locally, and saves prompt drafts only on explicit request. It never starts a thread or model turn.\n"
+}
+
 fn error(code: &'static str, message: &str) -> CliError {
     CliError {
         code,
@@ -1037,6 +1055,30 @@ mod tests {
         );
         assert_eq!(
             parse(&["tui", "--database", "one", "--database", "two"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+    }
+
+    #[test]
+    fn compose_reuses_the_tui_database_options_and_selects_the_composer_entrypoint() {
+        assert_eq!(
+            parse(&["compose"]).unwrap(),
+            CliAction::Compose(TuiArguments { database: None })
+        );
+        assert_eq!(
+            parse(&["compose", "--database", "local evidence.sqlite3"]).unwrap(),
+            CliAction::Compose(TuiArguments {
+                database: Some(PathBuf::from("local evidence.sqlite3"))
+            })
+        );
+        assert_eq!(
+            parse(&["compose", "--help"]).unwrap(),
+            CliAction::ComposeHelp
+        );
+        assert_eq!(
+            parse(&["compose", "--database", "one", "--database", "two"])
                 .unwrap_err()
                 .code,
             "invalid_argument"

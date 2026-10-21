@@ -245,6 +245,12 @@ Codex Meter is local-first and MUST collect only the minimum metadata needed for
 
 Parsers and diagnostic paths MUST avoid copying prohibited content merely because it coexists with allowed numerical telemetry. Logs, errors, exports, fixtures, and backups SHOULD follow the same minimization rule.
 
+Prompt text may be saved only as an explicitly user-requested draft document. Drafts are separate
+from normal telemetry: they MUST stay out of the SQLite usage ledger, automatic diagnostics, logs,
+exports, and cloud sync. A local draft is plaintext unless the user's filesystem independently
+encrypts it; private file permissions do not provide encryption. Composer text remains in memory by
+default, with no autosave.
+
 A future community dataset MAY accept sanitized numerical observations only. Upload MUST always require explicit opt-in, SHOULD preview the exact exported data, and MUST NOT be enabled implicitly. Community upload is outside P001 and v1 implementation work in this prompt.
 
 ## Major product components

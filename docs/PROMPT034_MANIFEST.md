@@ -76,9 +76,9 @@ Local validation completed in the managed Linux container:
 | P029 installed-runtime smoke | Passed: reproducible wheel, isolated install, relocation, source mode, determinism, concurrency, and read-only SQLite |
 | P030 version policy | Passed: v0.1.0 policy unchanged |
 | P030 extracted candidate smoke | Passed: local Linux bundle exercised after fresh extraction/relocation, installed worker, sufficient and insufficient estimates, deterministic JSON, version compatibility, and read-only SQLite |
-| P030 aggregate candidate | Pending platform matrix; only the Linux bundle was built locally, and aggregate verification requires Linux, macOS x86_64/arm64, Windows, and wheel artifacts |
+| P030 aggregate candidate | Passed GitHub Release candidate validation on PR head `abbc786f93258b742c3834ccebedbcca0de5ece6`: Linux, macOS x86_64/arm64, Windows, shared wheel, and aggregate verification |
 | `git diff --check` | Passed before final review |
-| GitHub Linux/macOS/Windows CI | Running on Draft PR #29; latest check state is reported in the PR |
+| GitHub Linux/macOS/Windows CI | Passed on PR head `abbc786f93258b742c3834ccebedbcca0de5ece6`; Rust format/Clippy/build/tests, Python quality/tests, contracts, and installed-runtime matrices succeeded |
 
 P032/P033 documented an `--all-features` test conflict: `release-artifact` intentionally omits
 checkout worker discovery, while source-mode tests require it. P034 narrowly cfg-gates only those

@@ -73,6 +73,8 @@ Local validation completed in the managed Linux container:
 | Schema/fixture validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures |
 | P029 installed-runtime smoke | Passed: reproducible wheel, isolated install, relocation, source mode, determinism, concurrency, and read-only SQLite |
 | P030 version policy | Passed: v0.1.0 policy unchanged |
+| P030 extracted candidate smoke | Passed: local Linux bundle exercised after fresh extraction/relocation, installed worker, sufficient and insufficient estimates, deterministic JSON, version compatibility, and read-only SQLite |
+| P030 aggregate candidate | Pending platform matrix; only the Linux bundle was built locally, and aggregate verification requires Linux, macOS x86_64/arm64, Windows, and wheel artifacts |
 | `git diff --check` | Passed before final review |
 | GitHub Linux/macOS/Windows CI | Pending Draft PR checks |
 

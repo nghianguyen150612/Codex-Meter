@@ -12,7 +12,7 @@ mod sync;
 pub use args::{
     parse_args, CliAction, CliError, EstimateArguments, HistoryArguments, InspectArguments,
     ModelsArguments, ProjectsArguments, QuotaArguments, SessionForkArguments, SessionShowArguments,
-    SessionsArguments, SyncArguments, TokenScope, TokensArguments,
+    SessionsArguments, SyncArguments, TokenScope, TokensArguments, TuiArguments,
 };
 
 pub fn run<I, S>(arguments: I) -> Result<String, CliError>
@@ -35,6 +35,7 @@ where
         CliAction::HistoryHelp => Ok(args::history_help_text().to_owned()),
         CliAction::InspectHelp => Ok(args::inspect_help_text().to_owned()),
         CliAction::QuotaHelp => Ok(args::quota_help_text().to_owned()),
+        CliAction::TuiHelp => Ok(args::tui_help_text().to_owned()),
         CliAction::Version => Ok(format!("codex-meter {}\n", env!("CARGO_PKG_VERSION"))),
         CliAction::Sync(arguments) => sync::run(arguments),
         CliAction::Estimate(arguments) => estimate::run(arguments),
@@ -48,5 +49,10 @@ where
         CliAction::SessionFork(arguments) => sessions::fork(arguments),
         CliAction::Models(arguments) => models::run(arguments),
         CliAction::Projects(arguments) => projects::run(arguments),
+        CliAction::Tui(arguments) => crate::tui::run(arguments),
     }
+}
+
+pub(crate) fn default_database_path() -> Result<std::path::PathBuf, ()> {
+    sync::default_database_path()
 }

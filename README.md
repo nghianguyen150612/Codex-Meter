@@ -46,6 +46,14 @@ state; fork copies conversation history and requires confirmation. These command
 in the published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
 
+The unreleased P034 development branch adds `codex-meter tui`, a keyboard-driven Ratatui dashboard
+for local usage evidence, quota snapshots, App Server sessions, projects, models, and history. It
+reuses the reporting and App Server services above, keeps history and quota evidence distinct, and
+requires confirmation for session forks and telemetry sync. It does not start model turns. See the
+[TUI dashboard guide](docs/V02_TUI_DASHBOARD.md) and
+[P034 implementation manifest](docs/PROMPT034_MANIFEST.md) for controls, privacy, validation, and
+the pending live-device gate. The feature is not in the published v0.1.0 assets.
+
 ## Quick install (v0.1.0 technical preview)
 
 User-local scripts for Linux/macOS and Windows are in [script installation](docs/SCRIPT_INSTALLATION.md). They download pinned v0.1.0 assets, verify SHA-256 hashes, and install the native CLI plus matching Python wheel. No root/Administrator permissions or provider credentials are needed. An existing compatible SQLite database remains necessary for estimates.
@@ -69,6 +77,8 @@ See the [P032 implementation manifest](docs/PROMPT032_MANIFEST.md) for native re
 gates, and the outstanding Arch-device integration gate.
 See the [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for the App Server client,
 session-management scope, and live-device gate.
+See the [P034 implementation manifest](docs/PROMPT034_MANIFEST.md) for the Ratatui dashboard,
+interactive navigation, quality gates, and reference-device status.
 See the [cross-platform runtime guide](docs/CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md) for local
 wheel installation, installed-worker selection, and runtime compatibility coverage.
 

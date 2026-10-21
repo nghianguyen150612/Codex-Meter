@@ -68,7 +68,7 @@ impl CodexAppServer {
     }
 
     #[cfg(test)]
-    pub(super) fn connect_test_server(mode: &str) -> Result<Self, CodexAppError> {
+    pub(crate) fn connect_test_server(mode: &str) -> Result<Self, CodexAppError> {
         let program = std::env::var_os("PYTHON").unwrap_or_else(|| {
             if cfg!(windows) {
                 OsString::from("python")

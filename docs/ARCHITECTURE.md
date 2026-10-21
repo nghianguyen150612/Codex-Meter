@@ -83,7 +83,7 @@ Python owns robust capacity estimation, median and weighted-median calculations,
 
 ### Presentation
 
-The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. A future TUI may reuse the application/domain interfaces. A web dashboard is outside v1.
+The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, and the existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. A web dashboard is outside v1.
 
 ## Logical Rust components
 

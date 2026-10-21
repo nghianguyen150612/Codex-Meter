@@ -1,0 +1,598 @@
+use std::collections::HashMap;
+
+use crate::codex_app_server::{
+    ArchiveFilter, ModelCatalog, ProjectSummary, SessionDetail, SessionMetadata,
+};
+use crate::storage::{EvidenceDetail, QuotaHistoryPage, TokenHistoryCursor, TokenHistoryPage};
+
+use super::backend::OverviewData;
+
+pub const LIST_PAGE_SIZE: usize = 50;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Screen {
+    Overview,
+    Sessions,
+    Projects,
+    Models,
+    History,
+}
+
+impl Screen {
+    pub const ALL: [Self; 5] = [
+        Self::Overview,
+        Self::Sessions,
+        Self::Projects,
+        Self::Models,
+        Self::History,
+    ];
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Overview => 0,
+            Self::Sessions => 1,
+            Self::Projects => 2,
+            Self::Models => 3,
+            Self::History => 4,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Sessions => "Sessions",
+            Self::Projects => "Projects",
+            Self::Models => "Models",
+            Self::History => "History",
+        }
+    }
+
+    pub const fn from_index(index: usize) -> Self {
+        Self::ALL[index % Self::ALL.len()]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Resource<T> {
+    pub value: Option<T>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub request_id: u64,
+}
+
+impl<T> Default for Resource<T> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            loading: false,
+            error: None,
+            request_id: 0,
+        }
+    }
+}
+
+impl<T> Resource<T> {
+    pub fn begin(&mut self, request_id: u64) {
+        self.request_id = request_id;
+        self.loading = true;
+        self.error = None;
+    }
+
+    pub fn finish(&mut self, request_id: u64, result: Result<T, String>) -> bool {
+        if self.request_id != request_id {
+            return false;
+        }
+        self.loading = false;
+        match result {
+            Ok(value) => {
+                self.value = Some(value);
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryScope {
+    Today,
+    Week,
+    All,
+}
+
+impl HistoryScope {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Today => "Today",
+            Self::Week => "Week",
+            Self::All => "All history",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Today => Self::Week,
+            Self::Week => Self::All,
+            Self::All => Self::Today,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryMode {
+    Tokens,
+    Quota,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchKind {
+    Text,
+    Model,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchInput {
+    pub screen: Screen,
+    pub kind: SearchKind,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Overlay {
+    Help,
+    ForkConfirm { thread_id: String },
+    SyncConfirm,
+    SessionDetail,
+    ModelDetail,
+    ProjectDetail,
+    EvidenceDetail,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AppServerStatus {
+    Unknown,
+    Connecting,
+    Connected,
+    Unavailable,
+}
+
+pub struct AppState {
+    pub active: Screen,
+    pub overlay: Option<Overlay>,
+    pub search: Option<SearchInput>,
+    pub searches: HashMap<Screen, String>,
+    pub status: Option<String>,
+    pub app_server_status: AppServerStatus,
+    pub overview: Resource<OverviewData>,
+    pub sessions: Resource<Vec<SessionMetadata>>,
+    pub session_detail: Resource<SessionDetail>,
+    pub projects: Resource<Vec<ProjectSummary>>,
+    pub models: Resource<ModelCatalog>,
+    pub history: Resource<TokenHistoryPage>,
+    pub quota_history: Resource<QuotaHistoryPage>,
+    pub evidence_detail: Resource<EvidenceDetail>,
+    pub session_archive_filter: ArchiveFilter,
+    pub sessions_active_only: bool,
+    pub session_page: usize,
+    pub project_page: usize,
+    pub model_page: usize,
+    pub selected_session: usize,
+    pub selected_project: usize,
+    pub selected_model: usize,
+    pub selected_history: usize,
+    pub history_scope: HistoryScope,
+    pub history_mode: HistoryMode,
+    pub history_model_filter: Option<String>,
+    pub history_page_cursors: Vec<Option<TokenHistoryCursor>>,
+    pub quota_page_cursors: Vec<Option<crate::storage::QuotaHistoryCursor>>,
+    pub mutation_pending: bool,
+    pub mutation_request_id: u64,
+    next_request_id: u64,
+    pub quitting: bool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            active: Screen::Overview,
+            overlay: None,
+            search: None,
+            searches: HashMap::new(),
+            status: None,
+            app_server_status: AppServerStatus::Unknown,
+            overview: Resource::default(),
+            sessions: Resource::default(),
+            session_detail: Resource::default(),
+            projects: Resource::default(),
+            models: Resource::default(),
+            history: Resource::default(),
+            quota_history: Resource::default(),
+            evidence_detail: Resource::default(),
+            session_archive_filter: ArchiveFilter::NonArchived,
+            sessions_active_only: false,
+            session_page: 0,
+            project_page: 0,
+            model_page: 0,
+            selected_session: 0,
+            selected_project: 0,
+            selected_model: 0,
+            selected_history: 0,
+            history_scope: HistoryScope::All,
+            history_mode: HistoryMode::Tokens,
+            history_model_filter: None,
+            history_page_cursors: vec![None],
+            quota_page_cursors: vec![None],
+            mutation_pending: false,
+            mutation_request_id: 0,
+            next_request_id: 0,
+            quitting: false,
+        }
+    }
+}
+
+impl AppState {
+    pub fn next_request_id(&mut self) -> u64 {
+        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        self.next_request_id
+    }
+
+    pub fn visible_sessions(&self) -> Vec<&SessionMetadata> {
+        let needle = self
+            .searches
+            .get(&Screen::Sessions)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.sessions
+            .value
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|session| match self.session_archive_filter {
+                ArchiveFilter::NonArchived => session.archived != Some(true),
+                ArchiveFilter::Archived => session.archived == Some(true),
+                ArchiveFilter::All => true,
+            })
+            .filter(|session| {
+                !self.sessions_active_only || session.runtime_status.as_str() == "active"
+            })
+            .filter(|session| {
+                needle.is_empty()
+                    || contains(&session.thread_id, needle)
+                    || session
+                        .model
+                        .as_deref()
+                        .is_some_and(|value| contains(value, needle))
+                    || session
+                        .source
+                        .as_ref()
+                        .is_some_and(|value| contains(value.as_str(), needle))
+            })
+            .collect()
+    }
+
+    pub fn visible_projects(&self) -> Vec<&ProjectSummary> {
+        let needle = self
+            .searches
+            .get(&Screen::Projects)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.projects
+            .value
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|project| {
+                needle.is_empty()
+                    || contains(&project.project_alias, needle)
+                    || project
+                        .codex_project_id
+                        .as_deref()
+                        .is_some_and(|value| contains(value, needle))
+                    || contains(&format!("{:?}", project.association), needle)
+            })
+            .collect()
+    }
+
+    pub fn visible_sessions_page(&self) -> Vec<&SessionMetadata> {
+        page_slice(&self.visible_sessions(), self.session_page)
+    }
+
+    pub fn visible_projects_page(&self) -> Vec<&ProjectSummary> {
+        page_slice(&self.visible_projects(), self.project_page)
+    }
+
+    pub fn visible_models(&self) -> Vec<&crate::codex_app_server::ModelInfo> {
+        let needle = self
+            .searches
+            .get(&Screen::Models)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.models
+            .value
+            .as_ref()
+            .map(|catalog| catalog.models.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|model| contains(&model.id, needle) || contains(&model.display_name, needle))
+            .collect()
+    }
+
+    pub fn visible_models_page(&self) -> Vec<&crate::codex_app_server::ModelInfo> {
+        page_slice(&self.visible_models(), self.model_page)
+    }
+
+    pub fn visible_token_events(&self) -> Vec<&crate::storage::TokenUsageEvidence> {
+        let needle = self
+            .searches
+            .get(&Screen::History)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.history
+            .value
+            .as_ref()
+            .map(|page| {
+                page.events
+                    .iter()
+                    .filter(|event| {
+                        needle.is_empty()
+                            || contains(&event.event_id, needle)
+                            || event
+                                .model
+                                .as_deref()
+                                .is_some_and(|value| contains(value, needle))
+                            || event
+                                .reasoning_level
+                                .as_deref()
+                                .is_some_and(|value| contains(value, needle))
+                            || event
+                                .raw_total
+                                .is_some_and(|value| value.to_string().contains(needle))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn visible_quota_samples(&self) -> Vec<&crate::storage::QuotaSnapshotEvidence> {
+        let needle = self
+            .searches
+            .get(&Screen::History)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.quota_history
+            .value
+            .as_ref()
+            .map(|page| {
+                page.samples
+                    .iter()
+                    .filter(|sample| {
+                        needle.is_empty()
+                            || contains(&sample.sample_id, needle)
+                            || contains(&sample.observed_at, needle)
+                            || format!("{:?}", sample.meter_type)
+                                .to_lowercase()
+                                .contains(&needle.to_lowercase())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn selected_session_metadata(&self) -> Option<&SessionMetadata> {
+        self.visible_sessions_page()
+            .get(self.selected_session)
+            .copied()
+    }
+
+    pub fn selected_project_summary(&self) -> Option<&ProjectSummary> {
+        self.visible_projects_page()
+            .get(self.selected_project)
+            .copied()
+    }
+
+    pub fn selected_model_info(&self) -> Option<&crate::codex_app_server::ModelInfo> {
+        self.visible_models_page().get(self.selected_model).copied()
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        let length = match self.active {
+            Screen::Overview => return,
+            Screen::Sessions => self.visible_sessions_page().len(),
+            Screen::Projects => self.visible_projects_page().len(),
+            Screen::Models => self.visible_models_page().len(),
+            Screen::History => {
+                let length = if self.history_mode == HistoryMode::Quota {
+                    self.visible_quota_samples().len()
+                } else {
+                    self.visible_token_events().len()
+                };
+                length
+            }
+        };
+        let selected = match self.active {
+            Screen::Overview => return,
+            Screen::Sessions => &mut self.selected_session,
+            Screen::Projects => &mut self.selected_project,
+            Screen::Models => &mut self.selected_model,
+            Screen::History => &mut self.selected_history,
+        };
+        if length == 0 {
+            *selected = 0;
+        } else {
+            *selected = ((*selected as isize + delta).rem_euclid(length as isize)) as usize;
+        }
+    }
+
+    pub fn clamp_selection(&mut self) {
+        self.session_page = clamp_page(self.session_page, self.visible_sessions().len());
+        self.project_page = clamp_page(self.project_page, self.visible_projects().len());
+        self.model_page = clamp_page(self.model_page, self.visible_models().len());
+        self.selected_session = self
+            .selected_session
+            .min(self.visible_sessions_page().len().saturating_sub(1));
+        self.selected_project = self
+            .selected_project
+            .min(self.visible_projects_page().len().saturating_sub(1));
+        self.selected_model = self
+            .selected_model
+            .min(self.visible_models_page().len().saturating_sub(1));
+        let history_len = if self.history_mode == HistoryMode::Quota {
+            self.visible_quota_samples().len()
+        } else {
+            self.visible_token_events().len()
+        };
+        self.selected_history = self.selected_history.min(history_len.saturating_sub(1));
+    }
+
+    pub fn change_list_page(&mut self, direction: isize) {
+        let count = match self.active {
+            Screen::Sessions => self.visible_sessions().len(),
+            Screen::Projects => self.visible_projects().len(),
+            Screen::Models => self.visible_models().len(),
+            _ => return,
+        };
+        let pages = count.div_ceil(LIST_PAGE_SIZE).max(1);
+        let page = match self.active {
+            Screen::Sessions => &mut self.session_page,
+            Screen::Projects => &mut self.project_page,
+            Screen::Models => &mut self.model_page,
+            _ => return,
+        };
+        *page = (*page as isize + direction).clamp(0, pages.saturating_sub(1) as isize) as usize;
+        match self.active {
+            Screen::Sessions => self.selected_session = 0,
+            Screen::Projects => self.selected_project = 0,
+            Screen::Models => self.selected_model = 0,
+            _ => {}
+        }
+    }
+
+    pub fn page_count(&self) -> usize {
+        let count = match self.active {
+            Screen::Sessions => self.visible_sessions().len(),
+            Screen::Projects => self.visible_projects().len(),
+            Screen::Models => self.visible_models().len(),
+            _ => 0,
+        };
+        count.div_ceil(LIST_PAGE_SIZE).max(1)
+    }
+}
+
+fn page_slice<'a, T>(values: &[&'a T], page: usize) -> Vec<&'a T> {
+    values
+        .iter()
+        .skip(page.saturating_mul(LIST_PAGE_SIZE))
+        .take(LIST_PAGE_SIZE)
+        .copied()
+        .collect()
+}
+
+fn clamp_page(page: usize, count: usize) -> usize {
+    page.min(count.saturating_sub(1) / LIST_PAGE_SIZE)
+}
+
+fn contains(value: &str, needle: &str) -> bool {
+    value.to_lowercase().contains(&needle.to_lowercase())
+}
+
+pub(super) fn looks_like_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with('/')
+        || value.starts_with('\\')
+        || value.contains('/')
+        || value.contains('\\')
+        || value.starts_with('~')
+        || (value.len() >= 2
+            && value.as_bytes()[0].is_ascii_alphabetic()
+            && value.as_bytes()[1] == b':')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex_app_server::{
+        HistoryAvailability, RuntimeStatus, SessionOrigin, UsageLinkAvailability,
+    };
+
+    #[test]
+    fn screen_tabs_wrap_and_keep_stable_numbering() {
+        assert_eq!(Screen::from_index(0), Screen::Overview);
+        assert_eq!(Screen::from_index(4), Screen::History);
+        assert_eq!(Screen::from_index(5), Screen::Overview);
+        assert_eq!(
+            Screen::ALL.map(Screen::label),
+            ["Overview", "Sessions", "Projects", "Models", "History"]
+        );
+    }
+
+    #[test]
+    fn stale_out_of_order_results_do_not_replace_newer_data() {
+        let mut resource = Resource::<u32>::default();
+        resource.begin(1);
+        resource.begin(2);
+        assert!(!resource.finish(1, Ok(10)));
+        assert!(resource.finish(2, Ok(20)));
+        assert_eq!(resource.value, Some(20));
+    }
+
+    #[test]
+    fn search_and_filter_modes_are_local_and_empty_results_are_safe() {
+        let mut state = AppState::default();
+        state.searches.insert(Screen::Sessions, "not-found".into());
+        state.clamp_selection();
+        assert!(state.visible_sessions().is_empty());
+        assert_eq!(state.selected_session, 0);
+        assert_eq!(HistoryScope::Today.next(), HistoryScope::Week);
+        assert_eq!(HistoryScope::Week.next(), HistoryScope::All);
+        assert_eq!(HistoryScope::All.next(), HistoryScope::Today);
+    }
+
+    #[test]
+    fn large_session_lists_use_bounded_pages_and_keep_selection_in_page() {
+        let mut state = AppState {
+            active: Screen::Sessions,
+            ..AppState::default()
+        };
+        state.sessions.value = Some((0..103).map(session).collect());
+        assert_eq!(state.visible_sessions_page().len(), 50);
+        state.change_list_page(1);
+        assert_eq!(state.session_page, 1);
+        assert_eq!(state.visible_sessions_page().len(), 50);
+        assert_eq!(
+            state.selected_session_metadata().unwrap().thread_id,
+            "thread-50"
+        );
+        state.change_list_page(1);
+        assert_eq!(state.session_page, 2);
+        assert_eq!(state.visible_sessions_page().len(), 3);
+        state.change_list_page(1);
+        assert_eq!(state.session_page, 2);
+        state.change_list_page(-1);
+        assert_eq!(state.session_page, 1);
+    }
+
+    fn session(index: usize) -> SessionMetadata {
+        SessionMetadata {
+            thread_id: format!("thread-{index}"),
+            session_id: None,
+            name: None,
+            created_at: None,
+            updated_at: None,
+            runtime_status: RuntimeStatus::Idle,
+            source: None,
+            archived: Some(false),
+            pinned: None,
+            loaded: None,
+            model: None,
+            model_provider: None,
+            reasoning_effort: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            project_id: None,
+            history_availability: HistoryAvailability::Unknown,
+            origin: SessionOrigin::LocalCodex,
+            usage_link: UsageLinkAvailability::Unavailable,
+        }
+    }
+}

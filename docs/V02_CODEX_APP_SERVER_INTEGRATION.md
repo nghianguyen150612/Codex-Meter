@@ -121,10 +121,10 @@ The only supported origin is `local_codex`. Codex Cloud tasks and ChatGPT Work c
 not inferred from local thread metadata. Unsupported origins remain unavailable and require a
 separate documented integration.
 
-The session, model, and project services are reusable Rust application APIs. Future TUI or plugin
-clients should call these services rather than implement another App Server connection. P033 does
-not add a full-screen TUI, prompt composer, model picker, plugin package, cloud integration, or
-persistent project tagging; those are later milestones.
+The session, model, and project services are reusable Rust application APIs. The P034 TUI calls
+these services through one bounded background App Server worker rather than implementing another
+connection. P033 itself did not add a full-screen TUI. Prompt composition, model switching, plugin
+packaging, cloud integration, and persistent project tagging remain later milestones.
 
 ## Validation status
 

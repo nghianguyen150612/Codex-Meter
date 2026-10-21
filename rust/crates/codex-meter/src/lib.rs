@@ -6,6 +6,7 @@ pub mod cli;
 pub mod codex_app_server;
 pub mod storage;
 pub mod telemetry;
+pub mod tui;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Codex Meter";

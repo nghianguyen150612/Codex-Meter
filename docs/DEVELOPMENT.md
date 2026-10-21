@@ -24,6 +24,7 @@ in `scripts/p030_release_candidate.py`.
 | `just lint` | Check Rust formatting/Clippy and Python Ruff lint/format. |
 | `just contracts` | Validate all schemas and positive/negative fixtures. |
 | `just check` | Run the complete local quality gate. |
+| `cargo run --manifest-path rust/Cargo.toml -- tui` | Run the unreleased P034 local terminal dashboard in an interactive terminal. |
 | `uv build --project python --wheel --out-dir <directory>` | Build a local analytics wheel for installation/runtime validation. |
 | `python scripts/p029_runtime_smoke.py` | Build and compare two wheels, check contents, install one in a fresh venv, and test the relocated CLI. |
 | `python scripts/p030_release_candidate.py check-version` | Check product versions and preserve schema/method/protocol versions. |
@@ -83,7 +84,8 @@ error. An unknown or missing fixture fails validation rather than being silently
 
 ## Current scope
 
-The Rust executable exposes `codex-meter sync` for one-shot local Codex rollout ingestion,
+The Rust executable exposes `codex-meter tui` for the unreleased P034 interactive dashboard;
+`sync` for one-shot local Codex rollout ingestion,
 `tokens`, `history`, `inspect`, and `quota` for read-only evidence reporting, and `estimate` for
 empirical current-capacity estimates. The unreleased P033 CLI adds `sessions`, `session show`,
 `session resume`, `session fork`, `models`, and `projects` through the installed Codex App Server.
@@ -99,3 +101,8 @@ subprocess, reads the selected SQLite dataset strictly read-only, and validates 
 before rendering output. See [CLI analytics integration](CLI_ANALYTICS_INTEGRATION.md) for setup,
 examples, supported options, and current limitations. Automatic quota acquisition and other
 analysis types are not exposed by these commands.
+
+The TUI calls the same P031/P032 SQLite reporting and P033 App Server services; it does not add a
+second database layer. Read-only screens use SQLite query-only access. The `s` key starts one-shot
+sync only after an in-TUI confirmation. See [the TUI dashboard guide](V02_TUI_DASHBOARD.md) for
+keyboard controls, quota/token semantics, terminal restoration, and current live-device limits.

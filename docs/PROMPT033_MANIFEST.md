@@ -70,9 +70,9 @@ repositories, worktrees, non-Git directories, inaccessible evidence, and path pr
 | Contract validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures |
 | P029 installed-runtime smoke | Passed on Linux x86_64 |
 | P030 version policy | Passed |
-| P030 release-artifact bundle and extracted smoke | Pending rerun on the corrected committed source |
+| P030 release-artifact bundle and extracted smoke | Passed on `b6fbcc9333f6e0dfdbf05281878e709a1ee51953`; repeated Linux bundles matched at SHA-256 `cd71c82f2952109e80738ef4c2bf5f66501e61d498f988c3b1636f8af627cdef`, and the extracted installed-worker smoke passed |
 | P031 sync / P032 reporting regression | Passed in the full Rust workspace suite |
-| GitHub Linux/macOS/Windows CI | Corrected-head checks pending; the first PR run exposed a macOS EOF timing race in process-exit classification, now fixed |
+| GitHub Linux/macOS/Windows CI | Passed on `b6fbcc9333f6e0dfdbf05281878e709a1ee51953` for push and PR events, including all installed-runtime and platform-bundle jobs |
 | `git diff --check` | Passed on the reviewed staged diff |
 
 An additional `cargo test --workspace --all-targets --all-features --locked` run reproduced two
@@ -89,7 +89,7 @@ existing P032 project policy; synthetic fixtures and the separate 0.159.2 runtim
 substitutes. Keep the PR Draft until the reference-device report is reviewed. Do not merge or
 publish a release from this change.
 
-The implementation is on [`feat/p033-codex-app-server`](https://github.com/nghianguyen150612/Codex-Meter/tree/feat/p033-codex-app-server), with implementation commit `7d7da7aa93fd30c89f3c2f24830fac8bb734ff72`; a follow-up commit directly polls the child after stdout EOF so process exit and an orderly stdout close remain distinct. Draft PR [#28](https://github.com/nghianguyen150612/Codex-Meter/pull/28) targets `main`. Corrected-head GitHub checks will run after this follow-up is pushed. The PR remains Draft under the device gate above.
+The implementation is on [`feat/p033-codex-app-server`](https://github.com/nghianguyen150612/Codex-Meter/tree/feat/p033-codex-app-server), with feature commit `7d7da7aa93fd30c89f3c2f24830fac8bb734ff72` and EOF-classification fix `b6fbcc9333f6e0dfdbf05281878e709a1ee51953`. The initial PR run exposed a macOS timing race in process-exit classification; the fix polls the child directly after stdout EOF, and the corrected-head test and release workflows passed. Draft PR [#28](https://github.com/nghianguyen150612/Codex-Meter/pull/28) targets `main` and remains Draft under the device gate above.
 
 P034 can build a TUI over the exported session/model/project services. It should preserve the
 metadata and evidence separation, explicit confirmation for history cloning, and no-turn semantics.

@@ -743,11 +743,13 @@ mod tests {
     static NEXT_TEST_PATH: AtomicUsize = AtomicUsize::new(1);
 
     fn test_dir() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "codex-meter-drafts-test-{}-{}",
-            std::process::id(),
-            NEXT_TEST_PATH.fetch_add(1, Ordering::Relaxed)
-        ))
+        std::fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory should resolve to its canonical path")
+            .join(format!(
+                "codex-meter-drafts-test-{}-{}",
+                std::process::id(),
+                NEXT_TEST_PATH.fetch_add(1, Ordering::Relaxed)
+            ))
     }
 
     fn contents(prompt: &str) -> DraftContents {

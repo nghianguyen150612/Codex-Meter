@@ -3,6 +3,7 @@
 pub mod analytics;
 pub mod benchmark;
 pub mod cli;
+pub mod codex_app_server;
 pub mod storage;
 pub mod telemetry;
 

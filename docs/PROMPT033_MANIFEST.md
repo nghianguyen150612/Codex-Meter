@@ -70,9 +70,9 @@ repositories, worktrees, non-Git directories, inaccessible evidence, and path pr
 | Contract validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures |
 | P029 installed-runtime smoke | Passed on Linux x86_64 |
 | P030 version policy | Passed |
-| P030 release-artifact bundle and extracted smoke | Pending final clean-commit run |
+| P030 release-artifact bundle and extracted smoke | Pending rerun on the corrected committed source |
 | P031 sync / P032 reporting regression | Passed in the full Rust workspace suite |
-| GitHub Linux/macOS/Windows CI | Pending PR checks |
+| GitHub Linux/macOS/Windows CI | Corrected-head checks pending; the first PR run exposed a macOS EOF timing race in process-exit classification, now fixed |
 | `git diff --check` | Passed on the reviewed staged diff |
 
 An additional `cargo test --workspace --all-targets --all-features --locked` run reproduced two
@@ -88,6 +88,8 @@ The reference Arch Linux desktop was not accessible. Its device gate remains pen
 existing P032 project policy; synthetic fixtures and the separate 0.159.2 runtime are not
 substitutes. Keep the PR Draft until the reference-device report is reviewed. Do not merge or
 publish a release from this change.
+
+The implementation is on [`feat/p033-codex-app-server`](https://github.com/nghianguyen150612/Codex-Meter/tree/feat/p033-codex-app-server), with implementation commit `7d7da7aa93fd30c89f3c2f24830fac8bb734ff72`; a follow-up commit directly polls the child after stdout EOF so process exit and an orderly stdout close remain distinct. Draft PR [#28](https://github.com/nghianguyen150612/Codex-Meter/pull/28) targets `main`. Corrected-head GitHub checks will run after this follow-up is pushed. The PR remains Draft under the device gate above.
 
 P034 can build a TUI over the exported session/model/project services. It should preserve the
 metadata and evidence separation, explicit confirmation for history cloning, and no-turn semantics.

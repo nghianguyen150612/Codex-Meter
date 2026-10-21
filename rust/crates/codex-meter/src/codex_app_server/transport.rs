@@ -175,10 +175,11 @@ impl ProcessTransport {
         {
             let state = Arc::clone(&state);
             let writer = Arc::clone(&writer);
+            let child = Arc::clone(&child);
             workers.push(
                 thread::Builder::new()
                     .name("codex-meter-app-server-reader".to_owned())
-                    .spawn(move || read_stdout(stdout, state, writer))
+                    .spawn(move || read_stdout(stdout, state, writer, child))
                     .map_err(|_| CodexAppError::AppServerStartupFailure)?,
             );
         }
@@ -382,7 +383,12 @@ fn remote_error(method: &'static str, error: RpcResponseError) -> CodexAppError 
     }
 }
 
-fn read_stdout(stdout: ChildStdout, state: Arc<SharedState>, writer: Arc<Mutex<ChildStdin>>) {
+fn read_stdout(
+    stdout: ChildStdout,
+    state: Arc<SharedState>,
+    writer: Arc<Mutex<ChildStdin>>,
+    child: Arc<Mutex<Child>>,
+) {
     let mut reader = BufReader::new(stdout);
     loop {
         match read_message(&mut reader, MAX_MESSAGE_BYTES) {
@@ -405,6 +411,25 @@ fn read_stdout(stdout: ChildStdout, state: Arc<SharedState>, writer: Arc<Mutex<C
                 }
                 let deadline = Instant::now() + EOF_PROCESS_EXIT_GRACE;
                 while !state.process_exited.load(Ordering::Acquire) && Instant::now() < deadline {
+                    let status = match child.lock() {
+                        Ok(mut child) => child.try_wait(),
+                        Err(_) => {
+                            state.fail(TransportFault::ProcessIoFailure);
+                            return;
+                        }
+                    };
+                    match status {
+                        Ok(Some(_)) => {
+                            state.process_exited.store(true, Ordering::Release);
+                            state.fail(process_exit_fault(&state));
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            state.fail(TransportFault::ProcessIoFailure);
+                            return;
+                        }
+                    }
                     thread::sleep(Duration::from_millis(5));
                 }
                 let fault = if let Some(fault) = state.current_fault() {

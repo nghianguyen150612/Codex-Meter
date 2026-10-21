@@ -46,13 +46,16 @@ state; fork copies conversation history and requires confirmation. These command
 in the published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
 
-The unreleased P034 development branch adds `codex-meter tui`, a keyboard-driven Ratatui dashboard
-for local usage evidence, quota snapshots, App Server sessions, projects, models, and history. It
-reuses the reporting and App Server services above, keeps history and quota evidence distinct, and
-requires confirmation for session forks and telemetry sync. It does not start model turns. See the
-[TUI dashboard guide](docs/V02_TUI_DASHBOARD.md) and
-[P034 implementation manifest](docs/PROMPT034_MANIFEST.md) for controls, privacy, validation, and
-the pending live-device gate. The feature is not in the published v0.1.0 assets.
+The unreleased P034–P035 development branch adds `codex-meter tui` and `codex-meter compose`. The
+Ratatui dashboard shows local usage evidence, quota snapshots, App Server sessions, projects,
+models, and history. Composer adds multiline task preparation, live model and reasoning selection,
+session/workspace targeting, read-only preflight, and explicitly saved local drafts. It reuses the
+services above, keeps history and quota evidence distinct, and requires confirmation for session
+forks, telemetry sync, and draft persistence. It does not start model turns. See the
+[TUI and Composer guide](docs/V02_TUI_DASHBOARD.md),
+[Composer guide](docs/V02_PROMPT_COMPOSER.md), and
+[P035 implementation manifest](docs/PROMPT035_MANIFEST.md) for controls, privacy, validation, and
+the pending live-device gate. These features are not in the published v0.1.0 assets.
 
 ## Quick install (v0.1.0 technical preview)
 

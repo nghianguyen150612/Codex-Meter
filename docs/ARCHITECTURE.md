@@ -83,7 +83,7 @@ Python owns robust capacity estimation, median and weighted-median calculations,
 
 ### Presentation
 
-The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, and the existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. A web dashboard is outside v1.
+The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034–P035 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, typed task-preparation state, and existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. Composer drafts use a separate, explicit user-owned document store; they do not create a second usage ledger. A web dashboard is outside v1.
 
 ## Logical Rust components
 
@@ -219,6 +219,12 @@ Rust owns controlled-run boundaries, configuration/environment metadata, telemet
 ## Privacy and diagnostics boundary
 
 Prompts, responses, source code, repository contents, Git remotes, user email, credentials, OAuth tokens, and access tokens MUST NOT enter persistent telemetry. When a source mixes allowed numerical metadata with prohibited content, the adapter/parser extracts only necessary allowed fields; prohibited fields are never copied into normalized events, SQLite, logs, analytics JSON, diagnostics, or benchmark records.
+
+The P035 Composer may persist prompt text only after an explicit user save action, in a versioned,
+per-user draft directory separate from telemetry SQLite. Draft files are plaintext and are not
+encrypted by filesystem permissions. They are not autosaved, logged, synchronized, or included in
+telemetry. Composer preflight is read-only and prepares a `PreparedTask` for the future P036
+execution controller; it does not start a thread or turn.
 
 Diagnostics may report sanitized metadata such as source type, normalized event type, timestamps, counters, errors, and offsets/cursors. They must not dump whole source records or payloads that may contain content. Debug mode follows exactly the same privacy contract. Troubleshooting features require privacy review and cannot bypass it for convenience.
 

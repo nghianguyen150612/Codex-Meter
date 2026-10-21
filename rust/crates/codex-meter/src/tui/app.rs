@@ -12,6 +12,12 @@ use ratatui::Terminal;
 #[cfg(test)]
 use super::backend::TestAppServerMode;
 use super::backend::{Backend, BackendEvent, MutationKind};
+use super::composer::{
+    ComposerFocus, DraftState, EditorError, ModelSelection, PreflightSnapshot, PreparedTask,
+    ProjectAssociation, QuotaFreshness, QuotaObservation, ReasoningSelection, TargetKind,
+    ValidationStatus, WorkspaceSelection, BUILT_IN_TEMPLATES, MAX_PROMPT_BYTES,
+};
+use super::drafts::{DraftContents, DraftError, DraftStore};
 use super::render;
 use super::state::{
     looks_like_path, AppServerStatus, AppState, HistoryMode, Overlay, Screen, SearchInput,
@@ -24,11 +30,25 @@ use crate::codex_app_server::ArchiveFilter;
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 pub fn run(arguments: TuiArguments) -> Result<String, CliError> {
+    run_with_screen(arguments, Screen::Overview)
+}
+
+pub fn run_composer(arguments: TuiArguments) -> Result<String, CliError> {
+    run_with_screen(arguments, Screen::Composer)
+}
+
+fn run_with_screen(arguments: TuiArguments, initial_screen: Screen) -> Result<String, CliError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(CliError {
             code: "tui_requires_tty",
-            message: "`codex-meter tui` requires stdin and stdout to be interactive terminals"
-                .to_owned(),
+            message: format!(
+                "`codex-meter {}` requires stdin and stdout to be interactive terminals",
+                if initial_screen == Screen::Composer {
+                    "compose"
+                } else {
+                    "tui"
+                }
+            ),
         });
     }
     let database_path = match arguments.database.as_ref() {
@@ -49,8 +69,9 @@ pub fn run(arguments: TuiArguments) -> Result<String, CliError> {
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).map_err(terminal_error)?;
     let mut state = AppState::default();
+    state.active = initial_screen;
     let theme = Theme::detect();
-    request_screen(&mut state, &backend, Screen::Overview);
+    request_screen(&mut state, &backend, initial_screen);
     terminal.clear().map_err(terminal_error)?;
 
     let result = run_loop(&mut terminal, &mut state, &backend, theme);
@@ -84,6 +105,9 @@ fn run_loop(
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 redraw |= handle_key(state, backend, key);
             }
+            Event::Paste(value) if state.active == Screen::Composer => {
+                redraw |= handle_composer_paste(state, &value);
+            }
             Event::Resize(_, _) => redraw = true,
             _ => {}
         }
@@ -92,8 +116,16 @@ fn run_loop(
 }
 
 fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
+    if state.active == Screen::Composer {
+        return handle_composer_key(state, backend, key);
+    }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.quitting = true;
+        if state.composer.has_unsaved_content() {
+            state.active = Screen::Composer;
+            state.overlay = Some(Overlay::UnsavedDraftExit);
+        } else {
+            state.quitting = true;
+        }
         return true;
     }
     if state.search.is_some() {
@@ -103,10 +135,17 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
         return handle_overlay(state, backend, overlay, key);
     }
     match key.code {
-        KeyCode::Char('q') => state.quitting = true,
+        KeyCode::Char('q') => {
+            if state.composer.has_unsaved_content() {
+                state.active = Screen::Composer;
+                state.overlay = Some(Overlay::UnsavedDraftExit);
+            } else {
+                state.quitting = true;
+            }
+        }
         KeyCode::Tab => switch_screen(state, backend, 1),
         KeyCode::BackTab => switch_screen(state, backend, -1),
-        KeyCode::Char('1'..='5') => {
+        KeyCode::Char('1'..='6') => {
             let KeyCode::Char(number) = key.code else {
                 unreachable!()
             };
@@ -158,6 +197,9 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
             load_selected_session(state, backend)
         }
         KeyCode::Char('F') if state.active == Screen::Sessions => fork_selected_session(state),
+        KeyCode::Char('c') if state.active == Screen::Sessions => {
+            open_composer_for_selected_session(state, backend)
+        }
         KeyCode::Char('m')
             if state.active == Screen::History && state.history_mode == HistoryMode::Tokens =>
         {
@@ -215,6 +257,1180 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
     true
 }
 
+fn handle_composer_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
+    if let Some(overlay) = state.overlay.clone() {
+        return handle_composer_overlay(state, backend, overlay, key);
+    }
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    if key.code == KeyCode::F(5) {
+        state.composer.status = Some("Refreshing session, model, and quota metadata...".into());
+        refresh_screen(state, backend);
+        return true;
+    }
+    match (key.code, control) {
+        (KeyCode::Enter, true) => {
+            open_preflight(state);
+            return true;
+        }
+        (KeyCode::Char('s'), true) => {
+            start_saving_draft(state);
+            return true;
+        }
+        (KeyCode::Char('m'), true) => {
+            open_model_picker(state);
+            return true;
+        }
+        (KeyCode::Char('r'), true) => {
+            open_reasoning_picker(state);
+            return true;
+        }
+        (KeyCode::Char('d'), true) => {
+            open_draft_library(state);
+            return true;
+        }
+        (KeyCode::Char('c'), true) => {
+            if state.composer.has_unsaved_content() {
+                state.overlay = Some(Overlay::UnsavedDraftExit);
+            } else {
+                state.quitting = true;
+            }
+            return true;
+        }
+        _ => {}
+    }
+
+    if state.composer.focus != ComposerFocus::Prompt {
+        if matches!(key.code, KeyCode::Char('q')) {
+            if state.composer.dirty {
+                state.overlay = Some(Overlay::UnsavedDraftExit);
+            } else {
+                state.quitting = true;
+            }
+            return true;
+        }
+        if matches!(key.code, KeyCode::Char('?') | KeyCode::F(1)) {
+            state.overlay = Some(Overlay::Help);
+            return true;
+        }
+        if let KeyCode::Char('1'..='6') = key.code {
+            let KeyCode::Char(number) = key.code else {
+                unreachable!()
+            };
+            state.active = Screen::from_index(number as usize - '1' as usize);
+            request_screen(state, backend, state.active);
+            return true;
+        }
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            state.composer.focus = if state.composer.focus == ComposerFocus::Prompt {
+                ComposerFocus::Actions
+            } else {
+                ComposerFocus::Prompt
+            };
+            true
+        }
+        KeyCode::Tab => {
+            if state.composer.focus == ComposerFocus::Actions {
+                switch_screen(state, backend, 1);
+            } else {
+                state.composer.focus = state.composer.focus.next();
+            }
+            true
+        }
+        KeyCode::BackTab => {
+            if state.composer.focus == ComposerFocus::Target {
+                switch_screen(state, backend, -1);
+            } else {
+                state.composer.focus = state.composer.focus.previous();
+            }
+            true
+        }
+        KeyCode::Left if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_left();
+            true
+        }
+        KeyCode::Right if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_right();
+            true
+        }
+        KeyCode::Up if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_vertical(-1);
+            true
+        }
+        KeyCode::Down if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_vertical(1);
+            true
+        }
+        KeyCode::PageUp if state.composer.focus == ComposerFocus::Prompt => {
+            for _ in 0..8 {
+                state.composer.editor.move_vertical(-1);
+            }
+            true
+        }
+        KeyCode::PageDown if state.composer.focus == ComposerFocus::Prompt => {
+            for _ in 0..8 {
+                state.composer.editor.move_vertical(1);
+            }
+            true
+        }
+        KeyCode::Home if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_home();
+            true
+        }
+        KeyCode::End if state.composer.focus == ComposerFocus::Prompt => {
+            state.composer.editor.move_end();
+            true
+        }
+        KeyCode::Backspace if state.composer.focus == ComposerFocus::Prompt => {
+            if state.composer.editor.backspace() {
+                state.composer.invalidate();
+            }
+            true
+        }
+        KeyCode::Delete if state.composer.focus == ComposerFocus::Prompt => {
+            if state.composer.editor.delete_forward() {
+                state.composer.invalidate();
+            }
+            true
+        }
+        KeyCode::Enter if state.composer.focus == ComposerFocus::Prompt => {
+            if state.composer.editor.insert_char('\n').is_ok() {
+                state.composer.invalidate();
+            } else {
+                report_editor_error(state);
+            }
+            true
+        }
+        KeyCode::Char(character)
+            if state.composer.focus == ComposerFocus::Prompt && !character.is_control() =>
+        {
+            if state.composer.editor.insert_char(character).is_ok() {
+                state.composer.invalidate();
+            } else {
+                report_editor_error(state);
+            }
+            true
+        }
+        KeyCode::Enter => {
+            match state.composer.focus {
+                ComposerFocus::Target => open_target_picker(state),
+                ComposerFocus::Workspace => select_current_directory(state),
+                ComposerFocus::Model => open_model_picker(state),
+                ComposerFocus::Reasoning => open_reasoning_picker(state),
+                ComposerFocus::Actions => activate_composer_action(state),
+                ComposerFocus::Prompt => unreachable!(),
+            }
+            true
+        }
+        KeyCode::Char('w') if state.composer.focus == ComposerFocus::Workspace => {
+            select_current_directory(state);
+            true
+        }
+        KeyCode::Char('c') if state.composer.focus == ComposerFocus::Workspace => {
+            state.composer.workspace = WorkspaceSelection::Unselected;
+            state.composer.invalidate();
+            state.composer.status = Some("Workspace selection cleared.".to_owned());
+            true
+        }
+        KeyCode::Char('s') if state.composer.focus == ComposerFocus::Actions => {
+            start_saving_draft(state);
+            true
+        }
+        KeyCode::Char('l') if state.composer.focus == ComposerFocus::Actions => {
+            open_draft_library(state);
+            true
+        }
+        KeyCode::Char('t') if state.composer.focus == ComposerFocus::Actions => {
+            state.overlay = Some(Overlay::ComposerTemplatePicker);
+            true
+        }
+        KeyCode::Char('r') if state.composer.focus == ComposerFocus::Actions => {
+            open_preflight(state);
+            true
+        }
+        KeyCode::Left | KeyCode::Right if state.composer.focus == ComposerFocus::Actions => {
+            let direction = if key.code == KeyCode::Left { -1 } else { 1 };
+            state.composer.action_selected =
+                (state.composer.action_selected as isize + direction).rem_euclid(4) as usize;
+            true
+        }
+        KeyCode::Char('j') | KeyCode::Down if state.composer.focus == ComposerFocus::Target => {
+            state.composer.focus = ComposerFocus::Target;
+            open_target_picker(state);
+            true
+        }
+        KeyCode::Char('?') if state.composer.focus != ComposerFocus::Prompt => {
+            state.overlay = Some(Overlay::Help);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_composer_paste(state: &mut AppState, value: &str) -> bool {
+    match state.overlay.as_ref() {
+        Some(Overlay::ComposerDraftTitle) => {
+            let mut accepted = String::new();
+            for character in value.chars() {
+                if character.is_control() {
+                    continue;
+                }
+                if state.composer.draft_title.len() + accepted.len() + character.len_utf8() > 384 {
+                    break;
+                }
+                accepted.push(character);
+            }
+            state.composer.draft_title.push_str(&accepted);
+            true
+        }
+        Some(Overlay::ComposerModelPicker) => {
+            for character in value.chars().filter(|character| !character.is_control()) {
+                if state.composer.model_filter.len() + character.len_utf8() > 128 {
+                    break;
+                }
+                state.composer.model_filter.push(character);
+            }
+            reset_model_picker_selection(state);
+            true
+        }
+        None if state.composer.focus == ComposerFocus::Prompt => {
+            if state.composer.editor.insert_paste(value).is_ok() {
+                state.composer.invalidate();
+            } else {
+                report_editor_error(state);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn report_editor_error(state: &mut AppState) {
+    state.composer.status = Some(match state.composer.editor.error {
+        Some(EditorError::TooLarge) => {
+            format!("Prompt limit is {MAX_PROMPT_BYTES} bytes; the new input was rejected in full.")
+        }
+        Some(EditorError::UnsupportedControl) => {
+            "Paste contains unsupported control characters; the input was rejected in full."
+                .to_owned()
+        }
+        None => "Prompt edit failed; the current text is unchanged.".to_owned(),
+    });
+}
+
+fn handle_composer_overlay(
+    state: &mut AppState,
+    backend: &Backend,
+    overlay: Overlay,
+    key: KeyEvent,
+) -> bool {
+    if overlay == Overlay::Help {
+        return handle_overlay(state, backend, Overlay::Help, key);
+    }
+    let text_entry = matches!(
+        &overlay,
+        Overlay::ComposerDraftTitle | Overlay::ComposerModelPicker
+    );
+    if (key.code == KeyCode::Char('q') && !text_entry)
+        || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+    {
+        if state.composer.has_unsaved_content() {
+            state.overlay = Some(Overlay::UnsavedDraftExit);
+        } else {
+            state.quitting = true;
+            state.overlay = None;
+        }
+        return true;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('s') => {
+                start_saving_draft(state);
+                return true;
+            }
+            KeyCode::Char('d') => {
+                open_draft_library(state);
+                return true;
+            }
+            KeyCode::Char('c') => {
+                state.overlay = Some(Overlay::UnsavedDraftExit);
+                return true;
+            }
+            _ => {}
+        }
+    }
+    match overlay {
+        Overlay::ComposerModelPicker => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.model_picker_selected =
+                    state.composer.model_picker_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let length = filtered_models(state).len() + 1;
+                state.composer.model_picker_selected = state
+                    .composer
+                    .model_picker_selected
+                    .saturating_add(1)
+                    .min(length.saturating_sub(1));
+            }
+            KeyCode::PageUp => state.composer.model_picker_selected = 0,
+            KeyCode::PageDown => {
+                state.composer.model_picker_selected = filtered_models(state).len()
+            }
+            KeyCode::Backspace => {
+                state.composer.model_filter.pop();
+                reset_model_picker_selection(state);
+            }
+            KeyCode::Enter => select_model_from_picker(state),
+            KeyCode::Char(character) if !character.is_control() => {
+                if state.composer.model_filter.len() + character.len_utf8() <= 128 {
+                    state.composer.model_filter.push(character);
+                    reset_model_picker_selection(state);
+                }
+            }
+            _ => return false,
+        },
+        Overlay::ComposerReasoningPicker => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.model_picker_selected =
+                    state.composer.model_picker_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let length = reasoning_choices(state).len();
+                state.composer.model_picker_selected = state
+                    .composer
+                    .model_picker_selected
+                    .saturating_add(1)
+                    .min(length.saturating_sub(1));
+            }
+            KeyCode::Enter => select_reasoning_from_picker(state),
+            _ => return false,
+        },
+        Overlay::ComposerTargetPicker => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.session_picker_selected =
+                    state.composer.session_picker_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let length = state
+                    .sessions
+                    .value
+                    .as_ref()
+                    .map_or(1, |sessions| sessions.len() + 1);
+                state.composer.session_picker_selected = state
+                    .composer
+                    .session_picker_selected
+                    .saturating_add(1)
+                    .min(length.saturating_sub(1));
+            }
+            KeyCode::Enter => select_target_from_picker(state),
+            _ => return false,
+        },
+        Overlay::ComposerDraftTitle => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Backspace => {
+                state.composer.draft_title.pop();
+            }
+            KeyCode::Enter => save_draft_now(state),
+            KeyCode::Char(character) if !character.is_control() => {
+                if state.composer.draft_title.len() + character.len_utf8() <= 384 {
+                    state.composer.draft_title.push(character);
+                }
+            }
+            _ => return false,
+        },
+        Overlay::ComposerDraftLibrary => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.draft_selected = state.composer.draft_selected.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.composer.draft_selected = state
+                    .composer
+                    .draft_selected
+                    .saturating_add(1)
+                    .min(state.composer.saved_drafts().len().saturating_sub(1));
+            }
+            KeyCode::Enter => load_selected_draft(state),
+            KeyCode::Char('d') => {
+                if !state.composer.saved_drafts().is_empty() {
+                    state.overlay = Some(Overlay::ComposerDraftDeleteConfirm);
+                }
+            }
+            _ => return false,
+        },
+        Overlay::ComposerDraftDeleteConfirm => match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => {
+                state.overlay = Some(Overlay::ComposerDraftLibrary)
+            }
+            KeyCode::Char('y') | KeyCode::Enter => delete_selected_draft(state),
+            _ => return false,
+        },
+        Overlay::ComposerTemplatePicker => match key.code {
+            KeyCode::Esc => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.selected_template =
+                    state.composer.selected_template.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.composer.selected_template = state
+                    .composer
+                    .selected_template
+                    .saturating_add(1)
+                    .min(BUILT_IN_TEMPLATES.len().saturating_sub(1));
+            }
+            KeyCode::Enter => apply_template(state),
+            _ => return false,
+        },
+        Overlay::ComposerPreflight => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => state.overlay = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.composer.preflight_scroll = state.composer.preflight_scroll.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.composer.preflight_scroll = state.composer.preflight_scroll.saturating_add(1)
+            }
+            KeyCode::Char('s') => start_saving_draft(state),
+            _ => return false,
+        },
+        Overlay::UnsavedDraftExit => match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => state.overlay = None,
+            KeyCode::Char('y') | KeyCode::Enter => {
+                state.overlay = None;
+                state.quitting = true;
+            }
+            KeyCode::Char('s') => start_saving_draft(state),
+            _ => return false,
+        },
+        _ => return handle_overlay(state, backend, overlay, key),
+    }
+    true
+}
+
+fn filtered_models(state: &AppState) -> Vec<&crate::codex_app_server::ModelInfo> {
+    let filter = state.composer.model_filter.to_lowercase();
+    state
+        .models
+        .value
+        .as_ref()
+        .map(|catalog| {
+            catalog
+                .models
+                .iter()
+                .filter(|model| {
+                    filter.is_empty()
+                        || model.id.to_lowercase().contains(&filter)
+                        || model.display_name.to_lowercase().contains(&filter)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn open_model_picker(state: &mut AppState) {
+    state.composer.focus = ComposerFocus::Model;
+    state.composer.model_filter.clear();
+    reset_model_picker_selection(state);
+    if state.models.value.is_none() && state.models.error.is_none() {
+        state.composer.status = Some("Loading live model catalog...".to_owned());
+    }
+    state.overlay = Some(Overlay::ComposerModelPicker);
+}
+
+fn reset_model_picker_selection(state: &mut AppState) {
+    let selection = if state.composer.model_filter.is_empty() {
+        match &state.composer.model_selection {
+            ModelSelection::Explicit(selected) => filtered_models(state)
+                .iter()
+                .position(|model| &model.id == selected)
+                .map_or(0, |index| index + 1),
+            ModelSelection::Inherit | ModelSelection::Unavailable => 0,
+        }
+    } else if filtered_models(state).is_empty() {
+        0
+    } else {
+        1
+    };
+    state.composer.model_picker_selected = selection;
+}
+
+fn select_model_from_picker(state: &mut AppState) {
+    let selected = state.composer.model_picker_selected;
+    if selected == 0 {
+        let previous_effort = match &state.composer.reasoning_selection {
+            ReasoningSelection::Explicit(value) => Some(value.clone()),
+            ReasoningSelection::NeedsChoice(value) => value.clone(),
+            _ => None,
+        };
+        state.composer.model_selection = ModelSelection::Inherit;
+        if previous_effort.is_some() {
+            state.composer.reasoning_selection = ReasoningSelection::NeedsChoice(previous_effort);
+        }
+        state.composer.invalidate();
+        state.overlay = None;
+        return;
+    }
+    let Some(model) = filtered_models(state)
+        .get(selected - 1)
+        .map(|model| (*model).clone())
+    else {
+        state.composer.status = Some("No live model is available at this selection.".to_owned());
+        return;
+    };
+    let previous_effort = match &state.composer.reasoning_selection {
+        ReasoningSelection::Explicit(value) => Some(value.clone()),
+        ReasoningSelection::NeedsChoice(value) => value.clone(),
+        _ => None,
+    };
+    let unsupported_effort = previous_effort
+        .as_ref()
+        .filter(|effort| {
+            !model
+                .supported_reasoning_efforts
+                .iter()
+                .any(|supported| &supported.id == *effort)
+        })
+        .cloned();
+    state.composer.model_selection = ModelSelection::Explicit(model.id.clone());
+    state.composer.invalidate();
+    if let Some(effort) = unsupported_effort {
+        state.composer.reasoning_selection = ReasoningSelection::NeedsChoice(Some(effort));
+        state.composer.status = Some(
+            "The previous reasoning effort is unsupported by this model; choose an option.".into(),
+        );
+    }
+    state.overlay = None;
+}
+
+fn reasoning_choices(state: &AppState) -> Vec<(ReasoningSelection, String)> {
+    let mut choices = vec![(
+        ReasoningSelection::Inherit,
+        "Inherit from Codex configuration".to_owned(),
+    )];
+    let ModelSelection::Explicit(model_id) = &state.composer.model_selection else {
+        return choices;
+    };
+    let Some(model) = state
+        .models
+        .value
+        .as_ref()
+        .and_then(|catalog| catalog.models.iter().find(|model| &model.id == model_id))
+    else {
+        return choices;
+    };
+    choices.push((
+        ReasoningSelection::ModelDefault,
+        format!(
+            "Model reported default ({})",
+            model.default_reasoning_effort
+        ),
+    ));
+    choices.extend(model.supported_reasoning_efforts.iter().map(|effort| {
+        (
+            ReasoningSelection::Explicit(effort.id.clone()),
+            if effort.description.is_empty() {
+                effort.id.clone()
+            } else {
+                format!("{} — {}", effort.id, effort.description)
+            },
+        )
+    }));
+    choices
+}
+
+fn open_reasoning_picker(state: &mut AppState) {
+    state.composer.focus = ComposerFocus::Reasoning;
+    state.composer.model_picker_selected = 0;
+    state.overlay = Some(Overlay::ComposerReasoningPicker);
+}
+
+fn select_reasoning_from_picker(state: &mut AppState) {
+    if let Some((selection, _)) = reasoning_choices(state).get(state.composer.model_picker_selected)
+    {
+        state.composer.reasoning_selection = selection.clone();
+        state.composer.invalidate();
+        state.overlay = None;
+    } else {
+        state.composer.status = Some("Choose an effort supported by the selected model.".into());
+    }
+}
+
+fn open_target_picker(state: &mut AppState) {
+    state.composer.focus = ComposerFocus::Target;
+    state.composer.session_picker_selected = state
+        .composer
+        .selected_thread_id
+        .as_ref()
+        .and_then(|thread_id| {
+            state
+                .sessions
+                .value
+                .as_ref()?
+                .iter()
+                .position(|session| &session.thread_id == thread_id)
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+    state.overlay = Some(Overlay::ComposerTargetPicker);
+}
+
+fn select_target_from_picker(state: &mut AppState) {
+    let selection = state.composer.session_picker_selected;
+    if selection == 0 {
+        state.composer.target_kind = TargetKind::NewThread;
+        state.composer.selected_thread_id = None;
+    } else if let Some(session) = state
+        .sessions
+        .value
+        .as_ref()
+        .and_then(|sessions| sessions.get(selection - 1))
+    {
+        state.composer.target_kind = TargetKind::ExistingThread;
+        state.composer.selected_thread_id = Some(session.thread_id.clone());
+    } else {
+        state.composer.status =
+            Some("Session metadata is unavailable; no target was selected.".into());
+        return;
+    }
+    state.composer.invalidate();
+    state.overlay = None;
+}
+
+fn select_current_directory(state: &mut AppState) {
+    match std::env::current_dir() {
+        Ok(path) => {
+            state.composer.workspace = WorkspaceSelection::CurrentDirectory(path);
+            state.composer.invalidate();
+            state.composer.status = Some(
+                "Current working directory selected explicitly; its path stays in memory only."
+                    .to_owned(),
+            );
+        }
+        Err(_) => {
+            state.composer.status = Some("Current working directory is unavailable.".to_owned())
+        }
+    }
+}
+
+fn open_composer_for_selected_session(state: &mut AppState, backend: &Backend) {
+    let Some(thread_id) = state
+        .selected_session_metadata()
+        .map(|session| session.thread_id.clone())
+    else {
+        state.status = Some("Select a session before opening the Composer.".to_owned());
+        return;
+    };
+    state.active = Screen::Composer;
+    state.composer.target_kind = TargetKind::ExistingThread;
+    state.composer.selected_thread_id = Some(thread_id);
+    state.composer.focus = ComposerFocus::Prompt;
+    state.composer.invalidate();
+    request_screen(state, backend, Screen::Composer);
+}
+
+fn activate_composer_action(state: &mut AppState) {
+    match state.composer.action_selected {
+        0 => start_saving_draft(state),
+        1 => open_draft_library(state),
+        2 => state.overlay = Some(Overlay::ComposerTemplatePicker),
+        _ => open_preflight(state),
+    }
+}
+
+fn start_saving_draft(state: &mut AppState) {
+    if state.composer.loaded_draft_id.is_some() {
+        save_draft_now(state);
+    } else {
+        state.composer.draft_title.clear();
+        state.overlay = Some(Overlay::ComposerDraftTitle);
+    }
+}
+
+fn draft_contents(state: &AppState, title: String) -> DraftContents {
+    DraftContents {
+        title,
+        prompt: state.composer.editor.text().to_owned(),
+        target_kind: state.composer.target_kind,
+        target_thread_id: state.composer.selected_thread_id.clone(),
+        workspace_selected: matches!(
+            &state.composer.workspace,
+            WorkspaceSelection::CurrentDirectory(_)
+        ),
+        model_selection: state.composer.model_selection.clone(),
+        reasoning_selection: state.composer.reasoning_selection.clone(),
+    }
+}
+
+fn save_draft_now(state: &mut AppState) {
+    let title = state.composer.draft_title.trim().to_owned();
+    if title.is_empty() {
+        state.composer.status = Some("Enter a title to save this draft.".to_owned());
+        return;
+    }
+    let contents = draft_contents(state, title.clone());
+    let result = match DraftStore::open_default() {
+        Ok(store) => match (
+            state.composer.loaded_draft_id.as_deref(),
+            state.composer.loaded_draft_digest.as_deref(),
+        ) {
+            (Some(id), Some(digest)) => store.replace(id, digest, contents),
+            _ => store.save_new(contents),
+        },
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(draft) => {
+            state.composer.loaded_draft_id = Some(draft.id.clone());
+            state.composer.loaded_draft_digest = Some(draft.digest);
+            state.composer.draft_title = draft.contents.title;
+            state.composer.dirty = false;
+            state.composer.draft_state = DraftState::Saved;
+            state.composer.prepared_task = None;
+            state.composer.status = Some(
+                "Draft saved by explicit request. Saved prompts are plaintext on disk.".to_owned(),
+            );
+            state.overlay = None;
+        }
+        Err(error) => {
+            state.composer.status = Some(error.message().to_owned());
+            if error != DraftError::Conflict {
+                state.overlay = None;
+            }
+        }
+    }
+}
+
+fn open_draft_library(state: &mut AppState) {
+    match DraftStore::open_default().and_then(|store| store.list()) {
+        Ok(listing) => {
+            let skipped = listing.skipped_entries;
+            let overflowed = listing.overflowed;
+            state.composer.draft_listing = Some(listing);
+            state.composer.draft_selected = 0;
+            state.overlay = Some(Overlay::ComposerDraftLibrary);
+            state.composer.status = if overflowed {
+                Some("Draft listing is capped at 100 files; delete listed drafts before saving or replacing.".to_owned())
+            } else if skipped > 0 {
+                Some(format!(
+                    "{skipped} malformed or unsafe saved draft entry/entries were skipped."
+                ))
+            } else {
+                None
+            };
+        }
+        Err(error) => state.composer.status = Some(error.message().to_owned()),
+    }
+}
+
+fn load_selected_draft(state: &mut AppState) {
+    if state.composer.dirty {
+        state.composer.status = Some(
+            "Save the current changes before loading another draft; current text was retained."
+                .to_owned(),
+        );
+        return;
+    }
+    let Some(summary) = state
+        .composer
+        .saved_drafts()
+        .get(state.composer.draft_selected)
+        .cloned()
+    else {
+        state.composer.status = Some("No saved drafts are available.".to_owned());
+        return;
+    };
+    match DraftStore::open_default().and_then(|store| store.load(&summary.id)) {
+        Ok(draft) => {
+            match super::composer::PromptEditor::from_text(draft.contents.prompt) {
+                Ok(editor) => state.composer.editor = editor,
+                Err(_) => {
+                    state.composer.status = Some(
+                        "The saved prompt exceeds the current size limit; it was not loaded."
+                            .to_owned(),
+                    );
+                    return;
+                }
+            }
+            state.composer.target_kind = draft.contents.target_kind;
+            state.composer.selected_thread_id = draft.contents.target_thread_id;
+            state.composer.workspace = WorkspaceSelection::Unselected;
+            state.composer.model_selection = draft.contents.model_selection;
+            state.composer.reasoning_selection = draft.contents.reasoning_selection;
+            state.composer.draft_title = draft.contents.title;
+            state.composer.loaded_draft_id = Some(draft.id);
+            state.composer.loaded_draft_digest = Some(draft.digest);
+            state.composer.dirty = false;
+            state.composer.draft_state = DraftState::Saved;
+            state.composer.prepared_task = None;
+            state.composer.status = Some(
+                if draft.contents.workspace_selected
+                    && draft.contents.target_kind == TargetKind::NewThread
+                {
+                    "Saved draft loaded into memory. Reconfirm the workspace before preflight; no task was submitted.".into()
+                } else {
+                    "Saved draft loaded into memory; no task was submitted.".into()
+                },
+            );
+            state.overlay = None;
+        }
+        Err(error) => state.composer.status = Some(error.message().to_owned()),
+    }
+}
+
+fn delete_selected_draft(state: &mut AppState) {
+    let Some(summary) = state
+        .composer
+        .saved_drafts()
+        .get(state.composer.draft_selected)
+        .cloned()
+    else {
+        state.overlay = Some(Overlay::ComposerDraftLibrary);
+        return;
+    };
+    let result = DraftStore::open_default().and_then(|store| {
+        let draft = store.load(&summary.id)?;
+        store.delete(&summary.id, &draft.digest)
+    });
+    match result {
+        Ok(()) => {
+            open_draft_library(state);
+            if state.composer.status.is_none() {
+                state.composer.status =
+                    Some("Saved draft deleted from local draft storage.".into());
+            }
+        }
+        Err(error) => {
+            state.composer.status = Some(error.message().to_owned());
+            state.overlay = Some(Overlay::ComposerDraftLibrary);
+        }
+    }
+}
+
+fn apply_template(state: &mut AppState) {
+    let Some((name, template)) = BUILT_IN_TEMPLATES.get(state.composer.selected_template) else {
+        state.overlay = None;
+        return;
+    };
+    match state.composer.editor.insert_paste(template) {
+        Ok(()) => {
+            state.composer.invalidate();
+            state.composer.status = Some(format!("{name} template inserted for editing."));
+        }
+        Err(_) => report_editor_error(state),
+    }
+    state.composer.focus = ComposerFocus::Prompt;
+    state.overlay = None;
+}
+
+fn open_preflight(state: &mut AppState) {
+    let task = prepare_task(state);
+    state.composer.draft_state = DraftState::Validated;
+    state.composer.draft_state = match task.validation_status {
+        ValidationStatus::Ready => DraftState::PreflightReady,
+        ValidationStatus::Incomplete | ValidationStatus::Invalid => DraftState::Invalid,
+    };
+    state.composer.prepared_task = Some(task);
+    state.composer.preflight_scroll = 0;
+    state.overlay = Some(Overlay::ComposerPreflight);
+}
+
+fn prepare_task(state: &AppState) -> PreparedTask {
+    let mut messages = Vec::new();
+    if state.composer.editor.text().trim().is_empty() {
+        messages.push("Prompt is empty.".to_owned());
+    }
+    let (target_id, project_association) = match state.composer.target_kind {
+        TargetKind::NewThread => {
+            if !matches!(
+                &state.composer.workspace,
+                WorkspaceSelection::CurrentDirectory(_)
+            ) {
+                messages.push("Choose a workspace before preparing a new thread.".to_owned());
+            }
+            (None, None)
+        }
+        TargetKind::ExistingThread => match state.composer.selected_thread_id.as_ref() {
+            None => {
+                messages.push("Select an existing local session.".to_owned());
+                (None, None)
+            }
+            Some(thread_id) => {
+                let session = state.sessions.value.as_ref().and_then(|sessions| {
+                    sessions
+                        .iter()
+                        .find(|session| &session.thread_id == thread_id)
+                });
+                match session {
+                    Some(session) if session.archived == Some(true) => {
+                        messages.push(
+                            "Archived session metadata cannot be prepared for a new turn.".into(),
+                        );
+                        (Some(thread_id.clone()), session.project_id.clone())
+                    }
+                    Some(session) => {
+                        if matches!(
+                            &session.runtime_status,
+                            crate::codex_app_server::RuntimeStatus::Active
+                        ) {
+                            messages.push("Session is active; P036 must verify turn availability before execution.".into());
+                        } else {
+                            messages.push("Session is listed in local history; P036 must revalidate availability.".into());
+                        }
+                        (Some(thread_id.clone()), session.project_id.clone())
+                    }
+                    None => {
+                        messages.push(
+                            "Selected session is unavailable in the current metadata list.".into(),
+                        );
+                        (Some(thread_id.clone()), None)
+                    }
+                }
+            }
+        },
+    };
+    let mut invalid = false;
+    if state.app_server_status != AppServerStatus::Connected {
+        messages.push("Codex App Server is unavailable or has not completed discovery.".into());
+        invalid = true;
+    }
+    if state
+        .models
+        .value
+        .as_ref()
+        .is_none_or(|catalog| catalog.availability != "live")
+    {
+        messages.push(
+            "Live model catalog is unavailable; model compatibility cannot be verified.".into(),
+        );
+        invalid = true;
+    }
+    let model_id = match &state.composer.model_selection {
+        ModelSelection::Inherit => {
+            messages.push(
+                "Model is inherited from Codex configuration; the resolved model is unknown."
+                    .into(),
+            );
+            None
+        }
+        ModelSelection::Unavailable => {
+            messages.push("Model selection is unavailable.".into());
+            invalid = true;
+            None
+        }
+        ModelSelection::Explicit(model_id) => {
+            let present =
+                state.models.value.as_ref().is_some_and(|catalog| {
+                    catalog.models.iter().any(|model| &model.id == model_id)
+                });
+            if !present {
+                messages.push("Selected model is not present in the current live catalog.".into());
+                invalid = true;
+            }
+            Some(model_id.as_str())
+        }
+    };
+    let selected_model = model_id.and_then(|model_id| {
+        state
+            .models
+            .value
+            .as_ref()
+            .and_then(|catalog| catalog.models.iter().find(|model| model.id == model_id))
+    });
+    match &state.composer.reasoning_selection {
+        ReasoningSelection::Inherit => {
+            messages.push("Reasoning effort is inherited from Codex configuration.".into())
+        }
+        ReasoningSelection::ModelDefault => match selected_model {
+            Some(model) => messages.push(format!(
+                "Reasoning effort uses the reported model default: {}.",
+                model.default_reasoning_effort
+            )),
+            None => {
+                messages.push(
+                    "A model-reported reasoning default requires an explicit available model."
+                        .into(),
+                );
+                invalid = true;
+            }
+        },
+        ReasoningSelection::Explicit(effort) => match selected_model {
+            Some(model)
+                if model
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|supported| &supported.id == effort) => {}
+            Some(_) => {
+                messages.push("Selected reasoning effort is unsupported by this model.".into());
+                invalid = true;
+            }
+            None => {
+                messages.push(
+                    "An explicit reasoning effort cannot be checked without a selected model."
+                        .into(),
+                );
+                invalid = true;
+            }
+        },
+        ReasoningSelection::NeedsChoice(previous) => {
+            messages.push(match previous {
+                Some(previous) => format!("Choose a supported reasoning effort; previous value '{previous}' is not accepted automatically."),
+                None => "Choose a reasoning effort supported by the selected model.".into(),
+            });
+            invalid = true;
+        }
+        ReasoningSelection::Unavailable => {
+            messages.push("Reasoning capability data is unavailable.".into());
+            invalid = true;
+        }
+    }
+    if let Some(version) = state
+        .overview
+        .value
+        .as_ref()
+        .and_then(|overview| overview.telemetry_version.as_deref())
+    {
+        if version != crate::telemetry::COMPATIBILITY_CLI_VERSION {
+            messages.push("Quota/token source compatibility is unverified for the recorded telemetry version.".into());
+        }
+    } else {
+        messages.push(
+            "Source compatibility is unavailable because no telemetry version was observed.".into(),
+        );
+    }
+    let quota_snapshot = preflight_quota_snapshot(state);
+    if quota_snapshot.five_hour.is_none() {
+        messages.push("Five-hour quota evidence is unavailable.".into());
+    }
+    if quota_snapshot.weekly.is_none() {
+        messages.push("Weekly quota evidence is unavailable.".into());
+    }
+    messages
+        .push("Expected task quota cost: Unavailable — insufficient calibrated evidence.".into());
+    let has_blocking = invalid
+        || messages.iter().any(|message| {
+            message.starts_with("Prompt is empty")
+                || message.starts_with("Choose a workspace")
+                || message.starts_with("Select an existing")
+                || message.starts_with("Archived session")
+                || message.starts_with("Selected session is unavailable")
+        });
+    let validation_status = if has_blocking {
+        if state.composer.editor.text().trim().is_empty()
+            || (state.composer.target_kind == TargetKind::NewThread
+                && matches!(&state.composer.workspace, WorkspaceSelection::Unselected))
+            || state.app_server_status != AppServerStatus::Connected
+            || state.models.value.is_none()
+        {
+            ValidationStatus::Incomplete
+        } else {
+            ValidationStatus::Invalid
+        }
+    } else {
+        ValidationStatus::Ready
+    };
+    let model_inherited = matches!(&state.composer.model_selection, ModelSelection::Inherit);
+    let reasoning_inherited = matches!(
+        &state.composer.reasoning_selection,
+        ReasoningSelection::Inherit
+    );
+    let configuration_source = match (model_inherited, reasoning_inherited) {
+        (true, true) => "Model and reasoning inherited from Codex configuration",
+        (true, false) => "Model inherited; reasoning prepared in Codex Meter",
+        (false, true) => "Model prepared in Codex Meter; reasoning inherited",
+        (false, false) => "Model and reasoning prepared in Codex Meter",
+    };
+    PreparedTask {
+        target_kind: state.composer.target_kind,
+        target_thread_id: target_id,
+        workspace: state.composer.workspace.clone(),
+        project_association: project_association.map_or(ProjectAssociation::Unavailable, |alias| {
+            ProjectAssociation::ResponseLocalAlias(alias)
+        }),
+        model_selection: state.composer.model_selection.clone(),
+        reasoning_selection: state.composer.reasoning_selection.clone(),
+        prompt_text: state.composer.editor.text().to_owned(),
+        configuration_source,
+        validation_status,
+        validation_messages: messages,
+        preflight_snapshot: quota_snapshot,
+    }
+}
+
+fn preflight_quota_snapshot(state: &AppState) -> PreflightSnapshot {
+    let Some(overview) = state.overview.value.as_ref() else {
+        return PreflightSnapshot {
+            quota_coverage: Some("Local quota evidence is unavailable.".to_owned()),
+            ..PreflightSnapshot::default()
+        };
+    };
+    let Some(timeline) = overview.quota.as_ref() else {
+        return PreflightSnapshot {
+            quota_coverage: Some("No local quota sample is available.".to_owned()),
+            ..PreflightSnapshot::default()
+        };
+    };
+    let coverage = &timeline.evidence_quality;
+    let coverage_message = if coverage.unsupported_source_versions > 0 {
+        "Unsupported source version observed; evidence may be incomplete."
+    } else if coverage.known_partial_collection > 0
+        || coverage.malformed_or_incomplete_evidence > 0
+        || coverage.source_continuity_ambiguities > 0
+    {
+        "Partial local evidence coverage; account-wide coverage is unavailable."
+    } else {
+        "Local account-meter snapshots only; source coverage is not account-wide."
+    };
+    let as_observation = |sample: &Option<crate::storage::QuotaSnapshotEvidence>| {
+        sample.as_ref().map(|sample| {
+            let freshness = if !sample.used_percent.is_finite()
+                || !(0.0..=100.0).contains(&sample.used_percent)
+            {
+                QuotaFreshness::Invalid
+            } else {
+                match time::OffsetDateTime::parse(
+                    &sample.observed_at,
+                    &time::format_description::well_known::Rfc3339,
+                ) {
+                    Err(_) => QuotaFreshness::TimeUnavailable,
+                    Ok(observed)
+                        if observed - time::OffsetDateTime::now_utc()
+                            > time::Duration::minutes(5) =>
+                    {
+                        QuotaFreshness::TimeUnavailable
+                    }
+                    Ok(observed)
+                        if time::OffsetDateTime::now_utc() - observed
+                            > time::Duration::hours(24) =>
+                    {
+                        QuotaFreshness::Stale
+                    }
+                    Ok(_) => QuotaFreshness::Fresh,
+                }
+            };
+            QuotaObservation {
+                used_percent: sample.used_percent,
+                observed_at: sample.observed_at.clone(),
+                reset_at: sample.reset_at.clone(),
+                freshness,
+            }
+        })
+    };
+    let captured_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok();
+    PreflightSnapshot {
+        five_hour: as_observation(&timeline.five_hour),
+        weekly: as_observation(&timeline.weekly),
+        quota_coverage: Some(coverage_message.to_owned()),
+        captured_at,
+    }
+}
+
 fn handle_search_input(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
     let Some(search) = state.search.as_mut() else {
         return false;
@@ -259,7 +1475,12 @@ fn handle_overlay(
     key: KeyEvent,
 ) -> bool {
     if matches!(key.code, KeyCode::Char('q')) {
-        state.quitting = true;
+        if state.composer.dirty {
+            state.active = Screen::Composer;
+            state.overlay = Some(Overlay::UnsavedDraftExit);
+        } else {
+            state.quitting = true;
+        }
         return true;
     }
     match overlay {
@@ -323,6 +1544,15 @@ fn handle_overlay(
                 state.overlay = None;
             }
         }
+        Overlay::ComposerModelPicker
+        | Overlay::ComposerReasoningPicker
+        | Overlay::ComposerTargetPicker
+        | Overlay::ComposerDraftTitle
+        | Overlay::ComposerDraftLibrary
+        | Overlay::ComposerDraftDeleteConfirm
+        | Overlay::ComposerTemplatePicker
+        | Overlay::ComposerPreflight
+        | Overlay::UnsavedDraftExit => return false,
     }
     true
 }
@@ -338,6 +1568,7 @@ fn switch_screen(state: &mut AppState, backend: &Backend, delta: isize) {
 fn open_selected(state: &mut AppState, backend: &Backend) {
     match state.active {
         Screen::Overview => {}
+        Screen::Composer => {}
         Screen::Sessions => {
             let Some(session) = state.selected_session_metadata() else {
                 return;
@@ -490,6 +1721,15 @@ fn request_screen(state: &mut AppState, backend: &Backend, screen: Screen) {
             HistoryMode::Tokens => request_history_page(state, backend),
             HistoryMode::Quota => request_quota_page(state, backend),
         },
+        Screen::Composer => {
+            request_sessions(state, backend);
+            if state.models.value.is_none() || state.models.error.is_some() {
+                request_models(state, backend);
+            }
+            if state.overview.value.is_none() || state.overview.error.is_some() {
+                request_overview(state, backend);
+            }
+        }
     }
 }
 
@@ -506,6 +1746,11 @@ fn refresh_screen(state: &mut AppState, backend: &Backend) {
             request_history_page(state, backend)
         }
         Screen::History => request_quota_page(state, backend),
+        Screen::Composer => {
+            request_sessions_force(state, backend);
+            request_models(state, backend);
+            request_overview(state, backend);
+        }
     }
 }
 
@@ -635,6 +1880,12 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
             if applied && state.overview.error.is_some() {
                 state.status = state.overview.error.clone();
             }
+            if applied && state.composer.prepared_task.is_some() {
+                state.composer.prepared_task = None;
+                state.composer.draft_state = DraftState::Modified;
+                state.composer.status =
+                    Some("Quota evidence refreshed; review preflight again.".to_owned());
+            }
             applied
         }
         BackendEvent::Sessions { id, result } => {
@@ -661,6 +1912,12 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
                 }
                 if !success {
                     state.status = state.sessions.error.clone();
+                }
+                if state.composer.prepared_task.is_some() {
+                    state.composer.prepared_task = None;
+                    state.composer.draft_state = DraftState::Modified;
+                    state.composer.status =
+                        Some("Session metadata refreshed; review target preflight again.".into());
                 }
                 state.clamp_selection();
             }
@@ -729,6 +1986,13 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
                 }
                 if !success {
                     state.status = state.models.error.clone();
+                    state.composer.prepared_task = None;
+                    state.composer.draft_state = DraftState::Invalid;
+                    state.composer.status = Some(
+                        "Live model discovery failed; the prompt and current selections were retained.".into(),
+                    );
+                } else {
+                    revalidate_composer_model(state);
                 }
                 state.clamp_selection();
             }
@@ -807,13 +2071,68 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
                             request_history_page(state, backend)
                         }
                         Screen::History => request_quota_page(state, backend),
-                        Screen::Overview | Screen::Sessions => {}
+                        Screen::Overview | Screen::Sessions | Screen::Composer => {}
                     }
                 }
                 MutationKind::Resume | MutationKind::Fork | MutationKind::Sync => {}
             }
             true
         }
+    }
+}
+
+fn revalidate_composer_model(state: &mut AppState) {
+    let had_preflight = state.composer.prepared_task.is_some();
+    let ModelSelection::Explicit(model_id) = &state.composer.model_selection else {
+        state.composer.prepared_task = None;
+        return;
+    };
+    let model = state
+        .models
+        .value
+        .as_ref()
+        .and_then(|catalog| catalog.models.iter().find(|model| &model.id == model_id));
+    let Some(model) = model else {
+        state.composer.prepared_task = None;
+        state.composer.draft_state = DraftState::Invalid;
+        let previous_effort = match &state.composer.reasoning_selection {
+            ReasoningSelection::Explicit(effort) => Some(Some(effort.clone())),
+            ReasoningSelection::ModelDefault => Some(None),
+            _ => None,
+        };
+        if let Some(previous_effort) = previous_effort {
+            state.composer.reasoning_selection = ReasoningSelection::NeedsChoice(previous_effort);
+            state.composer.dirty = true;
+        }
+        state.composer.status = Some(
+            "The selected model is missing from the refreshed catalog; choose an available model or inherit configuration. Any previous effort was not applied.".into(),
+        );
+        return;
+    };
+    let unsupported = match &state.composer.reasoning_selection {
+        ReasoningSelection::Explicit(effort)
+            if !model
+                .supported_reasoning_efforts
+                .iter()
+                .any(|supported| &supported.id == effort) =>
+        {
+            Some(effort.clone())
+        }
+        _ => None,
+    };
+    if let Some(effort) = unsupported {
+        state.composer.reasoning_selection = ReasoningSelection::NeedsChoice(Some(effort));
+        state.composer.draft_state = DraftState::Invalid;
+        state.composer.dirty = true;
+        state.composer.status = Some(
+            "Catalog capabilities changed; select a supported reasoning effort. The old value was not applied.".into(),
+        );
+    }
+    state.composer.prepared_task = None;
+    if had_preflight && state.composer.status.is_none() {
+        state.composer.draft_state = DraftState::Modified;
+        state.composer.status =
+            Some("Live model catalog refreshed; review preflight again.".to_owned());
     }
 }
 
@@ -827,6 +2146,7 @@ fn terminal_error(_error: io::Error) -> CliError {
 struct TerminalLifecycle {
     raw_mode: bool,
     alternate_screen: bool,
+    bracketed_paste: bool,
 }
 
 impl TerminalLifecycle {
@@ -834,12 +2154,15 @@ impl TerminalLifecycle {
         let mut lifecycle = Self {
             raw_mode: false,
             alternate_screen: false,
+            bracketed_paste: false,
         };
         enable_raw_mode()?;
         lifecycle.raw_mode = true;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         lifecycle.alternate_screen = true;
+        execute!(stdout, crossterm::event::EnableBracketedPaste)?;
+        lifecycle.bracketed_paste = true;
         execute!(stdout, crossterm::cursor::Hide)?;
         Ok(lifecycle)
     }
@@ -849,6 +2172,9 @@ impl Drop for TerminalLifecycle {
     fn drop(&mut self) {
         if self.alternate_screen {
             let mut stdout = io::stdout();
+            if self.bracketed_paste {
+                let _ = execute!(stdout, crossterm::event::DisableBracketedPaste);
+            }
             let _ = execute!(stdout, crossterm::cursor::Show, LeaveAlternateScreen);
         }
         if self.raw_mode {
@@ -875,11 +2201,13 @@ mod tests {
             ('3', Screen::Projects),
             ('4', Screen::Models),
             ('5', Screen::History),
+            ('6', Screen::Composer),
         ] {
             handle_key(&mut state, &backend, key(KeyCode::Char(shortcut)));
             assert_eq!(state.active, expected);
             assert!(!state.mutation_pending);
         }
+        state.active = Screen::Sessions;
         state.search = Some(SearchInput {
             screen: Screen::Sessions,
             kind: SearchKind::Text,
@@ -940,6 +2268,302 @@ mod tests {
     }
 
     #[test]
+    fn prompt_editor_input_never_triggers_global_actions_or_session_mutations() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.composer.focus = ComposerFocus::Prompt;
+        for character in ['F', 's', 'q', '6'] {
+            handle_key(&mut state, &backend, key(KeyCode::Char(character)));
+        }
+        assert_eq!(state.composer.editor.text(), "Fsq6");
+        assert_eq!(state.active, Screen::Composer);
+        assert!(state.overlay.is_none());
+        assert!(!state.mutation_pending);
+        assert!(handle_composer_paste(&mut state, " F s q 6 "));
+        assert_eq!(state.composer.editor.text(), "Fsq6 F s q 6 ");
+        assert!(!state.mutation_pending);
+
+        let oversized = "x".repeat(MAX_PROMPT_BYTES + 1);
+        assert!(handle_composer_paste(&mut state, &oversized));
+        assert_eq!(state.composer.editor.len_bytes(), "Fsq6 F s q 6 ".len());
+        assert!(state
+            .composer
+            .status
+            .as_deref()
+            .unwrap()
+            .contains("rejected in full"));
+    }
+
+    #[test]
+    fn q_is_text_in_the_model_filter_and_user_controlled_draft_title() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.composer.dirty = true;
+        state.overlay = Some(Overlay::ComposerModelPicker);
+        handle_key(&mut state, &backend, key(KeyCode::Char('q')));
+        assert_eq!(state.composer.model_filter, "q");
+        assert_eq!(state.overlay, Some(Overlay::ComposerModelPicker));
+        assert!(!state.quitting);
+
+        state.overlay = Some(Overlay::ComposerDraftTitle);
+        handle_key(&mut state, &backend, key(KeyCode::Char('q')));
+        assert_eq!(state.composer.draft_title, "q");
+        assert_eq!(state.overlay, Some(Overlay::ComposerDraftTitle));
+        assert!(!state.quitting);
+    }
+
+    #[test]
+    fn unsaved_composer_exit_is_confirmed_and_the_prompt_is_retained_until_then() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state
+            .composer
+            .editor
+            .insert_paste("keep this in memory")
+            .unwrap();
+        state.composer.invalidate();
+        handle_key(
+            &mut state,
+            &backend,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(state.overlay, Some(Overlay::UnsavedDraftExit));
+        assert!(!state.quitting);
+        assert_eq!(state.composer.editor.text(), "keep this in memory");
+        handle_key(&mut state, &backend, key(KeyCode::Char('n')));
+        assert!(state.overlay.is_none());
+        assert!(!state.quitting);
+        assert_eq!(state.composer.editor.text(), "keep this in memory");
+    }
+
+    #[test]
+    fn selected_session_shortcut_opens_composer_without_resuming_the_session() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Sessions;
+        state.sessions.value = Some(vec![test_session("thread-exact-019")]);
+        handle_key(&mut state, &backend, key(KeyCode::Char('c')));
+        assert_eq!(state.active, Screen::Composer);
+        assert_eq!(state.composer.target_kind, TargetKind::ExistingThread);
+        assert_eq!(
+            state.composer.selected_thread_id.as_deref(),
+            Some("thread-exact-019")
+        );
+        assert!(!state.mutation_pending);
+        assert!(state.overlay.is_none());
+    }
+
+    #[test]
+    fn preflight_requires_explicit_workspace_and_verifies_model_effort_capabilities() {
+        let mut state = prepared_state();
+        state.composer.model_selection = ModelSelection::Explicit("model-visible".into());
+        state.composer.reasoning_selection = ReasoningSelection::Explicit("high".into());
+        state.composer.workspace = WorkspaceSelection::Unselected;
+        let missing_workspace = prepare_task(&state);
+        assert_eq!(
+            missing_workspace.validation_status,
+            ValidationStatus::Incomplete
+        );
+        assert!(missing_workspace
+            .validation_messages
+            .iter()
+            .any(|message| message.contains("Choose a workspace")));
+
+        state.composer.workspace =
+            WorkspaceSelection::CurrentDirectory(std::path::PathBuf::from("/workspace"));
+        let valid = prepare_task(&state);
+        assert_eq!(valid.validation_status, ValidationStatus::Ready);
+        assert_eq!(valid.prompt_text, "prepared prompt");
+        assert!(valid
+            .validation_messages
+            .iter()
+            .any(|message| message.contains("Expected task quota cost: Unavailable")));
+
+        state.composer.reasoning_selection = ReasoningSelection::Explicit("unsupported".into());
+        let unsupported = prepare_task(&state);
+        assert_eq!(unsupported.validation_status, ValidationStatus::Invalid);
+        assert!(unsupported
+            .validation_messages
+            .iter()
+            .any(|message| message.contains("unsupported by this model")));
+    }
+
+    #[test]
+    fn existing_targets_are_revalidated_and_archived_or_missing_targets_are_blocked() {
+        let mut state = prepared_state();
+        state.composer.target_kind = TargetKind::ExistingThread;
+        state.composer.selected_thread_id = Some("thread-existing".into());
+        state.sessions.value = Some(vec![test_session("thread-existing")]);
+        let existing = prepare_task(&state);
+        assert_eq!(existing.validation_status, ValidationStatus::Ready);
+        assert!(existing
+            .validation_messages
+            .iter()
+            .any(|message| { message.contains("P036 must revalidate availability") }));
+        assert_eq!(
+            existing.target_thread_id.as_deref(),
+            Some("thread-existing")
+        );
+
+        state.sessions.value.as_mut().unwrap()[0].archived = Some(true);
+        assert_eq!(
+            prepare_task(&state).validation_status,
+            ValidationStatus::Invalid
+        );
+        state.sessions.value = Some(Vec::new());
+        assert_eq!(
+            prepare_task(&state).validation_status,
+            ValidationStatus::Invalid
+        );
+    }
+
+    #[test]
+    fn app_server_unavailability_blocks_preflight_and_quota_provenance_is_retained() {
+        let mut state = prepared_state();
+        state.app_server_status = AppServerStatus::Unavailable;
+        assert_eq!(
+            prepare_task(&state).validation_status,
+            ValidationStatus::Incomplete
+        );
+
+        state.app_server_status = AppServerStatus::Connected;
+        state.overview.value = Some(crate::tui::backend::OverviewData {
+            ledger_status: crate::tui::backend::LedgerStatus::Available,
+            token_statistics: None,
+            quota: Some(crate::storage::QuotaTimeline {
+                five_hour: Some(quota_sample(
+                    crate::telemetry::QuotaMeterType::FiveHour,
+                    time::OffsetDateTime::now_utc(),
+                )),
+                weekly: Some(quota_sample(
+                    crate::telemetry::QuotaMeterType::Weekly,
+                    time::OffsetDateTime::now_utc() - time::Duration::hours(25),
+                )),
+                history: None,
+                evidence_quality: quality_with_partial_coverage(),
+            }),
+            evidence_quality: None,
+            telemetry_version: None,
+            schema_version: None,
+        });
+        let snapshot = preflight_quota_snapshot(&state);
+        assert_eq!(snapshot.five_hour.unwrap().freshness, QuotaFreshness::Fresh);
+        assert_eq!(snapshot.weekly.unwrap().freshness, QuotaFreshness::Stale);
+        assert!(snapshot
+            .quota_coverage
+            .unwrap()
+            .contains("Partial local evidence coverage"));
+    }
+
+    #[test]
+    fn model_effort_survives_only_when_the_refreshed_model_supports_it() {
+        let backend = test_backend();
+        let mut state = prepared_state();
+        let mut catalog = model_catalog();
+        catalog.models.push(crate::codex_app_server::ModelInfo {
+            id: "model-other".into(),
+            display_name: "Other model".into(),
+            is_default: false,
+            hidden: true,
+            supported_reasoning_efforts: vec![crate::codex_app_server::ReasoningEffortInfo {
+                id: "low".into(),
+                description: "Lower latency".into(),
+            }],
+            default_reasoning_effort: "low".into(),
+            input_modalities: None,
+        });
+        state.models.value = Some(catalog);
+        state.composer.model_selection = ModelSelection::Explicit("model-visible".into());
+        state.composer.reasoning_selection = ReasoningSelection::Explicit("high".into());
+        state.composer.model_filter = "Other".into();
+        state.composer.model_picker_selected = 1;
+        state.overlay = Some(Overlay::ComposerModelPicker);
+        handle_composer_overlay(
+            &mut state,
+            &backend,
+            Overlay::ComposerModelPicker,
+            key(KeyCode::Enter),
+        );
+        assert_eq!(
+            state.composer.model_selection,
+            ModelSelection::Explicit("model-other".into())
+        );
+        assert_eq!(
+            state.composer.reasoning_selection,
+            ReasoningSelection::NeedsChoice(Some("high".into()))
+        );
+        assert!(state
+            .composer
+            .status
+            .as_deref()
+            .unwrap()
+            .contains("unsupported by this model"));
+
+        state.composer.model_selection = ModelSelection::Explicit("model-other".into());
+        state.composer.reasoning_selection = ReasoningSelection::Explicit("high".into());
+        let request_id = state.models.request_id;
+        apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Models {
+                id: request_id,
+                result: Ok(model_catalog()),
+            },
+        );
+        assert_eq!(
+            state.composer.reasoning_selection,
+            ReasoningSelection::NeedsChoice(Some("high".into()))
+        );
+    }
+
+    #[test]
+    fn model_picker_highlights_the_current_model_and_first_search_result() {
+        let backend = test_backend();
+        let mut state = prepared_state();
+        open_model_picker(&mut state);
+        assert_eq!(state.composer.model_picker_selected, 0);
+        handle_composer_overlay(
+            &mut state,
+            &backend,
+            Overlay::ComposerModelPicker,
+            key(KeyCode::Char('v')),
+        );
+        assert_eq!(state.composer.model_picker_selected, 1);
+
+        state.composer.model_selection = ModelSelection::Explicit("model-visible".into());
+        open_model_picker(&mut state);
+        assert_eq!(state.composer.model_picker_selected, 1);
+        handle_composer_overlay(
+            &mut state,
+            &backend,
+            Overlay::ComposerModelPicker,
+            key(KeyCode::Up),
+        );
+        handle_composer_overlay(
+            &mut state,
+            &backend,
+            Overlay::ComposerModelPicker,
+            key(KeyCode::Enter),
+        );
+        assert_eq!(state.composer.model_selection, ModelSelection::Inherit);
+    }
+
+    #[test]
+    fn composer_refresh_uses_the_existing_bounded_metadata_workers() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        handle_key(&mut state, &backend, key(KeyCode::F(5)));
+        assert!(state.sessions.loading);
+        assert!(state.models.loading);
+        assert!(state.overview.loading);
+        assert!(!state.mutation_pending);
+    }
+
+    #[test]
     fn session_actions_dispatch_only_after_explicit_keys_and_confirmed_fork() {
         let backend = Backend::new_test(
             std::env::temp_dir().join("codex-meter-tui-app-action-test.sqlite3"),
@@ -996,6 +2620,77 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn prepared_state() -> AppState {
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.app_server_status = AppServerStatus::Connected;
+        state.models.value = Some(model_catalog());
+        state.composer.editor =
+            super::super::composer::PromptEditor::from_text("prepared prompt".to_owned()).unwrap();
+        state.composer.workspace =
+            WorkspaceSelection::CurrentDirectory(std::path::PathBuf::from("/workspace"));
+        state
+    }
+
+    fn model_catalog() -> crate::codex_app_server::ModelCatalog {
+        crate::codex_app_server::ModelCatalog {
+            availability: "live",
+            models: vec![crate::codex_app_server::ModelInfo {
+                id: "model-visible".into(),
+                display_name: "Visible model".into(),
+                is_default: true,
+                hidden: false,
+                supported_reasoning_efforts: vec![
+                    crate::codex_app_server::ReasoningEffortInfo {
+                        id: "low".into(),
+                        description: "Lower latency".into(),
+                    },
+                    crate::codex_app_server::ReasoningEffortInfo {
+                        id: "high".into(),
+                        description: "More reasoning".into(),
+                    },
+                ],
+                default_reasoning_effort: "low".into(),
+                input_modalities: Some(vec!["text".into(), "image".into()]),
+            }],
+        }
+    }
+
+    fn quota_sample(
+        meter_type: crate::telemetry::QuotaMeterType,
+        observed_at: time::OffsetDateTime,
+    ) -> crate::storage::QuotaSnapshotEvidence {
+        crate::storage::QuotaSnapshotEvidence {
+            sample_id: "sample-fixture".into(),
+            source_id: "source-fixture".into(),
+            session_id: None,
+            observed_at: observed_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+            meter_type,
+            used_percent: 38.5,
+            reset_at: Some(
+                (observed_at + time::Duration::hours(5))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+            ),
+            plan: None,
+            codex_version: None,
+        }
+    }
+
+    fn quality_with_partial_coverage() -> crate::storage::EvidenceQualitySummary {
+        crate::storage::EvidenceQualitySummary {
+            total_diagnostics: 1,
+            unsupported_source_versions: 0,
+            compressed_sources_unsupported: 0,
+            malformed_or_incomplete_evidence: 0,
+            source_continuity_ambiguities: 0,
+            known_partial_collection: 1,
+            diagnostics_by_code: Vec::new(),
+        }
     }
 
     fn test_backend() -> Backend {

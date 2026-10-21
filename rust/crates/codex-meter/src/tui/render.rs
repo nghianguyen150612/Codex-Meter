@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
@@ -15,6 +15,10 @@ use crate::storage::{
 };
 
 use super::backend::{LedgerStatus, OverviewData};
+use super::composer::{
+    ComposerFocus, ModelSelection, ProjectAssociation, QuotaFreshness, ReasoningSelection,
+    TargetKind, ValidationStatus, WorkspaceSelection, BUILT_IN_TEMPLATES, MAX_PROMPT_BYTES,
+};
 use super::layout::responsive_layout;
 use super::state::{
     looks_like_path, AppServerStatus, AppState, HistoryMode, Overlay, Resource, Screen,
@@ -81,7 +85,7 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
         ])
     } else {
         Line::from(format!(
-            " CM {}/5 {}",
+            " CM {}/6 {}",
             state.active.index() + 1,
             state.active.label()
         ))
@@ -133,7 +137,7 @@ fn short_status(status: AppServerStatus) -> &'static str {
 fn draw_compact_tabs(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
     let line = if area.width < 74 {
         Line::from(format!(
-            " View {}/5: {}  |  1-5 switch",
+            " View {}/6: {}  |  1-6 switch",
             state.active.index() + 1,
             state.active.label()
         ))
@@ -187,7 +191,477 @@ fn draw_screen(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
         Screen::Projects => draw_projects(frame, area, state, theme, wide),
         Screen::Models => draw_models(frame, area, state, theme, wide),
         Screen::History => draw_history(frame, area, state, theme, wide),
+        Screen::Composer => draw_composer(frame, area, state, theme),
     }
+}
+
+fn draw_composer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if area.height < 8 || area.width < 36 {
+        let lines = vec![
+            Line::from(format!(
+                "Target: {} | Model: {}",
+                composer_target_label(state),
+                composer_model_label(state)
+            )),
+            Line::from(format!(
+                "Reasoning: {} | State: {} | Prompt: {} bytes / {}",
+                state.composer.current_reasoning_name(),
+                state.composer.draft_state.label(),
+                state.composer.editor.len_bytes(),
+                MAX_PROMPT_BYTES
+            )),
+            Line::from("Ctrl+Enter preflight | Ctrl+S save | Ctrl+D drafts | 6 Composer"),
+        ];
+        let target_height = area.height.min(3);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(target_height),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "TASK CONFIGURATION",
+                    state.composer.focus == ComposerFocus::Target,
+                    theme,
+                )),
+            chunks[0],
+        );
+        draw_prompt_editor(frame, chunks[1], state, theme);
+        if chunks[2].height > 0 {
+            frame.render_widget(
+                Paragraph::new(
+                    state
+                        .composer
+                        .status
+                        .as_deref()
+                        .unwrap_or("Narrow layout | resize to see quota details"),
+                )
+                .style(theme.muted())
+                .wrap(Wrap { trim: true }),
+                chunks[2],
+            );
+        }
+        return;
+    }
+
+    if area.width >= 88 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(3),
+                Constraint::Length(4),
+                Constraint::Length(2),
+            ])
+            .split(area);
+        let top = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(43), Constraint::Percentage(57)])
+            .split(chunks[0]);
+        frame.render_widget(
+            Paragraph::new(composer_target_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "TARGET",
+                    state.composer.focus == ComposerFocus::Target
+                        || state.composer.focus == ComposerFocus::Workspace,
+                    theme,
+                )),
+            top[0],
+        );
+        frame.render_widget(
+            Paragraph::new(composer_model_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "MODEL CONFIGURATION",
+                    state.composer.focus == ComposerFocus::Model
+                        || state.composer.focus == ComposerFocus::Reasoning,
+                    theme,
+                )),
+            top[1],
+        );
+        draw_prompt_editor(frame, chunks[1], state, theme);
+        frame.render_widget(
+            Paragraph::new(preflight_summary_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "PREFLIGHT | local observations",
+                    false,
+                    theme,
+                )),
+            chunks[2],
+        );
+        draw_composer_actions(frame, chunks[3], state, theme);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(3),
+                Constraint::Length(3),
+                Constraint::Length(2),
+            ])
+            .split(area);
+        frame.render_widget(
+            Paragraph::new(composer_target_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "TARGET",
+                    state.composer.focus == ComposerFocus::Target
+                        || state.composer.focus == ComposerFocus::Workspace,
+                    theme,
+                )),
+            chunks[0],
+        );
+        frame.render_widget(
+            Paragraph::new(composer_model_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block(
+                    "MODEL",
+                    state.composer.focus == ComposerFocus::Model
+                        || state.composer.focus == ComposerFocus::Reasoning,
+                    theme,
+                )),
+            chunks[1],
+        );
+        draw_prompt_editor(frame, chunks[2], state, theme);
+        frame.render_widget(
+            Paragraph::new(preflight_summary_lines(state))
+                .wrap(Wrap { trim: true })
+                .block(composer_block("PREFLIGHT", false, theme)),
+            chunks[3],
+        );
+        draw_composer_actions(frame, chunks[4], state, theme);
+    }
+}
+
+fn composer_block<'a>(title: &'a str, focused: bool, theme: Theme) -> Block<'a> {
+    Block::default()
+        .title(title)
+        .border_set(theme.border_set())
+        .borders(Borders::ALL)
+        .border_style(if focused {
+            theme.title()
+        } else {
+            theme.border()
+        })
+}
+
+fn composer_target_label(state: &AppState) -> String {
+    match state.composer.target_kind {
+        TargetKind::NewThread => "New local Codex thread".to_owned(),
+        TargetKind::ExistingThread => state
+            .composer
+            .selected_thread_id
+            .as_deref()
+            .map(|thread_id| format!("Existing thread {}", clean_metadata(thread_id, 128)))
+            .unwrap_or_else(|| "Existing thread — select a session".to_owned()),
+    }
+}
+
+fn composer_target_lines(state: &AppState) -> Vec<Line<'static>> {
+    let project = match state.composer.target_kind {
+        TargetKind::NewThread => match &state.composer.workspace {
+            WorkspaceSelection::CurrentDirectory(_) => "Current directory selected (path hidden)",
+            WorkspaceSelection::Unselected => "Unavailable — choose a workspace",
+        },
+        TargetKind::ExistingThread => state
+            .composer
+            .selected_thread_id
+            .as_ref()
+            .and_then(|id| {
+                state
+                    .sessions
+                    .value
+                    .as_ref()?
+                    .iter()
+                    .find(|session| &session.thread_id == id)
+            })
+            .map_or("Project association unavailable", |session| {
+                if session.project_id.is_some() {
+                    "Codex response-local project association available"
+                } else {
+                    "Project association unavailable"
+                }
+            }),
+    };
+    let runtime = match state.composer.target_kind {
+        TargetKind::NewThread => "No thread has been created",
+        TargetKind::ExistingThread => state
+            .composer
+            .selected_thread_id
+            .as_ref()
+            .and_then(|id| {
+                state
+                    .sessions
+                    .value
+                    .as_ref()?
+                    .iter()
+                    .find(|session| &session.thread_id == id)
+            })
+            .map_or("Metadata unavailable", |session| {
+                if session.archived == Some(true) {
+                    "Archived; unavailable for new task preparation"
+                } else {
+                    session.runtime_status.as_str()
+                }
+            }),
+    };
+    vec![
+        Line::from(format!("Session: {}", composer_target_label(state))),
+        Line::from(format!("Project/workspace: {project}")),
+        Line::from(format!("Runtime state: {runtime}")),
+    ]
+}
+
+fn composer_model_label(state: &AppState) -> String {
+    match &state.composer.model_selection {
+        ModelSelection::Inherit => "Inherit Codex configuration".to_owned(),
+        ModelSelection::Explicit(id) => state
+            .models
+            .value
+            .as_ref()
+            .and_then(|catalog| catalog.models.iter().find(|model| &model.id == id))
+            .map_or_else(
+                || format!("Unavailable model {}", clean_metadata(id, 96)),
+                |model| {
+                    format!(
+                        "{} ({})",
+                        clean_metadata(&model.display_name, 72),
+                        clean_metadata(&model.id, 96)
+                    )
+                },
+            ),
+        ModelSelection::Unavailable => "Unavailable".to_owned(),
+    }
+}
+
+fn composer_model_lines(state: &AppState) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        "Model: {}",
+        composer_model_label(state)
+    ))];
+    match &state.composer.model_selection {
+        ModelSelection::Explicit(id) => {
+            if let Some(model) = state
+                .models
+                .value
+                .as_ref()
+                .and_then(|catalog| catalog.models.iter().find(|model| &model.id == id))
+            {
+                lines.push(Line::from(format!(
+                    "{}{} | default effort: {}",
+                    if model.is_default {
+                        "Reported default | "
+                    } else {
+                        ""
+                    },
+                    if model.hidden {
+                        "Hidden; explicit selection | "
+                    } else {
+                        "Visible | "
+                    },
+                    clean_metadata(&model.default_reasoning_effort, 32)
+                )));
+                let efforts = model
+                    .supported_reasoning_efforts
+                    .iter()
+                    .map(|effort| clean_metadata(&effort.id, 24))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(Line::from(format!(
+                    "Efforts: {} | input: {}",
+                    if efforts.is_empty() {
+                        "Unavailable"
+                    } else {
+                        &efforts
+                    },
+                    model.input_modalities.as_ref().map_or_else(
+                        || "Unavailable".to_owned(),
+                        |values| values
+                            .iter()
+                            .map(|value| clean_metadata(value, 16))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                )));
+            } else {
+                lines.push(Line::from(
+                    "Selected model is absent from the current catalog.",
+                ));
+                lines.push(Line::from("Choose another model or inherit configuration."));
+            }
+        }
+        ModelSelection::Inherit => {
+            lines.push(Line::from(
+                "Resolved model: unknown until Codex configuration resolves it.",
+            ));
+            lines.push(Line::from(format!(
+                "Reasoning: {}",
+                state.composer.current_reasoning_name()
+            )));
+        }
+        ModelSelection::Unavailable => {
+            lines.push(Line::from(
+                "Select a live catalog model or inherit configuration.",
+            ));
+            lines.push(Line::from("No model identifier is assumed."));
+        }
+    }
+    lines
+}
+
+fn draw_prompt_editor(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let focused = state.composer.focus == ComposerFocus::Prompt && state.overlay.is_none();
+    let title = format!(
+        "PROMPT | {} bytes / {} | {}",
+        state.composer.editor.len_bytes(),
+        MAX_PROMPT_BYTES,
+        state.composer.draft_state.label()
+    );
+    let block = composer_block(&title, focused, theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let (cursor_line, cursor_column) = state.composer.editor.cursor_line_column();
+    let scroll_y = cursor_line
+        .saturating_sub(inner.height.saturating_sub(1) as usize)
+        .min(state.composer.editor.line_count().saturating_sub(1));
+    let logical = state
+        .composer
+        .editor
+        .text()
+        .split('\n')
+        .nth(cursor_line)
+        .unwrap_or("");
+    let cursor_byte = logical
+        .char_indices()
+        .nth(cursor_column)
+        .map_or(logical.len(), |(byte, _)| byte);
+    let cursor_display_column = Line::from(logical[..cursor_byte].to_owned()).width();
+    let scroll_x = if cursor_display_column >= inner.width as usize {
+        cursor_display_column
+            .saturating_sub(inner.width as usize)
+            .saturating_add(1) as u16
+    } else {
+        0
+    };
+    let value = if state.composer.editor.text().is_empty() {
+        Text::from(Line::from(Span::styled(
+            "Type a prompt. Enter inserts a newline.",
+            theme.muted(),
+        )))
+    } else {
+        Text::from(state.composer.editor.text().to_owned())
+    };
+    frame.render_widget(
+        Paragraph::new(value).scroll((scroll_y as u16, scroll_x)),
+        inner,
+    );
+    if focused {
+        let cursor_x = inner
+            .x
+            .saturating_add(cursor_display_column.saturating_sub(scroll_x as usize) as u16)
+            .min(inner.x.saturating_add(inner.width.saturating_sub(1)));
+        let cursor_y = inner
+            .y
+            .saturating_add(cursor_line.saturating_sub(scroll_y) as u16)
+            .min(inner.y.saturating_add(inner.height.saturating_sub(1)));
+        frame.set_cursor_position(Position {
+            x: cursor_x,
+            y: cursor_y,
+        });
+    }
+}
+
+fn preflight_summary_lines(state: &AppState) -> Vec<Line<'static>> {
+    let quota = state
+        .overview
+        .value
+        .as_ref()
+        .and_then(|overview| overview.quota.as_ref());
+    let sample_line = |label: &str, sample: Option<&QuotaSnapshotEvidence>| {
+        sample.map_or_else(
+            || format!("{label}: Unavailable"),
+            |sample| {
+                format!(
+                    "{label}: {}% used | {} | observed {}",
+                    number(sample.used_percent),
+                    freshness(&sample.observed_at),
+                    clean(&sample.observed_at, 28)
+                )
+            },
+        )
+    };
+    let cost = "Expected task quota cost: Unavailable — insufficient calibrated evidence";
+    vec![
+        Line::from(sample_line(
+            "Five-hour",
+            quota.and_then(|quota| quota.five_hour.as_ref()),
+        )),
+        Line::from(sample_line(
+            "Weekly",
+            quota.and_then(|quota| quota.weekly.as_ref()),
+        )),
+        Line::from(quota.map_or_else(
+            || "Source coverage: local evidence unavailable".to_owned(),
+            |quota| {
+                if quota.evidence_quality.total_diagnostics > 0 {
+                    format!(
+                        "Source coverage: partial; {} diagnostics",
+                        quota.evidence_quality.total_diagnostics
+                    )
+                } else {
+                    "Source coverage: local snapshots only; account-wide coverage unavailable"
+                        .to_owned()
+                }
+            },
+        )),
+        Line::from(cost),
+    ]
+}
+
+fn draw_composer_actions(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let labels = ["Save Draft", "Load Draft", "Templates", "Review Preflight"];
+    let spans = labels
+        .iter()
+        .enumerate()
+        .flat_map(|(index, label)| {
+            let value = if state.composer.action_selected == index
+                && state.composer.focus == ComposerFocus::Actions
+            {
+                Span::styled(format!(" {label} "), theme.selected())
+            } else {
+                Span::raw(format!(" {label} "))
+            };
+            [value, Span::raw("  ")]
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).block(composer_block(
+            "ACTIONS",
+            state.composer.focus == ComposerFocus::Actions,
+            theme,
+        )),
+        area,
+    );
 }
 
 fn draw_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
@@ -1121,7 +1595,8 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
         Screen::History if state.history_mode == HistoryMode::Tokens => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | m model | w scope | t token/quota | r refresh | s sync | ? help | q quit",
         Screen::History => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | w scope | t token/quota | r refresh | s sync | ? help | q quit",
         Screen::Projects | Screen::Models => "Tab switch | Up/Down/jk move | n/p page | Enter details | / search | r refresh | s sync | ? help | q quit",
-        Screen::Overview => "Tab switch | 1-5 views | r refresh | s sync | ? help | q quit",
+        Screen::Overview => "Tab switch | 1-6 views | r refresh | s sync | ? help | q quit",
+        Screen::Composer => "Tab fields | F5 refresh | Ctrl+Enter preflight | Ctrl+S save | Ctrl+M model | Ctrl+R effort | Ctrl+D drafts | Ctrl+C quit | q outside text entry",
     };
     let mut lines = Vec::new();
     if let Some(search) = state.search.as_ref() {
@@ -1134,6 +1609,15 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
             },
             clean(&search.value, 80)
         )));
+    } else if state.active == Screen::Composer {
+        lines.push(Line::from(
+            state
+                .composer
+                .status
+                .as_deref()
+                .map(|status| clean(status, 240))
+                .unwrap_or_else(|| "Task execution is planned for P036.".to_owned()),
+        ));
     } else if let Some(status) = state.status.as_deref() {
         lines.push(Line::from(clean(status, 240)));
     } else {
@@ -1162,13 +1646,32 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
 fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, theme: Theme) {
     let area = frame.area();
     if area.width < 20 || area.height < 5 {
+        let message = match overlay {
+            Overlay::ComposerPreflight => "Resize to review preflight | Esc returns",
+            Overlay::ComposerModelPicker => "Resize to choose a model | Esc returns",
+            Overlay::ComposerReasoningPicker => "Resize to choose effort | Esc returns",
+            Overlay::ComposerTargetPicker => "Resize to select a target | Esc returns",
+            Overlay::ComposerDraftLibrary => "Resize to view saved drafts | Esc returns",
+            Overlay::ComposerDraftTitle => "Resize to save a draft | Esc returns",
+            Overlay::ComposerTemplatePicker => "Resize to choose a template | Esc returns",
+            Overlay::ComposerDraftDeleteConfirm => "Resize to confirm deletion | Esc cancels",
+            Overlay::UnsavedDraftExit => "Resize to confirm exit | Esc returns",
+            _ => "Resize to view dialog | Esc returns",
+        };
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(message)
+                .wrap(Wrap { trim: true })
+                .style(theme.warning()),
+            area,
+        );
         return;
     }
     let (title, lines) = match overlay {
         Overlay::Help => (
             "Keyboard help",
             vec![
-                "Tab / Shift+Tab or 1-5  Switch views".to_owned(),
+                "Tab / Shift+Tab or 1-6  Switch views".to_owned(),
                 "Up/Down or j/k              Move selection".to_owned(),
                 "Enter                  Open safe metadata details".to_owned(),
                 "/                      Search displayed metadata".to_owned(),
@@ -1179,6 +1682,14 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
                 "L                      Load selected session; no prompt or turn".to_owned(),
                 "F                      Confirm before cloning a session history".to_owned(),
                 "m (token history) / w scope / t token-quota".to_owned(),
+                "c (Sessions)           Open Composer for selected local session".to_owned(),
+                "Composer: Ctrl+Enter preflight | Ctrl+S explicit draft save".to_owned(),
+                "Composer: Ctrl+M model | Ctrl+R effort | Ctrl+D draft library".to_owned(),
+                "Composer: F5 refresh session, model, and quota metadata".to_owned(),
+                "Composer: Tab fields | Shift+Tab fields | arrows move prompt caret".to_owned(),
+                "Composer: q exits outside text fields; Ctrl+C requests exit anywhere".to_owned(),
+                "Composer does not start threads or turns; execution is planned for P036."
+                    .to_owned(),
                 "Esc                    Close dialog or cancel search".to_owned(),
                 "q or Ctrl+C            Exit and restore terminal".to_owned(),
                 "All usage data is local; quota is observed account-meter evidence.".to_owned(),
@@ -1207,6 +1718,18 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
         Overlay::ModelDetail => ("Model details", model_detail_lines(state)),
         Overlay::ProjectDetail => ("Project details", project_detail_lines(state)),
         Overlay::EvidenceDetail => ("Evidence details", evidence_detail_lines(state)),
+        Overlay::ComposerModelPicker
+        | Overlay::ComposerReasoningPicker
+        | Overlay::ComposerTargetPicker
+        | Overlay::ComposerDraftTitle
+        | Overlay::ComposerDraftLibrary
+        | Overlay::ComposerDraftDeleteConfirm
+        | Overlay::ComposerTemplatePicker
+        | Overlay::ComposerPreflight
+        | Overlay::UnsavedDraftExit => {
+            draw_composer_overlay(frame, overlay, state, theme);
+            return;
+        }
     };
     let width = area.width.saturating_sub(6).clamp(14, 84);
     let height = area
@@ -1226,6 +1749,667 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
                 .border_style(theme.title()),
         );
     frame.render_widget(text, modal);
+}
+
+fn draw_composer_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, theme: Theme) {
+    let area = frame.area();
+    if area.width < 16 || area.height < 4 {
+        return;
+    }
+    let width = area.width.saturating_sub(4).clamp(12, 110);
+    let height = area.height.saturating_sub(2).max(3);
+    let modal = centered(area, width, height);
+    let (title, lines, scroll) = match overlay {
+        Overlay::ComposerModelPicker => ("Live model picker", model_picker_lines(state), 0),
+        Overlay::ComposerReasoningPicker => ("Reasoning effort", reasoning_picker_lines(state), 0),
+        Overlay::ComposerTargetPicker => (
+            "Task target | no session is resumed",
+            target_picker_lines(state),
+            0,
+        ),
+        Overlay::ComposerDraftTitle => (
+            "Save user-owned draft",
+            vec![
+                Line::from("Enter a title to explicitly save the current prompt and selections."),
+                Line::from("The saved file contains plaintext prompt content."),
+                Line::from(format!(
+                    "Title: {}_",
+                    clean(&state.composer.draft_title, 96)
+                )),
+                Line::from("Enter save | Esc cancel"),
+            ],
+            0,
+        ),
+        Overlay::ComposerDraftLibrary => (
+            "Saved drafts | explicit local storage",
+            draft_library_lines(state),
+            0,
+        ),
+        Overlay::ComposerDraftDeleteConfirm => {
+            let title = state
+                .composer
+                .saved_drafts()
+                .get(state.composer.draft_selected)
+                .map_or("selected draft", |draft| draft.title.as_str());
+            (
+                "Delete saved draft",
+                vec![
+                    Line::from(format!("Delete '{}' from local draft storage?", clean(title, 96))),
+                    Line::from("This removes the saved plaintext file. The in-memory composer is retained."),
+                    Line::from("y confirm | n or Esc cancel"),
+                ],
+                0,
+            )
+        }
+        Overlay::ComposerTemplatePicker => (
+            "Built-in templates | editable text only",
+            template_lines(state),
+            0,
+        ),
+        Overlay::ComposerPreflight => (
+            "Task preflight | read only",
+            preflight_lines(state),
+            state.composer.preflight_scroll,
+        ),
+        Overlay::UnsavedDraftExit => (
+            "Unsaved in-memory task",
+            vec![
+                Line::from("The current task changes have not been saved."),
+                Line::from("Quit and discard the in-memory prompt and selections?"),
+                Line::from("y/Enter quit | n/Esc return | s save draft"),
+                Line::from("Saved drafts are plaintext files in private local storage."),
+            ],
+            0,
+        ),
+        _ => return,
+    };
+    frame.render_widget(Clear, modal);
+    let footer = match overlay {
+        Overlay::ComposerModelPicker => {
+            "Type to filter | Up/Down select | Enter choose | Esc close"
+        }
+        Overlay::ComposerReasoningPicker => "Up/Down select | Enter choose | Esc close",
+        Overlay::ComposerTargetPicker => {
+            "Up/Down select | Enter choose | metadata only | Esc close"
+        }
+        Overlay::ComposerDraftTitle => "Enter save | Esc cancel",
+        Overlay::ComposerDraftLibrary => "Up/Down select | Enter load | d delete | Esc close",
+        Overlay::ComposerDraftDeleteConfirm => "y delete | n/Esc cancel",
+        Overlay::ComposerTemplatePicker => "Up/Down select | Enter insert for editing | Esc close",
+        Overlay::ComposerPreflight => {
+            "Up/Down scroll | s save | Esc return | execution is planned for P036"
+        }
+        Overlay::UnsavedDraftExit => "y quit | n return | s save",
+        _ => "",
+    };
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0))
+        .block(
+            Block::default()
+                .title(title)
+                .border_set(theme.border_set())
+                .borders(Borders::ALL)
+                .border_style(theme.title()),
+        );
+    frame.render_widget(paragraph, modal);
+    if footer.is_empty() {
+        return;
+    }
+    let footer_area = Rect {
+        x: modal.x.saturating_add(1),
+        y: modal.y.saturating_add(modal.height.saturating_sub(2)),
+        width: modal.width.saturating_sub(2),
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(footer)
+            .style(theme.muted())
+            .wrap(Wrap { trim: true }),
+        footer_area,
+    );
+}
+
+fn model_picker_lines(state: &AppState) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(format!(
+            "Filter: {}_",
+            clean(&state.composer.model_filter, 96)
+        )),
+        Line::from(if state.models.loading {
+            "Live catalog is loading; the current prompt remains in memory.".to_owned()
+        } else if let Some(error) = state.models.error.as_deref() {
+            format!("Live catalog unavailable: {}", clean(error, 120))
+        } else if state.models.value.is_none() {
+            "Live catalog has not loaded.".to_owned()
+        } else {
+            "0  Inherit Codex configuration (resolved model remains unknown)".to_owned()
+        }),
+    ];
+    if state.models.value.is_some() {
+        lines[1] = Line::from(format!(
+            "{}  Inherit Codex configuration (resolved model remains unknown)",
+            if state.composer.model_picker_selected == 0 {
+                ">"
+            } else {
+                " "
+            }
+        ));
+    }
+    let filter = state.composer.model_filter.to_lowercase();
+    let models = state
+        .models
+        .value
+        .as_ref()
+        .map(|catalog| {
+            catalog
+                .models
+                .iter()
+                .filter(|model| {
+                    filter.is_empty()
+                        || model.id.to_lowercase().contains(&filter)
+                        || model.display_name.to_lowercase().contains(&filter)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for (index, model) in models.iter().enumerate() {
+        lines.push(Line::from(format!(
+            "{} {} ({}){}{} | effort default: {}",
+            if state.composer.model_picker_selected == index + 1 {
+                ">"
+            } else {
+                " "
+            },
+            clean_metadata(&model.display_name, 64),
+            clean_metadata(&model.id, 80),
+            if model.is_default {
+                " | reported default"
+            } else {
+                ""
+            },
+            if model.hidden {
+                " | hidden, explicit selection only"
+            } else {
+                ""
+            },
+            clean_metadata(&model.default_reasoning_effort, 32)
+        )));
+        let efforts = model
+            .supported_reasoning_efforts
+            .iter()
+            .map(|effort| {
+                format!(
+                    "{}: {}",
+                    clean_metadata(&effort.id, 24),
+                    clean(&effort.description, 80)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        lines.push(Line::from(format!(
+            "    Supported efforts: {} | input modalities: {}",
+            if efforts.is_empty() {
+                "Unavailable".to_owned()
+            } else {
+                efforts
+            },
+            model.input_modalities.as_ref().map_or_else(
+                || "Unavailable".to_owned(),
+                |values| values
+                    .iter()
+                    .map(|value| clean_metadata(value, 20))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        )));
+    }
+    if models.is_empty() && state.models.value.is_some() {
+        lines.push(Line::from("No models match this filter."));
+    }
+    lines.push(Line::from(
+        "Catalog presence is not a guarantee of account entitlement or executability.",
+    ));
+    lines.push(Line::from("No model request is made by this picker."));
+    lines
+}
+
+fn reasoning_picker_lines(state: &AppState) -> Vec<Line<'static>> {
+    let choices = reasoning_choices_for_render(state);
+    if choices.is_empty() {
+        return vec![
+            Line::from("Select a model from the live catalog first."),
+            Line::from("No reasoning choice is inferred."),
+        ];
+    }
+    choices
+        .iter()
+        .enumerate()
+        .map(|(index, (label, selected))| {
+            Line::from(format!(
+                "{} {}{}",
+                if state.composer.model_picker_selected == index {
+                    ">"
+                } else {
+                    " "
+                },
+                label,
+                if *selected { " | current" } else { "" }
+            ))
+        })
+        .chain([
+            Line::from("The selected effort is preparation metadata only."),
+            Line::from("P035 does not change Codex or a running thread."),
+        ])
+        .collect()
+}
+
+fn reasoning_choices_for_render(state: &AppState) -> Vec<(String, bool)> {
+    let mut choices = vec![(
+        "Inherit from Codex configuration".to_owned(),
+        matches!(
+            &state.composer.reasoning_selection,
+            ReasoningSelection::Inherit
+        ),
+    )];
+    let ModelSelection::Explicit(model_id) = &state.composer.model_selection else {
+        return choices;
+    };
+    let Some(model) = state
+        .models
+        .value
+        .as_ref()
+        .and_then(|catalog| catalog.models.iter().find(|model| &model.id == model_id))
+    else {
+        return choices;
+    };
+    choices.push((
+        format!(
+            "Use reported model default ({})",
+            clean_metadata(&model.default_reasoning_effort, 32)
+        ),
+        matches!(
+            &state.composer.reasoning_selection,
+            ReasoningSelection::ModelDefault
+        ),
+    ));
+    choices.extend(model.supported_reasoning_efforts.iter().map(|effort| {
+        (
+            format!("{} — {}", clean_metadata(&effort.id, 32), clean(&effort.description, 80)),
+            matches!(&state.composer.reasoning_selection, ReasoningSelection::Explicit(value) if value == &effort.id),
+        )
+    }));
+    choices
+}
+
+fn target_picker_lines(state: &AppState) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        "{} New local Codex thread | no thread is created now",
+        if state.composer.session_picker_selected == 0 {
+            ">"
+        } else {
+            " "
+        }
+    ))];
+    match state.sessions.value.as_ref() {
+        Some(sessions) => {
+            for (index, session) in sessions.iter().enumerate() {
+                let runtime = if session.archived == Some(true) {
+                    "archived"
+                } else {
+                    session.runtime_status.as_str()
+                };
+                lines.push(Line::from(format!(
+                    "{} Existing {} | {runtime} | project {}",
+                    if state.composer.session_picker_selected == index + 1 {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    clean_metadata(&session.thread_id, 128),
+                    if session.project_id.is_some() {
+                        "associated"
+                    } else {
+                        "unavailable"
+                    }
+                )));
+            }
+            if sessions.is_empty() {
+                lines.push(Line::from("No local session metadata is available."));
+            }
+        }
+        None => lines.push(Line::from(
+            state
+                .sessions
+                .error
+                .as_deref()
+                .map(|error| format!("Session discovery unavailable: {}", clean(error, 120)))
+                .unwrap_or_else(|| "Loading local session metadata...".to_owned()),
+        )),
+    }
+    lines.push(Line::from(
+        "Selecting a session does not resume it or load its transcript.",
+    ));
+    lines.push(Line::from(
+        "Archived or unavailable targets fail preflight.",
+    ));
+    lines
+}
+
+fn draft_library_lines(state: &AppState) -> Vec<Line<'static>> {
+    let Some(listing) = state.composer.draft_listing.as_ref() else {
+        return vec![Line::from("Draft list is unavailable.")];
+    };
+    let mut lines = listing
+        .drafts
+        .iter()
+        .enumerate()
+        .map(|(index, draft)| {
+            Line::from(format!(
+                "{} {} | saved {} | {} bytes",
+                if index == state.composer.draft_selected {
+                    ">"
+                } else {
+                    " "
+                },
+                clean(&draft.title, 96),
+                clean(&draft.saved_at, 32),
+                draft.file_bytes
+            ))
+        })
+        .collect::<Vec<_>>();
+    if listing.drafts.is_empty() {
+        lines.push(Line::from(
+            "No saved drafts. Use Ctrl+S to save explicitly.",
+        ));
+    }
+    if listing.skipped_entries > 0 {
+        lines.push(Line::from(format!(
+            "{} malformed or unsafe entry/entries skipped.",
+            listing.skipped_entries
+        )));
+    }
+    lines.push(Line::from(
+        "Saved prompt content is plaintext unless the user filesystem is encrypted.",
+    ));
+    lines
+}
+
+fn template_lines(state: &AppState) -> Vec<Line<'static>> {
+    BUILT_IN_TEMPLATES
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            Line::from(format!(
+                "{} {}",
+                if index == state.composer.selected_template {
+                    ">"
+                } else {
+                    " "
+                },
+                name
+            ))
+        })
+        .chain([
+            Line::from("Templates insert generic editable text at the prompt cursor."),
+            Line::from("Applying a template never launches Codex."),
+        ])
+        .collect()
+}
+
+fn preflight_lines(state: &AppState) -> Vec<Line<'static>> {
+    let Some(task) = state.composer.prepared_task.as_ref() else {
+        return vec![Line::from("Preflight is not available.")];
+    };
+    let mut lines = vec![Line::from(format!(
+        "Preparation: {} | source: {}",
+        match task.validation_status {
+            ValidationStatus::Ready => "Ready for future execution controller",
+            ValidationStatus::Incomplete => "Incomplete",
+            ValidationStatus::Invalid => "Invalid",
+        },
+        task.configuration_source
+    ))];
+    lines.push(Line::from(format!(
+        "Privacy-safe summary: {}",
+        task.privacy_safe_summary()
+    )));
+    match task.target_kind {
+        TargetKind::NewThread => {
+            lines.push(Line::from("Target: new local Codex thread"));
+            lines.push(Line::from(format!(
+                "Workspace: {}",
+                if matches!(&task.workspace, WorkspaceSelection::CurrentDirectory(_)) {
+                    "current working directory selected explicitly; path held in memory"
+                } else {
+                    "unavailable; explicit decision required"
+                }
+            )));
+            lines.push(Line::from(
+                "Project association: unavailable for a new thread.",
+            ));
+        }
+        TargetKind::ExistingThread => {
+            let runtime = task
+                .target_thread_id
+                .as_ref()
+                .and_then(|thread_id| {
+                    state
+                        .sessions
+                        .value
+                        .as_ref()?
+                        .iter()
+                        .find(|session| &session.thread_id == thread_id)
+                })
+                .map_or_else(
+                    || "Unavailable".to_owned(),
+                    |session| {
+                        if session.archived == Some(true) {
+                            "archived".to_owned()
+                        } else {
+                            session.runtime_status.as_str().to_owned()
+                        }
+                    },
+                );
+            lines.push(Line::from(format!(
+                "Target: existing local thread {}",
+                task.target_thread_id
+                    .as_deref()
+                    .map(|id| clean_metadata(id, 128))
+                    .unwrap_or_else(|| "unavailable".to_owned())
+            )));
+            lines.push(Line::from(format!("Reported runtime state: {runtime}")));
+            lines.push(Line::from("Availability: listed metadata is not an availability guarantee; P036 must revalidate."));
+            lines.push(Line::from(format!(
+                "Project association: {}",
+                match &task.project_association {
+                    ProjectAssociation::ResponseLocalAlias(_) => {
+                        "available (response-local metadata; not a persistent ID)"
+                    }
+                    ProjectAssociation::Unavailable => "unavailable",
+                }
+            )));
+        }
+    }
+    let telemetry_version = state
+        .overview
+        .value
+        .as_ref()
+        .and_then(|overview| overview.telemetry_version.as_deref());
+    lines.push(Line::from(match telemetry_version {
+        Some(version) if version == crate::telemetry::COMPATIBILITY_CLI_VERSION => {
+            format!("Source compatibility: matches audited local telemetry version {version}.")
+        }
+        Some(version) => format!(
+            "Source compatibility: unverified for recorded local telemetry version {}.",
+            clean_metadata(version, 48)
+        ),
+        None => {
+            "Source compatibility: unavailable; no local telemetry version was observed.".to_owned()
+        }
+    }));
+    match &task.model_selection {
+        ModelSelection::Inherit => lines.push(Line::from(
+            "Model: inherit Codex configuration; resolved model is not known.",
+        )),
+        ModelSelection::Explicit(id) => {
+            let details = state
+                .models
+                .value
+                .as_ref()
+                .and_then(|catalog| catalog.models.iter().find(|model| &model.id == id));
+            lines.push(Line::from(format!(
+                "Model: {} | catalog provenance: {}",
+                details.map_or_else(
+                    || clean_metadata(id, 96),
+                    |model| format!(
+                        "{} ({})",
+                        clean_metadata(&model.display_name, 60),
+                        clean_metadata(id, 96)
+                    )
+                ),
+                state
+                    .models
+                    .value
+                    .as_ref()
+                    .map_or("unavailable", |catalog| catalog.availability)
+            )));
+            if let Some(model) = details {
+                lines.push(Line::from(format!(
+                    "Default: {} | hidden: {} | supported reasoning: {}",
+                    if model.is_default { "reported" } else { "no" },
+                    if model.hidden {
+                        "yes, explicitly selected"
+                    } else {
+                        "no"
+                    },
+                    model
+                        .supported_reasoning_efforts
+                        .iter()
+                        .map(|effort| clean_metadata(&effort.id, 24))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+        ModelSelection::Unavailable => lines.push(Line::from("Model: unavailable.")),
+    }
+    match &task.reasoning_selection {
+        ReasoningSelection::Inherit => {
+            lines.push(Line::from("Reasoning: inherit from Codex configuration."))
+        }
+        ReasoningSelection::ModelDefault => {
+            let default_effort = match &task.model_selection {
+                ModelSelection::Explicit(id) => state
+                    .models
+                    .value
+                    .as_ref()
+                    .and_then(|catalog| catalog.models.iter().find(|model| &model.id == id))
+                    .map(|model| model.default_reasoning_effort.as_str())
+                    .unwrap_or("Unavailable"),
+                _ => "Unavailable",
+            };
+            lines.push(Line::from(format!(
+                "Reasoning: reported model default ({})",
+                clean_metadata(default_effort, 40)
+            )));
+        }
+        ReasoningSelection::Explicit(effort) => lines.push(Line::from(format!(
+            "Reasoning: explicit supported effort {effort}"
+        ))),
+        ReasoningSelection::NeedsChoice(previous) => lines.push(Line::from(format!(
+            "Reasoning: choose a compatible value; previous effort {:?} was not applied.",
+            previous
+        ))),
+        ReasoningSelection::Unavailable => {
+            lines.push(Line::from("Reasoning capability: unavailable."))
+        }
+    }
+    lines.push(Line::from(format!(
+        "App Server: {} | no start/resume/turn RPC is sent by preflight.",
+        match state.app_server_status {
+            AppServerStatus::Connected => "available for metadata",
+            AppServerStatus::Connecting => "connecting",
+            AppServerStatus::Unavailable => "unavailable",
+            AppServerStatus::Unknown => "not checked",
+        }
+    )));
+    if let Some(snapshot) = &task.preflight_snapshot.five_hour {
+        lines.push(quota_preflight_line("Five-hour quota", snapshot));
+    } else {
+        lines.push(Line::from(
+            "Five-hour quota: Unavailable — no observed local sample.",
+        ));
+    }
+    if let Some(snapshot) = &task.preflight_snapshot.weekly {
+        lines.push(quota_preflight_line("Weekly quota", snapshot));
+    } else {
+        lines.push(Line::from(
+            "Weekly quota: Unavailable — no observed local sample.",
+        ));
+    }
+    lines.push(Line::from(format!(
+        "Quota source coverage: {}",
+        task.preflight_snapshot
+            .quota_coverage
+            .as_deref()
+            .unwrap_or("Unavailable")
+    )));
+    lines.push(Line::from(
+        "Expected task quota cost: Unavailable — insufficient calibrated evidence.",
+    ));
+    lines.push(Line::from(
+        "Exact prompt text follows; review it before handing off to P036.",
+    ));
+    lines.push(Line::from("----- PROMPT BEGIN -----"));
+    if task.prompt_text.is_empty() {
+        lines.push(Line::from("(empty prompt)"));
+    } else {
+        lines.extend(
+            task.prompt_text
+                .lines()
+                .map(|line| Line::from(line.to_owned())),
+        );
+        if task.prompt_text.ends_with('\n') {
+            lines.push(Line::from(""));
+        }
+    }
+    lines.push(Line::from("----- PROMPT END -----"));
+    lines.push(Line::from(
+        "Execution is unavailable: Task execution is planned for P036.",
+    ));
+    lines.extend(
+        task.validation_messages
+            .iter()
+            .map(|message| Line::from(format!("• {}", clean(message, 180)))),
+    );
+    lines
+}
+
+fn quota_preflight_line(
+    label: &str,
+    snapshot: &super::composer::QuotaObservation,
+) -> Line<'static> {
+    Line::from(format!(
+        "{label}: {}% used | {} | observed {} | reset {}",
+        number(snapshot.used_percent),
+        quota_freshness(snapshot.freshness),
+        clean(&snapshot.observed_at, 36),
+        snapshot
+            .reset_at
+            .as_deref()
+            .map(|value| clean(value, 36))
+            .unwrap_or_else(|| "Unavailable".to_owned())
+    ))
+}
+
+fn quota_freshness(freshness: QuotaFreshness) -> &'static str {
+    match freshness {
+        QuotaFreshness::Fresh => "Fresh",
+        QuotaFreshness::Stale => "Stale",
+        QuotaFreshness::TimeUnavailable => "Time unavailable",
+        QuotaFreshness::Invalid => "Invalid measurement",
+    }
 }
 
 fn session_detail_lines(state: &AppState) -> Vec<String> {
@@ -1594,6 +2778,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
+    use super::super::composer::{PreflightSnapshot, PreparedTask};
     use super::*;
     use crate::codex_app_server::{ModelCatalog, RuntimeStatus, SessionMetadata, SessionOrigin};
     use crate::storage::{
@@ -1604,12 +2789,136 @@ mod tests {
     #[test]
     fn renders_wide_medium_narrow_and_low_height_without_panicking() {
         for (width, height) in [(150, 42), (90, 26), (50, 18), (36, 7), (18, 3)] {
+            let mut composer = AppState::default();
+            composer.active = Screen::Composer;
             let backend = TestBackend::new(width, height);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
-                .draw(|frame| draw(frame, &AppState::default(), Theme::detect()))
+                .draw(|frame| draw(frame, &composer, Theme::detect()))
+                .unwrap();
+            composer.overlay = Some(Overlay::ComposerModelPicker);
+            terminal
+                .draw(|frame| draw(frame, &composer, Theme::detect()))
+                .unwrap();
+            composer.overlay = Some(Overlay::ComposerPreflight);
+            terminal
+                .draw(|frame| draw(frame, &composer, Theme::detect()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn low_height_preflight_dialog_explains_how_to_recover() {
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.overlay = Some(Overlay::ComposerPreflight);
+        let backend = TestBackend::new(18, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let content = (0..3)
+            .map(|y| {
+                (0..18)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(content.contains("Resize"));
+    }
+
+    #[test]
+    fn preflight_names_existing_runtime_and_local_source_compatibility() {
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.sessions.value = Some(vec![SessionMetadata {
+            thread_id: "thread-opaque-17".into(),
+            session_id: None,
+            name: None,
+            created_at: None,
+            updated_at: None,
+            runtime_status: RuntimeStatus::Idle,
+            source: None,
+            archived: Some(false),
+            pinned: None,
+            loaded: None,
+            model: None,
+            model_provider: None,
+            reasoning_effort: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            project_id: Some("opaque-project".into()),
+            history_availability: HistoryAvailability::Unknown,
+            origin: SessionOrigin::LocalCodex,
+            usage_link: crate::codex_app_server::UsageLinkAvailability::Unavailable,
+        }]);
+        state.overview.value = Some(OverviewData {
+            ledger_status: LedgerStatus::Available,
+            token_statistics: None,
+            quota: None,
+            evidence_quality: None,
+            telemetry_version: Some(crate::telemetry::COMPATIBILITY_CLI_VERSION.to_owned()),
+            schema_version: Some(9),
+        });
+        state.composer.prepared_task = Some(PreparedTask {
+            target_kind: TargetKind::ExistingThread,
+            target_thread_id: Some("thread-opaque-17".into()),
+            workspace: WorkspaceSelection::Unselected,
+            project_association: ProjectAssociation::ResponseLocalAlias("opaque-project".into()),
+            model_selection: ModelSelection::Inherit,
+            reasoning_selection: ReasoningSelection::Inherit,
+            prompt_text: "synthetic prepared prompt".into(),
+            configuration_source: "Inherited from Codex configuration",
+            validation_status: ValidationStatus::Ready,
+            validation_messages: Vec::new(),
+            preflight_snapshot: PreflightSnapshot::default(),
+        });
+        let rendered = preflight_lines(&state)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Reported runtime state: idle"));
+        assert!(rendered.contains("listed metadata is not an availability guarantee"));
+        assert!(rendered.contains("Source compatibility: matches audited local telemetry version"));
+        assert!(rendered.contains("Expected task quota cost: Unavailable"));
+        assert!(rendered.contains("synthetic prepared prompt"));
+    }
+
+    #[test]
+    fn live_picker_labels_catalog_presence_without_entitlement_claims() {
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.overlay = Some(Overlay::ComposerModelPicker);
+        state.models.value = Some(ModelCatalog {
+            availability: "live",
+            models: vec![ModelInfo {
+                id: "fixture-model".into(),
+                display_name: "Fixture model".into(),
+                is_default: true,
+                hidden: true,
+                supported_reasoning_efforts: Vec::new(),
+                default_reasoning_effort: "medium".into(),
+                input_modalities: Some(vec!["text".into()]),
+            }],
+        });
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(rendered.contains("Fixture model"));
+        assert!(rendered.contains("hidden, explicit selection only"));
+        assert!(rendered.contains("account entitlement"));
+        assert!(rendered.contains("reported default"));
     }
 
     #[test]
@@ -1625,7 +2934,7 @@ mod tests {
             .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
             .collect::<Vec<_>>()
             .concat();
-        assert!(line.contains("CM 5/5 History"));
+        assert!(line.contains("CM 5/6 History"));
     }
 
     #[test]

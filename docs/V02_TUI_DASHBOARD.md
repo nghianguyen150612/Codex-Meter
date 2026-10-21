@@ -1,9 +1,9 @@
-# Codex Meter TUI dashboard (P034)
+# Codex Meter TUI dashboard and Composer (P034–P035)
 
 P034 adds an interactive Rust terminal dashboard over the existing P031 telemetry ledger, P032
-reporting queries, and P033 Codex App Server services. It is a local observation and session
-management interface. It does not replace the Codex agent runtime and does not submit model turns.
-The TUI is unreleased development functionality and is not part of the published v0.1.0 assets.
+reporting queries, and P033 Codex App Server services. P035 adds task preparation through the
+Composer. The TUI does not replace the Codex agent runtime and does not submit model turns. It is
+unreleased development functionality and is not part of the published v0.1.0 assets.
 
 ## Run
 
@@ -11,6 +11,7 @@ From a development checkout:
 
 ```console
 cargo run --manifest-path rust/Cargo.toml -- tui
+cargo run --manifest-path rust/Cargo.toml -- compose
 cargo run --manifest-path rust/Cargo.toml -- tui --help
 cargo run --manifest-path rust/Cargo.toml -- tui --database "local evidence.sqlite3"
 ```
@@ -28,7 +29,7 @@ periodic refresh.
 
 ## Views and controls
 
-The five screens are Overview, Sessions, Projects, Models, and History. Wide terminals use a
+The six screens are Overview, Sessions, Projects, Models, History, and Composer. Wide terminals use a
 sidebar. Medium terminals use a tab strip, and narrow or short terminals use a compact active-view
 label and shorter help line. Lists render at most 50 rows per screen page. The history query itself
 uses the existing deterministic SQLite keyset cursor and reads only 50 records at a time.
@@ -36,7 +37,7 @@ uses the existing deterministic SQLite keyset cursor and reads only 50 records a
 | Key | Action |
 | --- | --- |
 | `Tab` / `Shift+Tab` | Next or previous screen |
-| `1`–`5` | Open a screen directly |
+| `1`–`6` | Open a screen directly when outside text editing |
 | `Up` / `Down`, `j` / `k` | Move the selection |
 | `n` / `p`, `PageDown` / `PageUp` | Next or previous list/history page |
 | `Enter` | Open safe metadata or inspect selected evidence |
@@ -49,6 +50,7 @@ uses the existing deterministic SQLite keyset cursor and reads only 50 records a
 | `a` (Sessions) | Toggle the active runtime-state filter |
 | `L` (Sessions) | Explicitly load the selected thread |
 | `F` (Sessions) | Open the fork confirmation dialog |
+| `c` (Sessions) | Open Composer with the selected session as target; no resume or transcript read |
 | `r` | Refresh the current view |
 | `s` | Open the local telemetry sync confirmation |
 | `?` | Show help |
@@ -58,6 +60,11 @@ While search is active, printable keys edit the search field and do not trigger 
 Text search filters the currently loaded, privacy-safe metadata. History model filtering uses the
 exact model value accepted by P032 reporting. Session, project, and model screens retain selection
 when results update where the selected page still exists.
+
+On the Composer screen, Tab moves between form fields; Tab from Actions advances to the next
+screen, while Shift+Tab from Target moves to the previous screen. Focus the Actions row to use its
+Save Draft, Load Draft, Templates, and Review Preflight choices without Ctrl-key support. Composer
+shortcuts and editor behavior are documented in the [Composer guide](V02_PROMPT_COMPOSER.md).
 
 ### Overview
 
@@ -112,6 +119,36 @@ History defaults to All history, ordered newest first. The token view uses P032'
 per-response records only. Incomplete rows remain visibly incomplete; snapshots are not added to
 consumption totals. `Enter` performs a read-only evidence inspection. The quota subview displays
 observed account-meter snapshots separately and never sums them as task usage.
+
+### Composer
+
+Composer is the sixth screen and `codex-meter compose` opens the same TUI there directly. Its
+multiline prompt editor has a 64 KiB UTF-8 byte limit, accepts bracketed paste, rejects oversized
+input without truncation, and keeps edits in memory by default. The live model picker uses P033's
+`model/list` catalog and displays reported defaults, hidden state, reasoning capabilities, and input
+modalities. Reasoning choices are tied to the selected model. The target picker uses P033 session
+metadata; it never resumes a thread or reads its transcript. A new target requires an explicit
+workspace choice and does not create a thread.
+
+While prompt, title, or model-filter text has focus, `q` is ordinary input. Press `Ctrl+C` to
+request exit from those fields; unsaved task changes require confirmation.
+
+`F5` refreshes session, model, and quota metadata on Composer. A refreshed catalog or target
+invalidates any open preflight so the user can review the current evidence again.
+
+Review Preflight shows the exact prepared configuration and prompt, latest local five-hour/weekly
+quota observations with timestamps, resets and freshness, local source coverage, and readiness
+limitations. Expected task quota cost remains unavailable without calibrated evidence. Preflight
+uses read-only reporting and metadata calls; it does not call `thread/start`, `turn/start`,
+`thread/resume`, or `thread/read`. The user-facing interface has no enabled execution action;
+execution is planned for P036.
+
+Saved drafts are user-owned documents, separate from telemetry SQLite. Prompt text stays in memory
+until the user explicitly saves it; there is no autosave. On Unix-like systems, versioned plaintext
+draft files are stored in the per-user data directory with private permissions, atomic replacement,
+bounded storage, and no-follow file operations. Permissions are not encryption. Saving is disabled
+where private storage behavior is not implemented. See the
+[Composer guide](V02_PROMPT_COMPOSER.md) for exact storage, shortcuts, and P036 handoff details.
 
 ## Data and provenance rules
 

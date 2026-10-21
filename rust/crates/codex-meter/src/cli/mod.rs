@@ -36,6 +36,7 @@ where
         CliAction::InspectHelp => Ok(args::inspect_help_text().to_owned()),
         CliAction::QuotaHelp => Ok(args::quota_help_text().to_owned()),
         CliAction::TuiHelp => Ok(args::tui_help_text().to_owned()),
+        CliAction::ComposeHelp => Ok(args::compose_help_text().to_owned()),
         CliAction::Version => Ok(format!("codex-meter {}\n", env!("CARGO_PKG_VERSION"))),
         CliAction::Sync(arguments) => sync::run(arguments),
         CliAction::Estimate(arguments) => estimate::run(arguments),
@@ -50,6 +51,7 @@ where
         CliAction::Models(arguments) => models::run(arguments),
         CliAction::Projects(arguments) => projects::run(arguments),
         CliAction::Tui(arguments) => crate::tui::run(arguments),
+        CliAction::Compose(arguments) => crate::tui::run_composer(arguments),
     }
 }
 

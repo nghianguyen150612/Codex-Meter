@@ -1,6 +1,7 @@
 //! Small native parser with duplicate-flag rejection and no shell processing.
 
 use crate::analytics::PythonWorkerMode;
+use crate::codex_app_server::ArchiveFilter;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -70,8 +71,45 @@ pub struct QuotaArguments {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SessionsArguments {
+    pub archive_filter: ArchiveFilter,
+    pub active_only: bool,
+    pub limit: Option<usize>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionShowArguments {
+    pub thread_id: String,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionForkArguments {
+    pub thread_id: String,
+    pub yes: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelsArguments {
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectsArguments {
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     Help,
+    SessionsHelp,
+    SessionHelp,
+    SessionShowHelp,
+    SessionResumeHelp,
+    SessionForkHelp,
+    ModelsHelp,
+    ProjectsHelp,
     SyncHelp,
     EstimateHelp,
     TokensHelp,
@@ -85,6 +123,12 @@ pub enum CliAction {
     History(HistoryArguments),
     Inspect(InspectArguments),
     Quota(QuotaArguments),
+    Sessions(SessionsArguments),
+    SessionShow(SessionShowArguments),
+    SessionResume(String),
+    SessionFork(SessionForkArguments),
+    Models(ModelsArguments),
+    Projects(ProjectsArguments),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +171,18 @@ where
     }
     if arguments[0] == OsStr::new("quota") {
         return parse_quota_args(&arguments[1..]);
+    }
+    if arguments[0] == OsStr::new("sessions") {
+        return parse_sessions_args(&arguments[1..]);
+    }
+    if arguments[0] == OsStr::new("session") {
+        return parse_session_args(&arguments[1..]);
+    }
+    if arguments[0] == OsStr::new("models") {
+        return parse_read_only_json_command(&arguments[1..], "models");
+    }
+    if arguments[0] == OsStr::new("projects") {
+        return parse_read_only_json_command(&arguments[1..], "projects");
     }
     if arguments[0] != OsStr::new("estimate") {
         return Err(error(
@@ -545,6 +601,184 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     }))
 }
 
+fn parse_sessions_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if has_help(arguments) {
+        return Ok(CliAction::SessionsHelp);
+    }
+    let mut seen = HashSet::new();
+    let mut has_all = false;
+    let mut has_archived = false;
+    let mut active_only = false;
+    let mut limit = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = utf8_value(&arguments[index], "argument")?;
+        match flag.as_str() {
+            "--all" | "--archived" | "--active" | "--json" => {
+                set_once(&mut seen, &flag)?;
+                match flag.as_str() {
+                    "--all" => has_all = true,
+                    "--archived" => has_archived = true,
+                    "--active" => active_only = true,
+                    "--json" => json = true,
+                    _ => unreachable!(),
+                }
+                index += 1;
+            }
+            "--limit" => {
+                let value = next_option_value(arguments, &mut index, &flag, &["--limit"])?;
+                limit = Some(parse_limit(&value)? as usize);
+            }
+            _ => return Err(error("unknown_argument", "unknown sessions argument")),
+        }
+    }
+    if has_all && has_archived {
+        return Err(error(
+            "conflicting_options",
+            "--all and --archived cannot be combined",
+        ));
+    }
+    let archive_filter = if has_all {
+        ArchiveFilter::All
+    } else if has_archived {
+        ArchiveFilter::Archived
+    } else {
+        ArchiveFilter::NonArchived
+    };
+    Ok(CliAction::Sessions(SessionsArguments {
+        archive_filter,
+        active_only,
+        limit,
+        json,
+    }))
+}
+
+fn parse_session_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments.is_empty() || arguments[0] == OsStr::new("--help") {
+        return Ok(CliAction::SessionHelp);
+    }
+    let operation = utf8_value(&arguments[0], "session operation")?;
+    let rest = &arguments[1..];
+    if has_help(rest) {
+        return Ok(match operation.as_str() {
+            "show" => CliAction::SessionShowHelp,
+            "resume" => CliAction::SessionResumeHelp,
+            "fork" => CliAction::SessionForkHelp,
+            _ => return Err(error("unknown_command", "unknown session operation")),
+        });
+    }
+    match operation.as_str() {
+        "show" => {
+            let mut thread_id = None;
+            let mut json = false;
+            let mut seen_json = false;
+            for value in rest {
+                if value == OsStr::new("--json") {
+                    if seen_json {
+                        return Err(error("invalid_argument", "duplicate --json flag"));
+                    }
+                    seen_json = true;
+                    json = true;
+                } else if value.to_string_lossy().starts_with('-') {
+                    return Err(error("unknown_argument", "unknown session show argument"));
+                } else if thread_id.is_none() {
+                    thread_id = Some(checked_identifier(value, "thread id")?);
+                } else {
+                    return Err(error(
+                        "invalid_argument",
+                        "session show accepts one thread id",
+                    ));
+                }
+            }
+            Ok(CliAction::SessionShow(SessionShowArguments {
+                thread_id: thread_id.ok_or_else(|| {
+                    error("invalid_argument", "session show requires a thread id")
+                })?,
+                json,
+            }))
+        }
+        "resume" => {
+            let thread_id = one_thread_id(rest, "session resume")?;
+            Ok(CliAction::SessionResume(thread_id))
+        }
+        "fork" => {
+            let mut thread_id = None;
+            let mut yes = false;
+            let mut seen_yes = false;
+            for value in rest {
+                if value == OsStr::new("--yes") {
+                    if seen_yes {
+                        return Err(error("invalid_argument", "duplicate --yes flag"));
+                    }
+                    seen_yes = true;
+                    yes = true;
+                } else if value.to_string_lossy().starts_with('-') {
+                    return Err(error("unknown_argument", "unknown session fork argument"));
+                } else if thread_id.is_none() {
+                    thread_id = Some(checked_identifier(value, "thread id")?);
+                } else {
+                    return Err(error(
+                        "invalid_argument",
+                        "session fork accepts one thread id",
+                    ));
+                }
+            }
+            Ok(CliAction::SessionFork(SessionForkArguments {
+                thread_id: thread_id.ok_or_else(|| {
+                    error("invalid_argument", "session fork requires a thread id")
+                })?,
+                yes,
+            }))
+        }
+        _ => Err(error("unknown_command", "unknown session operation")),
+    }
+}
+
+fn one_thread_id(arguments: &[OsString], command: &str) -> Result<String, CliError> {
+    if arguments.len() != 1 || arguments[0].to_string_lossy().starts_with('-') {
+        return Err(error(
+            "invalid_argument",
+            &format!("{command} requires one thread id and accepts no options"),
+        ));
+    }
+    checked_identifier(&arguments[0], "thread id")
+}
+
+fn parse_read_only_json_command(
+    arguments: &[OsString],
+    command: &str,
+) -> Result<CliAction, CliError> {
+    if has_help(arguments) {
+        return Ok(if command == "models" {
+            CliAction::ModelsHelp
+        } else {
+            CliAction::ProjectsHelp
+        });
+    }
+    let mut json = false;
+    let mut seen = false;
+    for argument in arguments {
+        if argument == OsStr::new("--json") {
+            if seen {
+                return Err(error("invalid_argument", "duplicate --json flag"));
+            }
+            seen = true;
+            json = true;
+        } else {
+            return Err(error(
+                "unknown_argument",
+                &format!("unknown {command} argument"),
+            ));
+        }
+    }
+    Ok(if command == "models" {
+        CliAction::Models(ModelsArguments { json })
+    } else {
+        CliAction::Projects(ProjectsArguments { json })
+    })
+}
+
 fn has_help(arguments: &[OsString]) -> bool {
     arguments
         .iter()
@@ -655,7 +889,35 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence and empirical capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter sync [OPTIONS]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    sync                            Ingest supported local Codex rollout evidence\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Reporting commands read SQLite strictly read-only. No provider API is called.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Session and model commands use Codex App Server; they do not submit model turns. Reporting commands read SQLite strictly read-only.\n"
+}
+
+pub fn sessions_help_text() -> &'static str {
+    "Codex Meter — local Codex sessions\n\nUSAGE:\n    codex-meter sessions [--all | --archived] [--active] [--limit N] [--json]\n\nOPTIONS:\n    --all          Include archived and non-archived sessions\n    --archived     Include archived sessions only\n    --active       Keep sessions with runtime status active\n    --limit N      Maximum rows to return (range 1–1000)\n    --json         Emit metadata as JSON\n    --help         Show this help\n\nPagination follows the cursor returned by Codex App Server. Session names are shown; previews, transcripts, and filesystem paths are omitted.\n"
+}
+
+pub fn session_help_text() -> &'static str {
+    "Codex Meter — local session management\n\nUSAGE:\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n\nUse the subcommand help for details. Resume loads a thread but does not start a turn. Fork copies the saved conversation history.\n"
+}
+
+pub fn session_show_help_text() -> &'static str {
+    "Codex Meter — read session metadata\n\nUSAGE:\n    codex-meter session show THREAD_ID [--json]\n\nReads metadata without resuming the thread or loading turns. Prompt previews and filesystem paths are not displayed. Archive or pin state is shown as unavailable when the stable App Server response does not provide it.\n"
+}
+
+pub fn session_resume_help_text() -> &'static str {
+    "Codex Meter — load a session\n\nUSAGE:\n    codex-meter session resume THREAD_ID\n\nLoads the existing thread in Codex App Server. It does not submit a prompt, start a turn, change model or permissions, or open an interactive terminal.\n"
+}
+
+pub fn session_fork_help_text() -> &'static str {
+    "Codex Meter — fork a session\n\nUSAGE:\n    codex-meter session fork THREAD_ID [--yes]\n\nCreates a new thread by copying the saved conversation history. Interactive confirmation is required unless --yes is supplied. No turn is started.\n"
+}
+
+pub fn models_help_text() -> &'static str {
+    "Codex Meter — discover models\n\nUSAGE:\n    codex-meter models [--json]\n\nReads the current model catalog, including hidden entries, reasoning efforts, defaults, and input modalities when supplied. It does not recommend a model or submit a prompt.\n"
+}
+
+pub fn projects_help_text() -> &'static str {
+    "Codex Meter — local project associations\n\nUSAGE:\n    codex-meter projects [--json]\n\nGroups local sessions by Codex project ID, read-only Git metadata, or an accessible working directory. Full paths and Git remotes are not displayed or persisted.\n"
 }
 
 pub fn sync_help_text() -> &'static str {
@@ -704,6 +966,90 @@ mod tests {
         assert_eq!(
             parse(&["estimate", "--help"]).unwrap(),
             CliAction::EstimateHelp
+        );
+    }
+
+    #[test]
+    fn parses_native_session_model_and_project_commands() {
+        assert_eq!(
+            parse(&["sessions", "--all", "--active", "--limit", "20", "--json"]).unwrap(),
+            CliAction::Sessions(SessionsArguments {
+                archive_filter: ArchiveFilter::All,
+                active_only: true,
+                limit: Some(20),
+                json: true,
+            })
+        );
+        assert_eq!(
+            parse(&["sessions", "--archived"]).unwrap(),
+            CliAction::Sessions(SessionsArguments {
+                archive_filter: ArchiveFilter::Archived,
+                active_only: false,
+                limit: None,
+                json: false,
+            })
+        );
+        assert_eq!(
+            parse(&["session", "show", "thread-1", "--json"]).unwrap(),
+            CliAction::SessionShow(SessionShowArguments {
+                thread_id: "thread-1".into(),
+                json: true,
+            })
+        );
+        assert_eq!(
+            parse(&["session", "resume", "thread-1"]).unwrap(),
+            CliAction::SessionResume("thread-1".into())
+        );
+        assert_eq!(
+            parse(&["session", "fork", "thread-1", "--yes"]).unwrap(),
+            CliAction::SessionFork(SessionForkArguments {
+                thread_id: "thread-1".into(),
+                yes: true,
+            })
+        );
+        assert_eq!(
+            parse(&["models", "--json"]).unwrap(),
+            CliAction::Models(ModelsArguments { json: true })
+        );
+        assert_eq!(
+            parse(&["projects"]).unwrap(),
+            CliAction::Projects(ProjectsArguments { json: false })
+        );
+    }
+
+    #[test]
+    fn native_session_commands_reject_conflicts_duplicates_and_extra_values() {
+        assert_eq!(
+            parse(&["sessions", "--all", "--archived"])
+                .unwrap_err()
+                .code,
+            "conflicting_options"
+        );
+        assert_eq!(
+            parse(&["sessions", "--limit", "0"]).unwrap_err().code,
+            "invalid_limit"
+        );
+        assert_eq!(
+            parse(&["session", "show", "thread-1", "--json", "--json"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            parse(&["session", "resume", "thread-1", "--yes"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            parse(&["session", "fork", "thread-1", "--yes", "--yes"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            parse(&["models", "--json", "--json"]).unwrap_err().code,
+            "invalid_argument"
         );
     }
 

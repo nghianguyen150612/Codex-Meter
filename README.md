@@ -39,6 +39,13 @@ coverage is limited to supported local rollout evidence. See the
 [P032 implementation manifest](docs/PROMPT032_MANIFEST.md) for accounting semantics and validation
 status.
 
+The unreleased P033 development CLI also connects to the installed Codex App Server over stdio for
+local session metadata, live model discovery, and read-only project grouping. It does not read
+Codex credentials, persist App Server responses, or start model turns. Session resume loads thread
+state; fork copies conversation history and requires confirmation. These commands are not included
+in the published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
+and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
+
 ## Quick install (v0.1.0 technical preview)
 
 User-local scripts for Linux/macOS and Windows are in [script installation](docs/SCRIPT_INSTALLATION.md). They download pinned v0.1.0 assets, verify SHA-256 hashes, and install the native CLI plus matching Python wheel. No root/Administrator permissions or provider credentials are needed. An existing compatible SQLite database remains necessary for estimates.
@@ -60,6 +67,8 @@ See the [P031 implementation manifest](docs/PROMPT031_MANIFEST.md) for the branc
 outstanding device-validation status.
 See the [P032 implementation manifest](docs/PROMPT032_MANIFEST.md) for native reporting, quality
 gates, and the outstanding Arch-device integration gate.
+See the [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for the App Server client,
+session-management scope, and live-device gate.
 See the [cross-platform runtime guide](docs/CROSS_PLATFORM_RUNTIME_COMPATIBILITY.md) for local
 wheel installation, installed-worker selection, and runtime compatibility coverage.
 

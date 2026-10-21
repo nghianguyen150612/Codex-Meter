@@ -2,12 +2,12 @@
 
 ## Status and baseline
 
-- Status: **PARTIAL** pending full validation, GitHub CI, and the reference Arch desktop gate.
+- Status: **PARTIAL** pending GitHub CI and the reference Arch desktop gate.
 - Verified starting `origin/main`: `00a98ba7bc5460b21ca7e3085d55eb9a31f0f2e0`, the P034 merge
   commit from PR #29.
 - Feature branch: `feat/p035-prompt-composer-model-picker`.
 - Suggested PR title: `Add interactive prompt composer, model selection, and task preflight`.
-- PR URL: not created yet.
+- PR URL: to be recorded in the final implementation report.
 - Published v0.1.0 release/tag and existing commit history are preserved. P035 does not publish
   v0.2.0 or change versioned telemetry/analytics contracts.
 - Codex CLI observed in the implementation environment: `0.163.0`. P033 previously verified
@@ -68,10 +68,10 @@ if a test sends `thread/start` or `turn/start`, so accidental calls fail the tes
 | Schema/fixture validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures |
 | P029 installed-runtime smoke | Passed: reproducible wheel, isolated install, relocation, deterministic output, concurrency, read-only SQLite |
 | P030 release version policy | Passed: `0.1.0` policy unchanged |
-| P030 local candidate packaging smoke | Pending clean committed checkout; packaging intentionally refuses a dirty source tree |
+| P030 local candidate packaging smoke | Passed on commit `808b44d724adf961c19320151dae46a826f9b17d`; extracted Linux x86_64 candidate validated installed worker, sufficient/insufficient estimates, deterministic JSON, version compatibility, and read-only SQLite |
 | P031/P032/P033/P034 regressions | Passed in default and all-features Rust workspace suites |
 | Controlled PTY Composer smoke | Passed with a failing fake Codex executable and temporary paths: startup, bracketed paste, dirty-exit confirmation, terminal cleanup, and no SQLite creation |
-| `git diff --check` | Passed before final commit review |
+| `git diff --check` | Passed on implementation and documentation changes before commits |
 | Linux/macOS/Windows GitHub Actions | Pending PR |
 | Arch live-device validation | **Pending; reference device unavailable here** |
 

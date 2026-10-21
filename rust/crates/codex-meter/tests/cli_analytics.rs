@@ -1,12 +1,18 @@
+#[cfg(not(feature = "release-artifact"))]
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(not(feature = "release-artifact"))]
 use codex_meter::storage::SqliteStore;
+#[cfg(not(feature = "release-artifact"))]
 use codex_meter::telemetry::NormalizedObservation;
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(not(feature = "release-artifact"))]
+use serde_json::Value;
+#[cfg(not(feature = "release-artifact"))]
 use sha2::{Digest, Sha256};
 
 const GENERATED_AT: &str = "2026-10-16T07:00:00Z";
@@ -20,6 +26,7 @@ fn temporary_path(suffix: &str) -> PathBuf {
     ))
 }
 
+#[cfg(not(feature = "release-artifact"))]
 fn synthetic_database(path: &std::path::Path) {
     let mut store = SqliteStore::open(path).expect("synthetic database should migrate");
     for (index, raw_total) in [14_500, 16_000].into_iter().enumerate() {
@@ -88,6 +95,7 @@ fn invoke(
 }
 
 #[test]
+#[cfg(not(feature = "release-artifact"))]
 fn native_cli_runs_python_estimator_read_only_and_validates_json_output() {
     let database = temporary_path("estimate 数据.sqlite");
     let request = temporary_path("json");
@@ -223,6 +231,7 @@ fn rejected_request_privacy_canaries_never_reach_cli_error_output() {
 }
 
 #[test]
+#[cfg(not(feature = "release-artifact"))]
 fn empty_or_incompatible_history_returns_insufficient_evidence_without_pooling() {
     let database = temporary_path("sqlite");
     let request = temporary_path("json");

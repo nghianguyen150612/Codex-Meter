@@ -2,8 +2,8 @@
 
 ## Status and scope
 
-- Status: **PARTIAL** while cross-platform privacy guarantees, the Arch reference-device gate, and
-  CI remain outstanding.
+- Status: **PARTIAL** while Windows journal privacy guarantees, crash injection at every filesystem
+  boundary, and the Arch reference-device gate remain outstanding.
 - Verified starting `origin/main`: `18225c724813d85eaa76324e3f3674d116eee9a7` (P036 merge commit,
   PR #31).
 - Feature branch: `feat/p037-execution-reliability`.
@@ -77,7 +77,8 @@ parameters and counts mutation methods. The scenarios cover:
 
 SIGKILL bypasses cleanup. Crash tests restore their PTY from the test process before restart and do
 not claim that the killed process restored terminal settings. The PTY framework uses Unix
-`openpty`; Windows ConPTY remains unverified.
+`openpty`; Windows ConPTY remains unverified. Native macOS x86_64 and ARM64 CI passed all nine PTY
+scenarios, including SIGKILL/restart and terminal restoration after the test harness resets its PTY.
 
 Journal unit tests cover privacy canaries, checksums/truncation, schema mismatch, process-store
 reopen after possible submission, stale compare-and-swap updates, warning acknowledgement without
@@ -113,17 +114,18 @@ task was submitted. The Arch gate remains **Pending**.
 | Python tests and tooling | Passed: 638 pytest tests; Ruff lint and format; dependency lock verification; 6 schemas, 16 positive and 5 negative contract fixtures |
 | P029 installed-runtime smoke | Passed: reproducible wheel, isolated install, relocation, source mode, cwd/path, deterministic output, concurrency, and read-only SQLite checks |
 | P030 local release candidate | Passed: clean Linux x86_64 candidate packaged from source `a10de413ba5bf0cac409cd92a2738fa3ac408b2f`; extracted-candidate smoke verified installed worker, estimates, deterministic JSON, version compatibility, and read-only SQLite |
+| P030 release-candidate CI | Passed on P037 head `674cb27a0a9c68bc52698a074d203d64f10bd97a` in run `39778573401`; Linux x86_64, macOS x86_64, macOS ARM64, and Windows x86_64 artifact jobs succeeded |
 | P031–P036 regressions | Passed through retained Rust workspace and Python regression suites; no separate per-milestone executable smoke scripts exist |
 | Linux x86_64 | Local implementation environment; Rust, Python, P029, and journal/PTY suites passed |
-| macOS x86_64 and ARM64 | Native CI jobs added; awaiting validation on this head |
-| Windows x86_64 | Previous head's Rust CI passed; journal execution deliberately fails closed until ACL-backed storage is implemented |
+| macOS x86_64 and ARM64 | Native Rust CI passed on head `674cb27`; journal, PTY, crash/restart, and terminal-restoration tests passed on both architectures |
+| Windows x86_64 | Rust platform CI passed on head `674cb27`; journal execution deliberately fails closed until ACL-backed storage is implemented |
 | Arch live read-only validation | **Pending; reference device unavailable** |
-| GitHub Actions | Corrected startup/isolation tests and native macOS architecture jobs await CI on the latest head; the previous head failed Linux/macOS PTY recovery cases |
+| GitHub Actions CI | Passed on head `674cb27` in run `39778573359`: Rust quality, Python quality, contracts, Linux/macOS/Windows Rust platform tests, and installed-runtime matrix |
 | Merge / release | Not performed; v0.2.0 release is not authorized by this work |
 
 The implementation runtime check was run in a Linux x86_64 workspace; it does not substitute for
-the reference Arch desktop. Build success alone will not mark platform storage or terminal gates as
-passed.
+the reference Arch desktop. Native macOS CI supports the Unix journal and PTY implementation claims,
+but does not satisfy the live Arch device gate. Windows storage and ConPTY remain unsupported.
 
 ## Consolidated P031–P037 device gates
 

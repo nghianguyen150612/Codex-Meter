@@ -125,10 +125,10 @@ cursor. On a real terminal after a forceful kill, use the shell's `reset` comman
 the terminal remains in raw mode. Normal exit, Ctrl+C, dirty Composer confirmation, recovery-view
 exit, and execution terminal paths use the application cleanup guard.
 
-The PTY tests require Unix `openpty` and do not constitute Windows ConPTY validation. Windows
-storage and terminal behavior remain unverified and execution fails closed there. macOS storage and
-PTY behavior are covered only when native architecture CI jobs complete; they have not run in the
-local implementation environment.
+The PTY tests require Unix `openpty` and do not constitute Windows ConPTY validation. Native macOS
+x86_64 and ARM64 CI passed the journal and PTY test suites, including recovery after the test driver
+restores the terminal following SIGKILL. This does not satisfy the live Arch reference-device gate.
+Windows storage and terminal behavior remain unverified, and execution fails closed there.
 
 ## Provenance and limits
 

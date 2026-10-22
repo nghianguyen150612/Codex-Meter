@@ -157,7 +157,8 @@ PTY tests do not replace live-device evidence. See the [compatibility matrix](V0
 
 The Unix journal backend is implemented for Linux and macOS semantics. Windows execution fails
 closed until ACL-backed private storage and replacement behavior are implemented and validated.
-Windows ConPTY and macOS PTY tests have not run in this environment.
+Windows ConPTY remains unverified. Native macOS x86_64 and ARM64 CI passed the journal and PTY
+scenarios; those tests have not run in the local Linux implementation environment.
 
 P038 should complete Windows journal/terminal support and the reference Arch read-only gate, then
 consider additional runtime audits. Do not infer task-token attribution or quota forecasting from

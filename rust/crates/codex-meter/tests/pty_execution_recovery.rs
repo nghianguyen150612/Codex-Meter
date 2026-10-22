@@ -252,17 +252,16 @@ impl PtyHarness {
     fn wait_for(&self, text: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let found = {
-                let output = self
-                    .output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                visible_screen(&output).contains(text)
-            };
+            let output = self
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let found = visible_screen(&output).contains(text);
             if found {
                 return true;
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(50));
         }
         false
     }

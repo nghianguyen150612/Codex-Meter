@@ -25,7 +25,8 @@ Unknown schema and malformed or truncated data fail closed and are preserved.
 
 The Unix directory is private (`0700`), files are owner-only (`0600`), path components and files
 are opened without following symlinks, writes use a fixed bounded temp file plus `fsync`, atomic
-rename, and directory `fsync`, and writers serialize with `flock` plus revision compare-and-swap.
+rename, and directory `fsync`. Writers serialize with a process-local mutex and OS `flock`, then
+use revision compare-and-swap to reject stale state.
 The store caps the journal at 32 records / 64 KiB, prunes only safe pre-mutation or terminal
 records, and retains all unresolved records. Concurrent stale updates fail rather than overwrite.
 

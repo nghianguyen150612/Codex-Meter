@@ -614,6 +614,7 @@ mod platform {
 
     const PRIVATE_MODE: libc::mode_t = 0o700;
     const FILE_MODE: libc::mode_t = 0o600;
+    static JOURNAL_THREAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     pub struct Store {
         directory: OwnedFd,
@@ -703,6 +704,12 @@ mod platform {
             &self,
             action: impl FnOnce() -> Result<T, RecoveryJournalError>,
         ) -> Result<T, RecoveryJournalError> {
+            // flock serializes separate processes. This mutex also serializes
+            // independent opens and threads in this process on platforms where
+            // flock ownership is tied to an open file description.
+            let _thread_guard = JOURNAL_THREAD_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let name = cstring(".lock")?;
             let fd = unsafe {
                 libc::openat(

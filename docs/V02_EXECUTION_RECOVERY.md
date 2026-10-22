@@ -20,8 +20,8 @@ files are owned by that user and mode `0600`. The store refuses symlinks, non-re
 ownership, public journal permissions, and malformed or oversized data. Corrupt data is preserved
 for inspection and is never silently replaced.
 
-Updates serialize through `flock`, compare the record revision before writing, write a fixed
-temporary file, `fsync` it, atomically rename it over the journal, then `fsync` the containing
+Updates serialize through a process-local mutex and OS `flock`, compare the record revision before
+writing, write a fixed temporary file, `fsync` it, atomically rename it over the journal, then `fsync` the containing
 directory. Newly created directory entries are also synchronized in their parent. Locks are
 released by the operating system if a process dies. A stale writer receives a conflict instead of
 overwriting newer state.

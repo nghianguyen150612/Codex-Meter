@@ -941,7 +941,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     fn temp_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        std::env::temp_dir().canonicalize().unwrap().join(format!(
             "codex-meter-recovery-{label}-{}-{}",
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)

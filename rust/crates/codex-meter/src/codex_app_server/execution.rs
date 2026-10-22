@@ -123,7 +123,7 @@ impl InteractiveExecution {
         let journal = {
             use std::sync::atomic::{AtomicU64, Ordering};
             static NEXT_TEST_JOURNAL: AtomicU64 = AtomicU64::new(1);
-            let path = std::env::temp_dir().join(format!(
+            let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
                 "codex-meter-execution-test-{}-{}",
                 std::process::id(),
                 NEXT_TEST_JOURNAL.fetch_add(1, Ordering::Relaxed)

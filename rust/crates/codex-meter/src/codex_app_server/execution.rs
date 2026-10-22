@@ -4,12 +4,16 @@
 //! remains a metadata-only management client.
 
 use super::approvals::{ApprovalBroker, ApprovalChoice, ApprovalView};
-use super::client::AppServerInfo;
+use super::client::{AppServerInfo, CodexAppServer};
 use super::errors::CodexAppError;
 use super::execution_events::{ExecutionMachine, ExecutionNotification, ExecutionPhase};
 use super::execution_protocol::{
     required_string, resolve_workspace, validate_thread_id, ApprovalPolicy, SandboxMode,
     TurnStatus, VerifiedSecurity, MAX_ACTIVITY_ENTRIES, MAX_RENDERED_OUTPUT_BYTES,
+};
+use super::execution_recovery::{
+    AuthoritativeStatus, ExecutionOrigin, ExecutionRecoveryRecord, MutationIntent, RecoveryJournal,
+    RecoveryJournalError, RecoveryOutcome, RecoveryPhase,
 };
 use super::models::{parse_model, ModelCatalog, ModelInfo};
 use super::protocol::REQUEST_TIMEOUT_SECS;
@@ -28,6 +32,7 @@ use std::time::Duration;
 const EXECUTION_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const MODEL_PAGE_SIZE: u32 = 100;
 const TURN_PAGE_SIZE: u32 = 50;
+const MAX_RECONCILIATION_PAGES: usize = 20;
 const AUDITED_EXECUTION_RUNTIME: &str = "codex_cli_rs/0.163.0";
 
 #[derive(Clone)]
@@ -76,6 +81,8 @@ pub struct InteractiveExecution {
     inherited_model: Option<String>,
     inherited_effort: Option<String>,
     broker: Option<ApprovalBroker>,
+    journal: RecoveryJournal,
+    recovery_record: Option<ExecutionRecoveryRecord>,
     output: String,
     tool_output: String,
     last_agent_item_id: Option<String>,
@@ -111,6 +118,29 @@ impl InteractiveExecution {
     fn prepare_with_transport(
         task: PreparedTask,
         transport: ProcessTransport,
+    ) -> Result<Self, CodexAppError> {
+        #[cfg(all(test, unix))]
+        let journal = {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT_TEST_JOURNAL: AtomicU64 = AtomicU64::new(1);
+            let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
+                "codex-meter-execution-test-{}-{}",
+                std::process::id(),
+                NEXT_TEST_JOURNAL.fetch_add(1, Ordering::Relaxed)
+            ));
+            RecoveryJournal::open_at(&path).map_err(map_recovery_error)?
+        };
+        #[cfg(all(test, not(unix)))]
+        let journal = RecoveryJournal::open_memory_for_tests().map_err(map_recovery_error)?;
+        #[cfg(not(test))]
+        let journal = RecoveryJournal::open_default().map_err(map_recovery_error)?;
+        Self::prepare_with_journal(task, transport, journal)
+    }
+
+    fn prepare_with_journal(
+        task: PreparedTask,
+        transport: ProcessTransport,
+        journal: RecoveryJournal,
     ) -> Result<Self, CodexAppError> {
         validate_prepared_task(&task)?;
         let info = initialize(&transport)?;
@@ -240,6 +270,8 @@ impl InteractiveExecution {
             inherited_model,
             inherited_effort,
             broker: None,
+            journal,
+            recovery_record: None,
             output: String::new(),
             tool_output: String::new(),
             last_agent_item_id: None,
@@ -268,12 +300,287 @@ impl InteractiveExecution {
         self.machine.phase()
     }
 
+    pub fn cancel_before_submission(&mut self) -> Result<(), CodexAppError> {
+        if self.machine.phase() != ExecutionPhase::AwaitingConfirmation
+            || self.machine.turn_id().is_some()
+        {
+            return Err(CodexAppError::InvalidExecutionTransition);
+        }
+        if self
+            .recovery_record
+            .as_ref()
+            .is_some_and(|record| record.recovery_required)
+        {
+            return Err(CodexAppError::ExecutionRecoveryUnavailable);
+        }
+        if self.recovery_record.is_some() {
+            self.update_recovery_record(
+                |record| {
+                    record.execution_phase = RecoveryPhase::Cancelled;
+                    record.recovery_required = false;
+                },
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn thread_id(&self) -> Option<&str> {
         self.machine.thread_id()
     }
 
     pub fn turn_id(&self) -> Option<&str> {
         self.machine.turn_id()
+    }
+
+    fn create_recovery_record(
+        &mut self,
+        origin: ExecutionOrigin,
+        known_thread_id: Option<String>,
+    ) -> Result<(), CodexAppError> {
+        self.recovery_record = Some(
+            self.journal
+                .create(origin, known_thread_id)
+                .map_err(map_recovery_error)?,
+        );
+        Ok(())
+    }
+
+    fn persist_recovery_state(
+        &mut self,
+        intent: MutationIntent,
+        phase: RecoveryPhase,
+        recovery_required: bool,
+    ) -> Result<(), CodexAppError> {
+        self.update_recovery_record(
+            |record| {
+                record.mutation_intent = intent;
+                record.execution_phase = phase;
+                record.recovery_required = recovery_required;
+            },
+            false,
+        )
+    }
+
+    fn persist_thread_identity(&mut self, thread_id: String) -> Result<(), CodexAppError> {
+        self.update_recovery_record(
+            |record| {
+                record.known_thread_id = Some(thread_id);
+                record.execution_phase = RecoveryPhase::ThreadIdentityKnown;
+                // A durable thread identity without a turn-start intent is
+                // proof that this controller has not submitted the task.
+                // `turn/start` gets its own write-ahead record immediately
+                // before that RPC.
+                record.recovery_required = false;
+            },
+            false,
+        )
+    }
+
+    fn persist_turn_identity(
+        &mut self,
+        turn_id: String,
+        status: TurnStatus,
+    ) -> Result<(), CodexAppError> {
+        self.update_recovery_record(
+            |record| {
+                record.known_turn_id = Some(turn_id);
+                record.last_authoritative_status = Some(authoritative_status(status));
+                record.execution_phase = if status == TurnStatus::InProgress {
+                    RecoveryPhase::TurnIdentityKnown
+                } else {
+                    recovery_phase(status)
+                };
+                record.recovery_required = status == TurnStatus::InProgress;
+            },
+            false,
+        )
+    }
+
+    fn persist_authoritative_status(&mut self, status: TurnStatus) -> Result<(), CodexAppError> {
+        self.update_recovery_record(
+            |record| {
+                record.last_authoritative_status = Some(authoritative_status(status));
+                record.execution_phase = if status == TurnStatus::InProgress {
+                    RecoveryPhase::Running
+                } else {
+                    recovery_phase(status)
+                };
+                record.recovery_required = status == TurnStatus::InProgress;
+            },
+            false,
+        )
+    }
+
+    fn update_recovery_record(
+        &mut self,
+        update: impl FnOnce(&mut ExecutionRecoveryRecord),
+        guard_new_mutation: bool,
+    ) -> Result<(), CodexAppError> {
+        let mut proposed = self
+            .recovery_record
+            .clone()
+            .ok_or(CodexAppError::ExecutionRecoveryUnavailable)?;
+        update(&mut proposed);
+        let result = if guard_new_mutation {
+            self.journal.update_for_new_mutation(&proposed)
+        } else {
+            self.journal.update(&proposed)
+        };
+        self.recovery_record = Some(result.map_err(map_recovery_error)?);
+        Ok(())
+    }
+
+    fn arm_new_mutation(
+        &mut self,
+        intent: MutationIntent,
+        phase: RecoveryPhase,
+    ) -> Result<(), CodexAppError> {
+        self.update_recovery_record(
+            |record| {
+                record.mutation_intent = intent;
+                record.execution_phase = phase;
+                // Conservatively require recovery from the moment intent is
+                // durable; a crash can happen before the transport write.
+                record.recovery_required = true;
+            },
+            true,
+        )
+    }
+
+    fn mark_unknown(&mut self) {
+        let _ = self.persist_recovery_state(
+            self.recovery_record
+                .as_ref()
+                .map_or(MutationIntent::None, |record| record.mutation_intent),
+            RecoveryPhase::OutcomeUnknown,
+            true,
+        );
+        if !self.machine.phase().terminal()
+            && self.machine.phase() != ExecutionPhase::OutcomeUnknown
+        {
+            let _ = self.machine.transition(ExecutionPhase::OutcomeUnknown);
+        }
+    }
+
+    fn enter_running(&mut self, events: &mut Vec<ControllerEvent>) -> bool {
+        if let Err(error) = self.persist_authoritative_status(TurnStatus::InProgress) {
+            self.mark_unknown();
+            events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+            events.push(ControllerEvent::Status(format!(
+                "Codex reported that the turn is running, but the state could not be durably recorded ({error}). Outcome unknown."
+            )));
+            return false;
+        }
+        if self.machine.transition(ExecutionPhase::Running).is_ok() {
+            events.push(ControllerEvent::State(ExecutionPhase::Running));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn record_approval_response_intent(&mut self) -> Result<(), CodexAppError> {
+        let terminal = self.recovery_record.as_ref().is_some_and(|record| {
+            matches!(
+                record.last_authoritative_status,
+                Some(
+                    AuthoritativeStatus::Completed
+                        | AuthoritativeStatus::Failed
+                        | AuthoritativeStatus::Interrupted
+                )
+            )
+        });
+        if terminal {
+            let phase = self
+                .recovery_record
+                .as_ref()
+                .map_or(RecoveryPhase::RecoveryRequired, |record| {
+                    record.execution_phase
+                });
+            self.update_recovery_record(
+                |record| {
+                    record.mutation_intent = MutationIntent::ApprovalResponse;
+                    record.execution_phase = phase;
+                    record.recovery_required = false;
+                },
+                false,
+            )
+        } else {
+            self.persist_recovery_state(
+                MutationIntent::ApprovalResponse,
+                RecoveryPhase::ApprovalResponseIntentRecorded,
+                true,
+            )?;
+            self.persist_recovery_state(
+                MutationIntent::ApprovalResponse,
+                RecoveryPhase::ApprovalResponseMayHaveBeenSent,
+                true,
+            )
+        }
+    }
+
+    fn send_approval_response(&mut self, id: Value, response: Value) -> Result<(), CodexAppError> {
+        let terminal = self.recovery_status_is_terminal();
+        self.record_approval_response_intent()?;
+        if let Err(error) = self.transport.respond_server_request(id, response) {
+            if !terminal {
+                self.mark_unknown();
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn reject_server_request(
+        &mut self,
+        id: Value,
+        code: i64,
+        message: &'static str,
+    ) -> Result<(), CodexAppError> {
+        let terminal = self.recovery_status_is_terminal();
+        self.record_approval_response_intent()?;
+        if let Err(error) = self.transport.reject_server_request(id, code, message) {
+            if !terminal {
+                self.mark_unknown();
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn deny_pending_approvals(&mut self) -> Result<(), CodexAppError> {
+        let pending = self
+            .broker
+            .as_mut()
+            .map_or_else(Vec::new, ApprovalBroker::deny_all);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let terminal = self.recovery_status_is_terminal();
+        self.record_approval_response_intent()?;
+        for (id, response) in pending {
+            if let Err(error) = self.transport.respond_server_request(id, response) {
+                if !terminal {
+                    self.mark_unknown();
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn recovery_status_is_terminal(&self) -> bool {
+        self.recovery_record.as_ref().is_some_and(|record| {
+            matches!(
+                record.last_authoritative_status,
+                Some(
+                    AuthoritativeStatus::Completed
+                        | AuthoritativeStatus::Failed
+                        | AuthoritativeStatus::Interrupted
+                )
+            )
+        })
     }
 
     pub fn output(&self) -> &str {
@@ -307,18 +614,60 @@ impl InteractiveExecution {
             .preflight
             .thread_id
             .as_deref()
-            .ok_or(CodexAppError::UnknownThread)?;
+            .ok_or(CodexAppError::UnknownThread)?
+            .to_owned();
+        if self.recovery_record.is_none() {
+            self.create_recovery_record(ExecutionOrigin::ExistingThread, Some(thread_id.clone()))?;
+        }
+        self.arm_new_mutation(
+            MutationIntent::ThreadResume,
+            RecoveryPhase::ThreadResumeIntentRecorded,
+        )?;
+        self.persist_recovery_state(
+            MutationIntent::ThreadResume,
+            RecoveryPhase::ThreadResumeMayHaveBeenSent,
+            true,
+        )?;
         let response = call(
             &self.transport,
             "thread/resume",
-            json!({"threadId":thread_id,"excludeTurns":true}),
-        )?;
-        let thread = response
-            .get("thread")
-            .ok_or(CodexAppError::ProtocolVersionMismatch)?;
-        if required_string(thread, "id", 128)? != thread_id {
+            json!({"threadId":thread_id.as_str(),"excludeTurns":true}),
+        );
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                if is_uncertain_error(&error) {
+                    self.mark_unknown();
+                } else {
+                    self.persist_recovery_state(
+                        MutationIntent::ThreadResume,
+                        RecoveryPhase::ThreadIdentityKnown,
+                        false,
+                    )?;
+                }
+                return Err(error);
+            }
+        };
+        let Some(thread) = response.get("thread") else {
+            self.mark_unknown();
+            return Err(CodexAppError::ProtocolVersionMismatch);
+        };
+        let returned_id = match required_string(thread, "id", 128) {
+            Ok(id) => id,
+            Err(error) => {
+                self.mark_unknown();
+                return Err(error);
+            }
+        };
+        if returned_id != thread_id {
+            self.mark_unknown();
             return Err(CodexAppError::UnknownThread);
         }
+        self.persist_recovery_state(
+            MutationIntent::ThreadResume,
+            RecoveryPhase::ThreadIdentityKnown,
+            false,
+        )?;
         ensure_thread_idle(thread)?;
         let security = VerifiedSecurity::from_thread_response(&response)?;
         let resumed_cwd = resolve_workspace(Path::new(required_string(thread, "cwd", 32 * 1024)?))?;
@@ -343,12 +692,12 @@ impl InteractiveExecution {
         self.inherited_model = observed_model.clone();
         self.inherited_effort = observed_effort.clone();
         self.security = Some(security);
-        self.machine.set_thread(thread_id.to_owned())?;
+        self.machine.set_thread(thread_id.clone())?;
         self.preflight = make_preflight(
             &self.task,
             &self.model_catalog,
             PreflightContext {
-                thread_id: Some(thread_id),
+                thread_id: Some(&thread_id),
                 workspace: Some(&resumed_cwd),
                 observed_model: observed_model.as_deref(),
                 observed_effort: observed_effort.as_deref(),
@@ -376,6 +725,20 @@ impl InteractiveExecution {
         }
         self.machine.transition(ExecutionPhase::Submitting)?;
         let mut events = vec![ControllerEvent::State(ExecutionPhase::Submitting)];
+        if self.recovery_record.is_none() {
+            let origin = if self.task.target_kind == TargetKind::NewThread {
+                ExecutionOrigin::NewThread
+            } else {
+                ExecutionOrigin::ExistingThread
+            };
+            let selected_thread = self.machine.thread_id().map(str::to_owned);
+            if let Err(error) = self.create_recovery_record(origin, selected_thread) {
+                self.machine.transition(ExecutionPhase::Failed)?;
+                events.push(ControllerEvent::State(ExecutionPhase::Failed));
+                events.push(ControllerEvent::Status(error.to_string()));
+                return Ok(events);
+            }
+        }
         if let Err(error) = self.revalidate_before_submit() {
             if error == CodexAppError::ExecutionPreflightChanged {
                 self.machine.transition(ExecutionPhase::Ready)?;
@@ -388,8 +751,13 @@ impl InteractiveExecution {
                 ));
                 return Ok(events);
             }
-            self.machine.transition(ExecutionPhase::Failed)?;
-            events.push(ControllerEvent::State(ExecutionPhase::Failed));
+            let state = if self.machine.phase() == ExecutionPhase::OutcomeUnknown {
+                ExecutionPhase::OutcomeUnknown
+            } else {
+                self.machine.transition(ExecutionPhase::Failed)?;
+                ExecutionPhase::Failed
+            };
+            events.push(ControllerEvent::State(state));
             events.push(ControllerEvent::Status(format!(
                 "Task was not submitted: {error}"
             )));
@@ -421,7 +789,18 @@ impl InteractiveExecution {
                             turn_id: None,
                         });
                     }
-                    let state = if is_uncertain_error(&error) && !thread_created {
+                    let journal_still_ambiguous =
+                        self.recovery_record.as_ref().is_some_and(|record| {
+                            record.recovery_required
+                                && matches!(
+                                    record.execution_phase,
+                                    RecoveryPhase::ThreadStartIntentRecorded
+                                        | RecoveryPhase::ThreadStartMayHaveBeenSent
+                                )
+                        });
+                    let state = if journal_still_ambiguous
+                        || (is_uncertain_error(&error) && !thread_created)
+                    {
                         ExecutionPhase::OutcomeUnknown
                     } else {
                         ExecutionPhase::Failed
@@ -434,6 +813,34 @@ impl InteractiveExecution {
             }
         }
 
+        if let Err(error) = self.arm_new_mutation(
+            MutationIntent::TurnStart,
+            RecoveryPhase::TurnStartIntentRecorded,
+        ) {
+            let state = if error == CodexAppError::UnacknowledgedExecutionRecovery {
+                ExecutionPhase::Failed
+            } else {
+                ExecutionPhase::OutcomeUnknown
+            };
+            if state == ExecutionPhase::OutcomeUnknown {
+                self.mark_unknown();
+            } else {
+                self.machine.transition(state)?;
+            }
+            events.push(ControllerEvent::State(state));
+            events.push(ControllerEvent::Status(error.to_string()));
+            return Ok(events);
+        }
+        if let Err(error) = self.persist_recovery_state(
+            MutationIntent::TurnStart,
+            RecoveryPhase::TurnStartMayHaveBeenSent,
+            true,
+        ) {
+            self.mark_unknown();
+            events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+            events.push(ControllerEvent::Status(error.to_string()));
+            return Ok(events);
+        }
         self.machine.transition(ExecutionPhase::TurnStarting)?;
         events.push(ControllerEvent::State(ExecutionPhase::TurnStarting));
         let thread_id = self
@@ -460,15 +867,23 @@ impl InteractiveExecution {
                     ))
                 });
                 let Some((turn_id, status)) = parsed_turn else {
-                    self.machine.transition(ExecutionPhase::OutcomeUnknown)?;
+                    self.mark_unknown();
                     events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                     events.push(ControllerEvent::Status("Codex accepted a turn request but returned no validated turn identity. Outcome unknown. Inspect the Codex session before submitting another task.".to_owned()));
                     return Ok(events);
                 };
                 if !self.seen_turn_ids.insert(turn_id.clone()) {
-                    self.machine.transition(ExecutionPhase::OutcomeUnknown)?;
+                    self.mark_unknown();
                     events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                     events.push(ControllerEvent::Status("Codex returned a reused turn ID; inspect the Codex session before submitting another task.".to_owned()));
+                    return Ok(events);
+                }
+                if let Err(error) = self.persist_turn_identity(turn_id.clone(), status) {
+                    self.mark_unknown();
+                    events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+                    events.push(ControllerEvent::Status(format!(
+                        "Codex may have accepted the turn, but its identity could not be durably recorded ({error}). Outcome unknown."
+                    )));
                     return Ok(events);
                 }
                 self.machine.set_turn(turn_id)?;
@@ -523,11 +938,20 @@ impl InteractiveExecution {
             }
             Err(error) => {
                 let state = if is_uncertain_error(&error) {
+                    self.mark_unknown();
                     ExecutionPhase::OutcomeUnknown
-                } else {
+                } else if self
+                    .persist_recovery_state(MutationIntent::TurnStart, RecoveryPhase::Failed, false)
+                    .is_ok()
+                {
                     ExecutionPhase::Failed
+                } else {
+                    self.mark_unknown();
+                    ExecutionPhase::OutcomeUnknown
                 };
-                self.machine.transition(state)?;
+                if state == ExecutionPhase::Failed {
+                    self.machine.transition(state)?;
+                }
                 events.push(ControllerEvent::State(state));
                 events.push(ControllerEvent::Status(
                     if state == ExecutionPhase::OutcomeUnknown {
@@ -557,7 +981,7 @@ impl InteractiveExecution {
             .as_mut()
             .ok_or(CodexAppError::StaleApprovalRequest)?
             .decision(request_id, choice)?;
-        self.transport.respond_server_request(id, response)?;
+        self.send_approval_response(id, response)?;
         if self
             .broker
             .as_ref()
@@ -584,19 +1008,51 @@ impl InteractiveExecution {
             .ok_or(CodexAppError::InvalidExecutionTransition)?
             .to_owned();
         self.machine.request_interrupt()?;
-        self.interrupt_sent = true;
         let mut events = vec![ControllerEvent::State(ExecutionPhase::InterruptRequested)];
-        if let Some(broker) = self.broker.as_mut() {
-            for (id, result) in broker.deny_all() {
-                let _ = self.transport.respond_server_request(id, result);
-            }
+        if let Err(error) = self.deny_pending_approvals() {
+            self.mark_unknown();
+            events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+            events.push(ControllerEvent::Status(format!(
+                "An outstanding approval could not be safely denied before interruption ({error}). Outcome unknown."
+            )));
+            return Ok(events);
         }
+        if let Err(error) = self.arm_new_mutation(
+            MutationIntent::TurnInterrupt,
+            RecoveryPhase::InterruptIntentRecorded,
+        ) {
+            self.mark_unknown();
+            events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+            events.push(ControllerEvent::Status(error.to_string()));
+            return Ok(events);
+        }
+        if let Err(error) = self.persist_recovery_state(
+            MutationIntent::TurnInterrupt,
+            RecoveryPhase::InterruptMayHaveBeenSent,
+            true,
+        ) {
+            self.mark_unknown();
+            events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+            events.push(ControllerEvent::Status(error.to_string()));
+            return Ok(events);
+        }
+        self.interrupt_sent = true;
         match call(
             &self.transport,
             "turn/interrupt",
             json!({"threadId":thread_id,"turnId":turn_id}),
         ) {
             Ok(_) => {
+                if let Err(error) = self.persist_recovery_state(
+                    MutationIntent::TurnInterrupt,
+                    RecoveryPhase::InterruptAcknowledged,
+                    true,
+                ) {
+                    self.mark_unknown();
+                    events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+                    events.push(ControllerEvent::Status(error.to_string()));
+                    return Ok(events);
+                }
                 events.push(ControllerEvent::Status("Codex acknowledged the interrupt request; waiting for authoritative turn completion.".to_owned()));
                 self.activity_line("Interrupt request acknowledged by Codex.");
                 events.push(ControllerEvent::Activity(
@@ -604,7 +1060,7 @@ impl InteractiveExecution {
                 ));
             }
             Err(error) => {
-                self.machine.transition(ExecutionPhase::OutcomeUnknown)?;
+                self.mark_unknown();
                 events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                 events.push(ControllerEvent::Status("Outcome unknown after interrupt request. Reconcile the Codex session before submitting another task.".to_owned()));
                 if is_uncertain_error(&error) {
@@ -639,7 +1095,7 @@ impl InteractiveExecution {
         }
         events.push(ControllerEvent::State(ExecutionPhase::Reconciling));
         let Some(thread_id) = self.machine.thread_id().map(str::to_owned) else {
-            let _ = self.machine.transition(ExecutionPhase::OutcomeUnknown);
+            self.mark_unknown();
             events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
             events.push(ControllerEvent::Status(
                 "Outcome unknown. Inspect the Codex session before submitting another task."
@@ -648,7 +1104,7 @@ impl InteractiveExecution {
             return events;
         };
         let Some(turn_id) = self.machine.turn_id().map(str::to_owned) else {
-            let _ = self.machine.transition(ExecutionPhase::OutcomeUnknown);
+            self.mark_unknown();
             events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
             events.push(ControllerEvent::Status("Codex returned no turn identity. Outcome unknown. Inspect the Codex session before submitting another task.".to_owned()));
             return events;
@@ -657,7 +1113,13 @@ impl InteractiveExecution {
             Ok(Some(
                 status @ (TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted),
             )) => {
-                if self.machine.finish(status).is_ok() {
+                if let Err(error) = self.persist_authoritative_status(status) {
+                    self.mark_unknown();
+                    events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+                    events.push(ControllerEvent::Status(format!(
+                        "Codex returned a terminal turn state, but it could not be durably recorded ({error}). Outcome unknown."
+                    )));
+                } else if self.machine.finish(status).is_ok() {
                     events.push(ControllerEvent::State(self.machine.phase()));
                     events.push(ControllerEvent::Status(
                         "Codex turn state reconciled from the authoritative turn list.".to_owned(),
@@ -665,7 +1127,11 @@ impl InteractiveExecution {
                 }
             }
             Ok(Some(TurnStatus::InProgress)) => {
-                if self.machine.transition(ExecutionPhase::Running).is_ok() {
+                if let Err(error) = self.persist_authoritative_status(TurnStatus::InProgress) {
+                    self.mark_unknown();
+                    events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+                    events.push(ControllerEvent::Status(error.to_string()));
+                } else if self.machine.transition(ExecutionPhase::Running).is_ok() {
                     events.push(ControllerEvent::State(ExecutionPhase::Running));
                     events.push(ControllerEvent::Status(
                         "Codex reports the known turn is still running.".to_owned(),
@@ -673,7 +1139,7 @@ impl InteractiveExecution {
                 }
             }
             Ok(None) => {
-                let _ = self.machine.transition(ExecutionPhase::OutcomeUnknown);
+                self.mark_unknown();
                 events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                 events.push(ControllerEvent::Status(
                     "Outcome unknown. Inspect the Codex session before submitting another task."
@@ -681,7 +1147,7 @@ impl InteractiveExecution {
                 ));
             }
             Err(error) => {
-                let _ = self.machine.transition(ExecutionPhase::OutcomeUnknown);
+                self.mark_unknown();
                 events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                 events.push(ControllerEvent::Status(format!(
                     "Codex could not authoritatively reconcile this turn ({error}). Outcome unknown. Inspect the Codex session before submitting another task."
@@ -696,11 +1162,7 @@ impl InteractiveExecution {
     pub fn drain_events(&mut self) -> Vec<ControllerEvent> {
         let mut events = Vec::new();
         if self.transport.critical_event_loss() {
-            if let Some(broker) = self.broker.as_mut() {
-                for (id, response) in broker.deny_all() {
-                    let _ = self.transport.respond_server_request(id, response);
-                }
-            }
+            let _ = self.deny_pending_approvals();
             if !self.machine.phase().terminal()
                 && self.machine.phase() != ExecutionPhase::OutcomeUnknown
                 && self
@@ -708,6 +1170,14 @@ impl InteractiveExecution {
                     .transition(ExecutionPhase::OutcomeUnknown)
                     .is_ok()
             {
+                self.persist_recovery_state(
+                    self.recovery_record
+                        .as_ref()
+                        .map_or(MutationIntent::None, |record| record.mutation_intent),
+                    RecoveryPhase::OutcomeUnknown,
+                    true,
+                )
+                .ok();
                 events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                 events.push(ControllerEvent::Status("A critical Codex lifecycle or approval event could not be preserved. Outcome unknown. Inspect the Codex session before submitting another task.".to_owned()));
             }
@@ -730,11 +1200,11 @@ impl InteractiveExecution {
                             }
                             _ => json!({}),
                         };
-                        let _ = self.transport.respond_server_request(id, result);
+                        let _ = self.send_approval_response(id, result);
                         continue;
                     }
                     let Some(thread_id) = self.machine.thread_id() else {
-                        let _ = self.transport.reject_server_request(
+                        let _ = self.reject_server_request(
                             id,
                             -32602,
                             "Codex Meter has no validated thread for this approval",
@@ -743,7 +1213,7 @@ impl InteractiveExecution {
                         continue;
                     };
                     let Some(turn_id) = self.machine.turn_id() else {
-                        let _ = self.transport.reject_server_request(
+                        let _ = self.reject_server_request(
                             id,
                             -32602,
                             "Codex Meter has no validated turn for this approval",
@@ -768,7 +1238,7 @@ impl InteractiveExecution {
                             events.push(ControllerEvent::Approval(view));
                         }
                         Err(_) => {
-                            let _ = self.transport.reject_server_request(
+                            let _ = self.reject_server_request(
                                 id,
                                 -32602,
                                 "Codex Meter rejected an invalid or out-of-scope approval request",
@@ -778,11 +1248,8 @@ impl InteractiveExecution {
                                 ExecutionPhase::Running
                                     | ExecutionPhase::SubmissionAccepted
                                     | ExecutionPhase::AwaitingApproval
-                            ) && self
-                                .machine
-                                .transition(ExecutionPhase::OutcomeUnknown)
-                                .is_ok()
-                            {
+                            ) {
+                                self.mark_unknown();
                                 events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                                 events.push(ControllerEvent::Status("An approval request could not be validated. Outcome unknown. Inspect the Codex session before submitting another task.".to_owned()));
                             }
@@ -800,6 +1267,14 @@ impl InteractiveExecution {
                                 .transition(ExecutionPhase::OutcomeUnknown)
                                 .is_ok()
                         {
+                            self.persist_recovery_state(
+                                self.recovery_record
+                                    .as_ref()
+                                    .map_or(MutationIntent::None, |record| record.mutation_intent),
+                                RecoveryPhase::OutcomeUnknown,
+                                true,
+                            )
+                            .ok();
                             events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                             events.push(ControllerEvent::Status("A Codex execution event did not match the validated protocol shape. Outcome unknown. Inspect the Codex session before submitting another task.".to_owned()));
                         }
@@ -830,11 +1305,17 @@ impl InteractiveExecution {
                 _ => None,
             };
             if next.is_some_and(|next| self.machine.transition(next).is_ok()) {
-                if let Some(broker) = self.broker.as_mut() {
-                    for (id, response) in broker.deny_all() {
-                        let _ = self.transport.respond_server_request(id, response);
-                    }
+                if self.machine.phase() == ExecutionPhase::OutcomeUnknown {
+                    self.persist_recovery_state(
+                        self.recovery_record
+                            .as_ref()
+                            .map_or(MutationIntent::None, |record| record.mutation_intent),
+                        RecoveryPhase::OutcomeUnknown,
+                        true,
+                    )
+                    .ok();
                 }
+                let _ = self.deny_pending_approvals();
                 let next = self.machine.phase();
                 events.push(ControllerEvent::State(next));
                 if next == ExecutionPhase::OutcomeUnknown {
@@ -875,9 +1356,8 @@ impl InteractiveExecution {
                     return;
                 }
                 if self.machine.phase() == ExecutionPhase::SubmissionAccepted
-                    && self.machine.transition(ExecutionPhase::Running).is_ok()
+                    && self.enter_running(events)
                 {
-                    events.push(ControllerEvent::State(ExecutionPhase::Running));
                     self.activity_line("Codex turn started.");
                     events.push(ControllerEvent::Activity("Codex turn started.".to_owned()));
                 }
@@ -899,12 +1379,28 @@ impl InteractiveExecution {
                             .transition(ExecutionPhase::OutcomeUnknown)
                             .is_ok()
                     {
+                        self.persist_recovery_state(
+                            self.recovery_record
+                                .as_ref()
+                                .map_or(MutationIntent::None, |record| record.mutation_intent),
+                            RecoveryPhase::OutcomeUnknown,
+                            true,
+                        )
+                        .ok();
                         events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
                         events.push(ControllerEvent::Status(
                             "Codex sent a nonterminal turn completion event. Outcome unknown."
                                 .to_owned(),
                         ));
                     }
+                    return;
+                }
+                if let Err(error) = self.persist_authoritative_status(status) {
+                    self.mark_unknown();
+                    events.push(ControllerEvent::State(ExecutionPhase::OutcomeUnknown));
+                    events.push(ControllerEvent::Status(format!(
+                        "Codex reported a terminal turn state, but it could not be durably recorded ({error}). Outcome unknown."
+                    )));
                     return;
                 }
                 if self.machine.phase() == ExecutionPhase::OutcomeUnknown
@@ -921,13 +1417,7 @@ impl InteractiveExecution {
                         append_bounded(&mut self.output, &output, MAX_RENDERED_OUTPUT_BYTES);
                         self.output_changed = true;
                     }
-                    for (id, response) in self
-                        .broker
-                        .as_mut()
-                        .map_or_else(Vec::new, ApprovalBroker::deny_all)
-                    {
-                        let _ = self.transport.respond_server_request(id, response);
-                    }
+                    let _ = self.deny_pending_approvals();
                     events.push(ControllerEvent::State(self.machine.phase()));
                     let status_line = match status {
                         TurnStatus::Completed => "Codex reported the turn completed.",
@@ -952,10 +1442,8 @@ impl InteractiveExecution {
                 if !self.machine.matches_active(&thread_id, Some(&turn_id)) {
                     return;
                 }
-                if self.machine.phase() == ExecutionPhase::SubmissionAccepted
-                    && self.machine.transition(ExecutionPhase::Running).is_ok()
-                {
-                    events.push(ControllerEvent::State(ExecutionPhase::Running));
+                if self.machine.phase() == ExecutionPhase::SubmissionAccepted {
+                    self.enter_running(events);
                 }
                 self.activity_line(&format!("Codex started {item}."));
                 events.push(ControllerEvent::Activity(format!("Codex started {item}.")));
@@ -1107,6 +1595,15 @@ impl InteractiveExecution {
         if let Some(model) = &self.model_for_turn {
             params["model"] = Value::String(model.clone());
         }
+        self.arm_new_mutation(
+            MutationIntent::ThreadStart,
+            RecoveryPhase::ThreadStartIntentRecorded,
+        )?;
+        self.persist_recovery_state(
+            MutationIntent::ThreadStart,
+            RecoveryPhase::ThreadStartMayHaveBeenSent,
+            true,
+        )?;
         let response = call(&self.transport, "thread/start", params)?;
         let thread = response
             .get("thread")
@@ -1114,6 +1611,7 @@ impl InteractiveExecution {
         let id = required_string(thread, "id", 128)?.to_owned();
         validate_thread_id(&id)?;
         self.machine.set_thread(id.clone())?;
+        self.persist_thread_identity(id.clone())?;
         let actual = VerifiedSecurity::from_thread_response(&response)?;
         if Some(actual) != self.security {
             return Err(CodexAppError::UnsafeExecutionConfiguration);
@@ -1208,11 +1706,12 @@ impl InteractiveExecution {
                     .preflight
                     .thread_id
                     .as_deref()
-                    .ok_or(CodexAppError::UnknownThread)?;
+                    .ok_or(CodexAppError::UnknownThread)?
+                    .to_owned();
                 let response = call(
                     &self.transport,
                     "thread/read",
-                    json!({"threadId":thread_id,"includeTurns":false}),
+                    json!({"threadId":thread_id.as_str(),"includeTurns":false}),
                 )?;
                 let thread = response
                     .get("thread")
@@ -1221,17 +1720,55 @@ impl InteractiveExecution {
                     return Err(CodexAppError::UnknownThread);
                 }
                 ensure_thread_idle(thread)?;
+                self.arm_new_mutation(
+                    MutationIntent::ThreadResume,
+                    RecoveryPhase::ThreadResumeIntentRecorded,
+                )?;
+                self.persist_recovery_state(
+                    MutationIntent::ThreadResume,
+                    RecoveryPhase::ThreadResumeMayHaveBeenSent,
+                    true,
+                )?;
                 let resumed = call(
                     &self.transport,
                     "thread/resume",
-                    json!({"threadId":thread_id,"excludeTurns":true}),
-                )?;
-                let resumed_thread = resumed
-                    .get("thread")
-                    .ok_or(CodexAppError::ProtocolVersionMismatch)?;
-                if required_string(resumed_thread, "id", 128)? != thread_id {
+                    json!({"threadId":thread_id.as_str(),"excludeTurns":true}),
+                );
+                let resumed = match resumed {
+                    Ok(response) => response,
+                    Err(error) => {
+                        if is_uncertain_error(&error) {
+                            self.mark_unknown();
+                        } else {
+                            self.persist_recovery_state(
+                                MutationIntent::ThreadResume,
+                                RecoveryPhase::ThreadIdentityKnown,
+                                false,
+                            )?;
+                        }
+                        return Err(error);
+                    }
+                };
+                let Some(resumed_thread) = resumed.get("thread") else {
+                    self.mark_unknown();
+                    return Err(CodexAppError::ProtocolVersionMismatch);
+                };
+                let resumed_id = match required_string(resumed_thread, "id", 128) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        self.mark_unknown();
+                        return Err(error);
+                    }
+                };
+                if resumed_id != thread_id {
+                    self.mark_unknown();
                     return Err(CodexAppError::UnknownThread);
                 }
+                self.persist_recovery_state(
+                    MutationIntent::ThreadResume,
+                    RecoveryPhase::ThreadIdentityKnown,
+                    false,
+                )?;
                 ensure_thread_idle(resumed_thread)?;
                 let actual_security = VerifiedSecurity::from_thread_response(&resumed)?;
                 let current_model = optional_config_value(resumed_thread.get("model"), 1024)?;
@@ -1257,7 +1794,7 @@ impl InteractiveExecution {
                         &self.task,
                         &self.model_catalog,
                         PreflightContext {
-                            thread_id: Some(thread_id),
+                            thread_id: Some(&thread_id),
                             workspace: self.original_thread_cwd.as_deref(),
                             observed_model: self
                                 .model_for_turn
@@ -1291,12 +1828,12 @@ impl InteractiveExecution {
         let transport = self.transport.reconnect()?;
         let info = initialize(&transport)?;
         verify_execution_runtime(&info)?;
-        let resumed = call(
+        let response = call(
             &transport,
-            "thread/resume",
-            json!({"threadId":thread_id,"excludeTurns":true}),
+            "thread/read",
+            json!({"threadId":thread_id,"includeTurns":false}),
         )?;
-        let thread = resumed
+        let thread = response
             .get("thread")
             .ok_or(CodexAppError::ProtocolVersionMismatch)?;
         if required_string(thread, "id", 128)? != thread_id {
@@ -1307,10 +1844,6 @@ impl InteractiveExecution {
             .and_then(|status| status.get("type"))
             .and_then(Value::as_str);
         if !matches!(status, Some("active" | "idle" | "notLoaded")) {
-            return Err(CodexAppError::UnsafeExecutionConfiguration);
-        }
-        let security = VerifiedSecurity::from_thread_response(&resumed)?;
-        if Some(security) != self.security {
             return Err(CodexAppError::UnsafeExecutionConfiguration);
         }
         let mut params = json!({"threadId":thread_id,"limit":TURN_PAGE_SIZE,"itemsView":"notLoaded","sortDirection":"desc"});
@@ -1666,6 +2199,304 @@ fn verify_execution_runtime(info: &AppServerInfo) -> Result<(), CodexAppError> {
     }
 }
 
+/// Explicit, read-only reconciliation for a journal record after restart.
+/// It matches only the exact durable thread and turn IDs and never resumes a
+/// thread or submits a replacement turn.
+pub fn reconcile_recovery_record(
+    journal: &RecoveryJournal,
+    execution_id: &str,
+) -> Result<RecoveryOutcome, RecoveryJournalError> {
+    let mut record = journal.get(execution_id)?;
+    if !record.recovery_required {
+        return Ok(match record.last_authoritative_status {
+            Some(AuthoritativeStatus::Completed) => RecoveryOutcome::RecoveredCompleted,
+            Some(AuthoritativeStatus::Failed) => RecoveryOutcome::RecoveredFailed,
+            Some(AuthoritativeStatus::Interrupted) => RecoveryOutcome::RecoveredInterrupted,
+            Some(AuthoritativeStatus::InProgress) => RecoveryOutcome::StillRunning,
+            None => RecoveryOutcome::OutcomeUnknown,
+        });
+    }
+    let (Some(thread_id), Some(turn_id)) =
+        (record.known_thread_id.clone(), record.known_turn_id.clone())
+    else {
+        record.execution_phase = RecoveryPhase::OutcomeUnknown;
+        record.recovery_required = true;
+        let _ = journal.update(&record)?;
+        return Ok(RecoveryOutcome::OutcomeUnknown);
+    };
+
+    let client = match CodexAppServer::connect() {
+        Ok(client) => client,
+        Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+    };
+    if verify_execution_runtime(client.info()).is_err() {
+        return Ok(RecoveryOutcome::RecoveryUnavailable);
+    }
+    let thread_response = match client.call(
+        "thread/read",
+        json!({"threadId":thread_id,"includeTurns":false}),
+    ) {
+        Ok(response) => response,
+        Err(CodexAppError::UnknownThread) => {
+            record.execution_phase = RecoveryPhase::OutcomeUnknown;
+            record.recovery_required = true;
+            let _ = journal.update(&record)?;
+            return Ok(RecoveryOutcome::OutcomeUnknown);
+        }
+        Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+    };
+    let thread = thread_response
+        .get("thread")
+        .ok_or(RecoveryJournalError::CorruptJournal)?;
+    if required_string(thread, "id", 128).ok() != Some(thread_id.as_str()) {
+        record.execution_phase = RecoveryPhase::OutcomeUnknown;
+        record.recovery_required = true;
+        let _ = journal.update(&record)?;
+        return Ok(RecoveryOutcome::OutcomeUnknown);
+    }
+    let status = thread
+        .get("status")
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str);
+    if !matches!(status, Some("active" | "idle" | "notLoaded")) {
+        return Ok(RecoveryOutcome::RecoveryUnavailable);
+    }
+
+    let mut params = json!({
+        "threadId":thread_id.as_str(),
+        "limit":TURN_PAGE_SIZE,
+        "itemsView":"notLoaded",
+        "sortDirection":"desc"
+    });
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut matched = None;
+    for _ in 0..MAX_RECONCILIATION_PAGES {
+        if let Some(cursor_value) = cursor.as_ref() {
+            params["cursor"] = Value::String(cursor_value.clone());
+        } else {
+            params
+                .as_object_mut()
+                .expect("object created above")
+                .remove("cursor");
+        }
+        let response = match client.call("thread/turns/list", params.clone()) {
+            Ok(response) => response,
+            Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+        };
+        let Some(object) = response.as_object() else {
+            return Ok(RecoveryOutcome::RecoveryUnavailable);
+        };
+        let Some(turns) = object.get("data").and_then(Value::as_array) else {
+            return Ok(RecoveryOutcome::RecoveryUnavailable);
+        };
+        if turns.len() > TURN_PAGE_SIZE as usize {
+            return Ok(RecoveryOutcome::RecoveryUnavailable);
+        }
+        for turn in turns {
+            if turn.get("id").and_then(Value::as_str) == Some(turn_id.as_str()) {
+                matched = turn
+                    .get("status")
+                    .and_then(|value| TurnStatus::parse(value).ok());
+                if matched.is_none() {
+                    return Ok(RecoveryOutcome::RecoveryUnavailable);
+                }
+                break;
+            }
+        }
+        if matched.is_some() {
+            break;
+        }
+        cursor = match object.get("nextCursor") {
+            None | Some(Value::Null) => None,
+            Some(value) => match value.as_str() {
+                Some(value) if !value.is_empty() && value.len() <= 4096 => Some(value.to_owned()),
+                _ => return Ok(RecoveryOutcome::RecoveryUnavailable),
+            },
+        };
+        let Some(cursor_value) = cursor.as_ref() else {
+            break;
+        };
+        if !seen_cursors.insert(cursor_value.clone()) {
+            return Ok(RecoveryOutcome::RecoveryUnavailable);
+        }
+    }
+
+    let Some(status) = matched else {
+        record.execution_phase = RecoveryPhase::OutcomeUnknown;
+        record.recovery_required = true;
+        let _ = journal.update(&record)?;
+        return Ok(RecoveryOutcome::OutcomeUnknown);
+    };
+    record.last_authoritative_status = Some(authoritative_status(status));
+    record.execution_phase = recovery_phase(status);
+    record.recovery_required = status == TurnStatus::InProgress;
+    let _ = journal.update(&record)?;
+    Ok(match status {
+        TurnStatus::InProgress => RecoveryOutcome::StillRunning,
+        TurnStatus::Completed => RecoveryOutcome::RecoveredCompleted,
+        TurnStatus::Failed => RecoveryOutcome::RecoveredFailed,
+        TurnStatus::Interrupted => RecoveryOutcome::RecoveredInterrupted,
+    })
+}
+
+/// Sends an interrupt only after an explicit user action and a fresh,
+/// read-only check confirms that the exact durable turn is still running.
+pub fn interrupt_recovery_record(
+    journal: &RecoveryJournal,
+    execution_id: &str,
+) -> Result<RecoveryOutcome, RecoveryJournalError> {
+    let mut record = journal.get(execution_id)?;
+    let (Some(thread_id), Some(turn_id)) =
+        (record.known_thread_id.clone(), record.known_turn_id.clone())
+    else {
+        return Ok(RecoveryOutcome::OutcomeUnknown);
+    };
+    let transport = match ProcessTransport::spawn(
+        OsStr::new("codex"),
+        &[OsStr::new("app-server")],
+        ClientCapability::InteractiveExecution,
+    ) {
+        Ok(transport) => transport,
+        Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+    };
+    let info = match initialize(&transport) {
+        Ok(info) => info,
+        Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+    };
+    if verify_execution_runtime(&info).is_err() {
+        return Ok(RecoveryOutcome::RecoveryUnavailable);
+    }
+    let current = match recovery_turn_status(&transport, &thread_id, &turn_id) {
+        Ok(Some(status)) => status,
+        Ok(None) | Err(CodexAppError::UnknownThread) => {
+            record.execution_phase = RecoveryPhase::OutcomeUnknown;
+            record.recovery_required = true;
+            let _ = journal.update(&record)?;
+            return Ok(RecoveryOutcome::OutcomeUnknown);
+        }
+        Err(_) => return Ok(RecoveryOutcome::RecoveryUnavailable),
+    };
+    if current != TurnStatus::InProgress {
+        record.last_authoritative_status = Some(authoritative_status(current));
+        record.execution_phase = recovery_phase(current);
+        record.recovery_required = false;
+        let _ = journal.update(&record)?;
+        return Ok(match current {
+            TurnStatus::Completed => RecoveryOutcome::RecoveredCompleted,
+            TurnStatus::Failed => RecoveryOutcome::RecoveredFailed,
+            TurnStatus::Interrupted => RecoveryOutcome::RecoveredInterrupted,
+            TurnStatus::InProgress => unreachable!(),
+        });
+    }
+
+    record.last_authoritative_status = Some(AuthoritativeStatus::InProgress);
+    record.mutation_intent = MutationIntent::TurnInterrupt;
+    record.execution_phase = RecoveryPhase::InterruptIntentRecorded;
+    record.recovery_required = true;
+    record = journal.update_for_new_mutation(&record)?;
+    record.execution_phase = RecoveryPhase::InterruptMayHaveBeenSent;
+    record = journal.update(&record)?;
+    match call(
+        &transport,
+        "turn/interrupt",
+        json!({"threadId":thread_id.as_str(),"turnId":turn_id.as_str()}),
+    ) {
+        Ok(_) => {
+            record.execution_phase = RecoveryPhase::InterruptAcknowledged;
+            if journal.update(&record).is_err() {
+                return Ok(RecoveryOutcome::OutcomeUnknown);
+            }
+            Ok(RecoveryOutcome::InterruptAcknowledged)
+        }
+        Err(error) if is_uncertain_error(&error) => Ok(RecoveryOutcome::OutcomeUnknown),
+        Err(_) => {
+            record.execution_phase = RecoveryPhase::Running;
+            record.last_authoritative_status = Some(AuthoritativeStatus::InProgress);
+            record.recovery_required = true;
+            if journal.update(&record).is_err() {
+                Ok(RecoveryOutcome::OutcomeUnknown)
+            } else {
+                Ok(RecoveryOutcome::StillRunning)
+            }
+        }
+    }
+}
+
+fn recovery_turn_status(
+    transport: &ProcessTransport,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<Option<TurnStatus>, CodexAppError> {
+    let response = call(
+        transport,
+        "thread/read",
+        json!({"threadId":thread_id,"includeTurns":false}),
+    )?;
+    let thread = response
+        .get("thread")
+        .ok_or(CodexAppError::ProtocolVersionMismatch)?;
+    if required_string(thread, "id", 128)? != thread_id {
+        return Err(CodexAppError::UnknownThread);
+    }
+    let thread_status = thread
+        .get("status")
+        .and_then(|status| status.get("type"))
+        .and_then(Value::as_str);
+    if !matches!(thread_status, Some("active" | "idle" | "notLoaded")) {
+        return Err(CodexAppError::ProtocolVersionMismatch);
+    }
+    let mut params = json!({
+        "threadId":thread_id,
+        "limit":TURN_PAGE_SIZE,
+        "itemsView":"notLoaded",
+        "sortDirection":"desc"
+    });
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
+    for _ in 0..MAX_RECONCILIATION_PAGES {
+        if let Some(value) = cursor.as_ref() {
+            params["cursor"] = Value::String(value.clone());
+        } else if let Some(object) = params.as_object_mut() {
+            object.remove("cursor");
+        }
+        let response = call(transport, "thread/turns/list", params.clone())?;
+        let object = response
+            .as_object()
+            .ok_or(CodexAppError::ProtocolVersionMismatch)?;
+        let turns = object
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or(CodexAppError::ProtocolVersionMismatch)?;
+        if turns.len() > TURN_PAGE_SIZE as usize {
+            return Err(CodexAppError::ProtocolVersionMismatch);
+        }
+        for turn in turns {
+            if turn.get("id").and_then(Value::as_str) == Some(turn_id) {
+                return TurnStatus::parse(
+                    turn.get("status")
+                        .ok_or(CodexAppError::ProtocolVersionMismatch)?,
+                )
+                .map(Some);
+            }
+        }
+        cursor = match object.get("nextCursor") {
+            None | Some(Value::Null) => None,
+            Some(value) => value
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 4096)
+                .map(str::to_owned),
+        };
+        let Some(value) = cursor.as_ref() else {
+            return Ok(None);
+        };
+        if !seen.insert(value.clone()) {
+            return Err(CodexAppError::ProtocolVersionMismatch);
+        }
+    }
+    Ok(None)
+}
+
 fn call(
     transport: &ProcessTransport,
     method: &'static str,
@@ -1725,6 +2556,34 @@ fn is_uncertain_error(error: &CodexAppError) -> bool {
             | CodexAppError::CriticalEventLoss
             | CodexAppError::MalformedResponse
     )
+}
+
+fn map_recovery_error(error: RecoveryJournalError) -> CodexAppError {
+    match error {
+        RecoveryJournalError::UnacknowledgedRecovery => {
+            CodexAppError::UnacknowledgedExecutionRecovery
+        }
+        RecoveryJournalError::ConcurrentUpdate => CodexAppError::ExecutionRecoveryConflict,
+        _ => CodexAppError::ExecutionRecoveryUnavailable,
+    }
+}
+
+fn authoritative_status(status: TurnStatus) -> AuthoritativeStatus {
+    match status {
+        TurnStatus::InProgress => AuthoritativeStatus::InProgress,
+        TurnStatus::Completed => AuthoritativeStatus::Completed,
+        TurnStatus::Failed => AuthoritativeStatus::Failed,
+        TurnStatus::Interrupted => AuthoritativeStatus::Interrupted,
+    }
+}
+
+fn recovery_phase(status: TurnStatus) -> RecoveryPhase {
+    match status {
+        TurnStatus::InProgress => RecoveryPhase::Running,
+        TurnStatus::Completed => RecoveryPhase::Completed,
+        TurnStatus::Failed => RecoveryPhase::Failed,
+        TurnStatus::Interrupted => RecoveryPhase::Interrupted,
+    }
 }
 
 #[cfg(test)]

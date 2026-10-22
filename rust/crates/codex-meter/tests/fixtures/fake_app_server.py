@@ -160,15 +160,22 @@ while True:
     elif mode.startswith("execution_") and method == "thread/read":
         thread_read_count += 1
         params = message.get("params", {})
-        if params != {"threadId": "thread-existing", "includeTurns": False}:
-            raise SystemExit(42)
-        status = "active" if mode == "execution_active_thread" else "idle"
-        send({"id": message["id"], "result": {"thread": {
-            "id": "thread-existing",
-            "cwd": execution_workspace,
-            "model": "changed-model" if mode == "execution_existing_model_changed" and thread_read_count >= 2 else "fixture-model",
-            "status": {"type": status},
-        }}})
+        if mode == "execution_reconcile":
+            if params != {"threadId": "thread-created", "includeTurns": False}:
+                raise SystemExit(42)
+            send({"id": message["id"], "result": {"thread": {
+                "id": "thread-created", "cwd": execution_workspace, "model": "fixture-model", "status": {"type": "idle"},
+            }}})
+        else:
+            if params != {"threadId": "thread-existing", "includeTurns": False}:
+                raise SystemExit(42)
+            status = "active" if mode == "execution_active_thread" else "idle"
+            send({"id": message["id"], "result": {"thread": {
+                "id": "thread-existing",
+                "cwd": execution_workspace,
+                "model": "changed-model" if mode == "execution_existing_model_changed" and thread_read_count >= 2 else "fixture-model",
+                "status": {"type": status},
+            }}})
     elif mode.startswith("execution_") and method == "thread/resume":
         params = message.get("params", {})
         expected_thread_id = "thread-created" if mode == "execution_reconcile" else "thread-existing"

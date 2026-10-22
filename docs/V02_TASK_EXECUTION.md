@@ -96,21 +96,25 @@ interrupted. Pending approvals are denied when an interrupt begins. The App Serv
 not killed as the normal interrupt mechanism.
 
 If a request times out after it may have been accepted, the task becomes **Outcome unknown**. The
-controller never retries `turn/start` or creates a replacement thread automatically. Press `r` to
-reconnect and inspect the known turn through Codex's thread/turn APIs. An unknown outcome remains
-unknown if Codex cannot return an authoritative record. The UI says to inspect the Codex session
-before submitting another task.
+controller never retries `thread/start`, `thread/resume`, `turn/start`, approval responses, or
+`turn/interrupt` automatically. In the execution view, press `r` to reconnect and inspect the exact
+known turn through Codex's thread/turn APIs. After restart, review the recovery view and explicitly
+press `r` to reconcile. A known thread with an unknown turn, an unknown thread, an unsupported
+runtime, or missing authoritative server evidence stays unknown; Codex Meter does not infer
+identity from time, prompt text, workspace, or thread position.
 
-P036 does not persist an execution journal. Thread IDs, turn IDs, lifecycle state, prompt, output,
-and approval details are transient in memory; prompts and transcripts are not written to the
-telemetry SQLite database or saved-draft store. After an abrupt application crash, Codex Meter
-cannot recover which submission was in progress. Inspect the Codex session in Codex before
-manually deciding whether to submit another task. Startup discovery of an interrupted execution
-and a private, identifier-only recovery journal remain limitations for a later milestone.
+P037 persists only an opaque execution ID, target origin, known thread/turn IDs, mutation intent,
+phase, user acknowledgement, last authoritative status, revision, and timestamps in a separate
+private journal. It does not persist prompts, transcripts, responses, reasoning, tool output,
+command bodies, approval contents, diffs, credentials, or workspace paths. An acknowledgement
+records that the user reviewed a warning; it does not mark the task complete or clear uncertainty.
+Outstanding unacknowledged recovery blocks a new task until the user reviews it. See the
+[recovery guide](V02_EXECUTION_RECOVERY.md) for storage, crash states, and failure handling.
 
 The exit dialog explains that closing the terminal does not necessarily stop a server-side turn.
 Safe detachment is unavailable; the user can continue watching or request interruption and wait for
-the final state. Terminal cleanup restores raw mode and screen state on errors and normal exit.
+the final state. Normal exits and handled errors restore raw mode and screen state. SIGKILL bypasses
+cleanup; if the shell remains in raw mode, use `reset` or `stty sane`.
 
 ## Quota and telemetry
 
@@ -137,19 +141,25 @@ movement remain distinct measurements.
 | `r` in unknown state | Reconcile against Codex |
 | `Enter` / `Esc` after a terminal state | Return to dashboard |
 | `q` / `c` during a running task | Review exit/interruption choices |
+| `F6` or recovery banner | Open unresolved execution recovery |
+| `r` / `a` / `i` in recovery | Reconcile / acknowledge warning / explicitly request an interrupt for a freshly verified running turn |
 
 The prompt editor consumes typing and paste as prompt content; its controls cannot submit a turn.
 
 ## Known limits and validation
 
-App Server behavior can change independently of its generated schemas. The Arch reference desktop
-was unavailable during P036, so its installed Codex version, live model catalog, security
-configuration, and terminal behavior remain unverified. No paid task was submitted for validation.
-Controlled fake-server tests exercise request ordering and terminal/approval scenarios, but they
-do not replace live-device evidence. See [PROMPT036_MANIFEST.md](PROMPT036_MANIFEST.md) for the
-validation record and PR status.
+App Server behavior can change independently of its generated schemas. Only `0.163.0` is enabled;
+the prior stable `0.162.1` was compared at the schema level but lacks runtime fake-server and
+read-only validation, so it remains unsupported. The Arch reference desktop was unavailable during
+P037, so its installed Codex version, live model catalog, security configuration, and terminal
+behavior remain unverified. No paid task was submitted for validation. Controlled fake-server and
+PTY tests do not replace live-device evidence. See the [compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md) and [P037 manifest](PROMPT037_MANIFEST.md) for the gate record.
 
-P037 should add a private versioned crash-recovery journal containing only execution identifiers,
-state, and timestamps, plus startup reconciliation and tests. It should not persist prompt text,
-transcripts, output, reasoning, tool arguments, credentials, or workspace paths. P037 should also
-complete the Arch-device compatibility gate before any merge approval.
+The Unix journal backend is implemented for Linux and macOS semantics. Windows execution fails
+closed until ACL-backed private storage and replacement behavior are implemented and validated.
+Windows ConPTY remains unverified. Native macOS x86_64 and ARM64 CI passed the journal and PTY
+scenarios; those tests have not run in the local Linux implementation environment.
+
+P038 should complete Windows journal/terminal support and the reference Arch read-only gate, then
+consider additional runtime audits. Do not infer task-token attribution or quota forecasting from
+execution records.

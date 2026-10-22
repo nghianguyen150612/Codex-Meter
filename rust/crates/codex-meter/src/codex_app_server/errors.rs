@@ -35,6 +35,9 @@ pub enum CodexAppError {
     UnsupportedReasoningEffort,
     ActiveThreadConflict,
     ExecutionPreflightChanged,
+    ExecutionRecoveryUnavailable,
+    UnacknowledgedExecutionRecovery,
+    ExecutionRecoveryConflict,
     UnknownThread,
     RemoteRequestRejected {
         method: &'static str,
@@ -74,6 +77,9 @@ impl CodexAppError {
             Self::UnsupportedReasoningEffort => "unsupported_reasoning_effort",
             Self::ActiveThreadConflict => "active_thread_conflict",
             Self::ExecutionPreflightChanged => "execution_preflight_changed",
+            Self::ExecutionRecoveryUnavailable => "execution_recovery_unavailable",
+            Self::UnacknowledgedExecutionRecovery => "unacknowledged_execution_recovery",
+            Self::ExecutionRecoveryConflict => "execution_recovery_conflict",
             Self::UnknownThread => "unknown_thread",
             Self::RemoteRequestRejected { .. } => "app_server_request_rejected",
         }
@@ -181,6 +187,18 @@ impl fmt::Display for CodexAppError {
                     "execution settings changed; review a fresh preflight before submitting"
                 )
             }
+            Self::ExecutionRecoveryUnavailable => write!(
+                f,
+                "the private execution recovery journal could not be safely read or durably updated; no new mutation was sent"
+            ),
+            Self::UnacknowledgedExecutionRecovery => write!(
+                f,
+                "review and acknowledge unresolved execution recovery before submitting another task"
+            ),
+            Self::ExecutionRecoveryConflict => write!(
+                f,
+                "the execution recovery record changed in another Codex Meter process; refresh and review it"
+            ),
             Self::UnknownThread => write!(f, "the requested thread is unavailable"),
             Self::RemoteRequestRejected { method, code } => {
                 if let Some(code) = code {

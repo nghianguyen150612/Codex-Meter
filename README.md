@@ -46,19 +46,20 @@ state; fork copies conversation history and requires confirmation. These command
 in the published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
 
-The unreleased P034–P036 development branch adds `codex-meter tui` and `codex-meter compose`. The
+The unreleased P034–P037 development branch adds `codex-meter tui` and `codex-meter compose`. The
 Ratatui dashboard shows local usage evidence, quota snapshots, App Server sessions, projects,
 models, and history. Composer adds multiline task preparation, live model and reasoning selection,
 session/workspace targeting, read-only preflight, and explicitly saved local drafts. It reuses the
 services above, keeps history and quota evidence distinct, and requires confirmation for session
 forks, telemetry sync, draft persistence, and each task execution. P036 adds a dedicated execution
 controller with explicit confirmation, bounded live progress, one-time approvals, interruption,
-and unknown-outcome reconciliation. It does not persist execution prompts or transcripts. App
-Server compatibility and Arch-device validation remain pending; no execution feature is included
-in the published v0.1.0 assets. See the [TUI and Composer guide](docs/V02_TUI_DASHBOARD.md),
+and unknown-outcome reconciliation. P037 adds an identifier-only crash-recovery journal and
+restart detection; uncertain tasks are never automatically resubmitted. Prompts and transcripts
+are not persisted. Windows journal storage and the Arch live-device gate remain pending; no
+execution feature is included in the published v0.1.0 assets. See the [TUI and Composer
+guide](docs/V02_TUI_DASHBOARD.md),
 [Composer guide](docs/V02_PROMPT_COMPOSER.md), [task execution guide](docs/V02_TASK_EXECUTION.md),
-and [P036 implementation manifest](docs/PROMPT036_MANIFEST.md) for controls, privacy, validation,
-and limitations.
+the [execution recovery guide](docs/V02_EXECUTION_RECOVERY.md), [Codex compatibility matrix](docs/V02_CODEX_COMPATIBILITY_MATRIX.md), and [P037 implementation manifest](docs/PROMPT037_MANIFEST.md) for controls, privacy, validation, and limitations.
 
 ## Quick install (v0.1.0 technical preview)
 

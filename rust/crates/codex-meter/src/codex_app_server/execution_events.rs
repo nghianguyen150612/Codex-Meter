@@ -95,6 +95,10 @@ impl ExecutionMachine {
                 | (ExecutionPhase::AwaitingConfirmation, ExecutionPhase::Ready)
                 | (
                     ExecutionPhase::AwaitingConfirmation,
+                    ExecutionPhase::OutcomeUnknown
+                )
+                | (
+                    ExecutionPhase::AwaitingConfirmation,
                     ExecutionPhase::Submitting
                 )
                 | (ExecutionPhase::AwaitingConfirmation, ExecutionPhase::Failed)

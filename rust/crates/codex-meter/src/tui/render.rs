@@ -71,7 +71,7 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
         AppServerStatus::Unknown | AppServerStatus::Connecting => theme.muted(),
     };
     let first = if area.width >= 72 {
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(" CODEX METER ", theme.title()),
             Span::styled(
                 format!("v{} | development", env!("CARGO_PKG_VERSION")),
@@ -79,7 +79,17 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
             ),
             Span::raw("   LOCAL CODEX   "),
             Span::styled(connection, marker_style),
-        ])
+        ];
+        if !state.recovery_records.is_empty() {
+            spans.push(Span::styled(
+                format!(
+                    "   RECOVERY: {} unresolved (F6)",
+                    state.recovery_records.len()
+                ),
+                theme.warning(),
+            ));
+        }
+        Line::from(spans)
     } else if area.width >= 42 {
         Line::from(vec![
             Span::styled(" Codex Meter", theme.title()),
@@ -104,7 +114,17 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
             state.active.label()
         ))
     };
-    let second = if area.width >= 72 {
+    let second = if !state.recovery_records.is_empty() {
+        Line::from(format!(
+            " Execution recovery: {} unresolved record(s) · F6 opens recovery",
+            state.recovery_records.len()
+        ))
+    } else if let Some(error) = state.recovery_error.as_deref() {
+        Line::from(format!(
+            " Execution recovery unavailable: {}",
+            clean(error, 72)
+        ))
+    } else if area.width >= 72 {
         Line::from(" Local telemetry is not complete account usage.")
     } else if area.width >= 42 {
         Line::from(" Local telemetry only; not account-wide")
@@ -146,6 +166,105 @@ fn short_status(status: AppServerStatus) -> &'static str {
         AppServerStatus::Connected => "connected",
         AppServerStatus::Unavailable => "unavailable",
     }
+}
+
+fn recovery_lines(state: &AppState) -> Vec<String> {
+    let mut lines = vec![
+        "An earlier task did not reach a confirmed final state.".to_owned(),
+        "Codex Meter will not automatically resume, interrupt, approve, or resubmit it.".to_owned(),
+    ];
+    if let Some(error) = state.recovery_error.as_deref() {
+        lines.push(format!("Journal: {}", clean(error, 180)));
+    }
+    if state.recovery_records.is_empty() {
+        lines.push("No readable unresolved records are available.".to_owned());
+        lines.push("Esc returns to the dashboard.".to_owned());
+        return lines;
+    }
+    lines.push(String::new());
+    let visible_count = 8.min(state.recovery_records.len());
+    let first = state
+        .recovery_selected
+        .saturating_sub(visible_count.saturating_sub(1) / 2)
+        .min(state.recovery_records.len().saturating_sub(visible_count));
+    let end = (first + visible_count).min(state.recovery_records.len());
+    for (index, record) in state.recovery_records[first..end].iter().enumerate() {
+        let absolute_index = first + index;
+        let local_id: String = record.execution_id.chars().take(8).collect();
+        let target = match record.origin {
+            crate::codex_app_server::ExecutionOrigin::NewThread => "New thread",
+            crate::codex_app_server::ExecutionOrigin::ExistingThread => "Existing thread",
+        };
+        lines.push(format!(
+            "{} {} · {} · Thread: {} · Turn: {} · {}",
+            if absolute_index == state.recovery_selected {
+                ">"
+            } else {
+                " "
+            },
+            local_id,
+            target,
+            record.thread_label(),
+            record.turn_label(),
+            record.execution_phase.label()
+        ));
+    }
+    if let Some(record) = state.recovery_records.get(state.recovery_selected) {
+        let last = match record.last_authoritative_status {
+            Some(crate::codex_app_server::AuthoritativeStatus::InProgress) => "In progress",
+            Some(crate::codex_app_server::AuthoritativeStatus::Completed) => "Completed",
+            Some(crate::codex_app_server::AuthoritativeStatus::Failed) => "Failed",
+            Some(crate::codex_app_server::AuthoritativeStatus::Interrupted) => "Interrupted",
+            None => "None",
+        };
+        lines.push(String::new());
+        lines.push(format!("Last authoritative state: {last}"));
+        lines.push(format!(
+            "Warning acknowledgement: {}",
+            if record.warning_acknowledged {
+                "Acknowledged; execution remains unresolved"
+            } else {
+                "Not acknowledged"
+            }
+        ));
+        if state.recovery_show_details {
+            lines.push(format!(
+                "Local execution ID: {}",
+                clean(&record.execution_id, 64)
+            ));
+            lines.push(format!(
+                "Known thread ID: {}",
+                record
+                    .known_thread_id
+                    .as_deref()
+                    .map_or("Unknown".to_owned(), |id| clean(id, 128))
+            ));
+            lines.push(format!(
+                "Known turn ID: {}",
+                record
+                    .known_turn_id
+                    .as_deref()
+                    .map_or("Unknown".to_owned(), |id| clean(id, 128))
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("r Reconcile exact known thread/turn · a acknowledge warning".to_owned());
+    if state
+        .recovery_records
+        .get(state.recovery_selected)
+        .is_some_and(|record| {
+            record.last_authoritative_status
+                == Some(crate::codex_app_server::AuthoritativeStatus::InProgress)
+        })
+    {
+        lines.push("i explicitly request interrupt after a fresh running-state check".to_owned());
+    }
+    lines.push("Enter/v show identifiers · j/k select · f refresh · Esc return".to_owned());
+    if state.recovery_pending {
+        lines.push("Working…".to_owned());
+    }
+    lines
 }
 
 fn draw_compact_tabs(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme) {
@@ -1739,6 +1858,7 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
         Overlay::ModelDetail => ("Model details", model_detail_lines(state)),
         Overlay::ProjectDetail => ("Project details", project_detail_lines(state)),
         Overlay::EvidenceDetail => ("Evidence details", evidence_detail_lines(state)),
+        Overlay::ExecutionRecovery => ("CODEX METER — EXECUTION RECOVERY", recovery_lines(state)),
         Overlay::ExecutionConfirm
         | Overlay::ExecutionView
         | Overlay::ExecutionApproval

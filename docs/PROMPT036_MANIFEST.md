@@ -2,15 +2,16 @@
 
 ## Status and baseline
 
-- Status: **PARTIAL**. The execution controller and fake-server tests are implemented, but the
-  reference Arch device is unavailable, no durable crash-recovery journal exists, and required PR
-  CI has not completed.
+- Status at P036 merge: **PARTIAL**. The execution controller and fake-server tests were
+  implemented, while the reference Arch device, durable crash recovery, and PTY end-to-end gates
+  remained outstanding. P037 adds the journal and PTY coverage; the Arch device gate remains
+  pending. Historical P036 validation entries below are preserved as P036 evidence.
 - Verified starting `origin/main`: `6f60a157f3eacf94f7abe547a317f34a27916bb3`, the P035 merge
   commit from PR #30.
 - Feature branch: `feat/p036-native-task-execution`.
 - PR title: `Implement native Codex task execution and approval lifecycle`.
-- PR: [#31](https://github.com/nghianguyen150612/Codex-Meter/pull/31), Draft; it must remain
-  Draft until the Arch device gate is complete.
+- PR: [#31](https://github.com/nghianguyen150612/Codex-Meter/pull/31), merged 2026-10-22 at
+  `18225c724813d85eaa76324e3f3674d116eee9a7`.
 - No changes are made directly to `main`. The published v0.1.0 release/tag and merge-commit
   history remain intact. P036 does not publish v0.2.0.
 - Installed Codex CLI audited: `codex-cli 0.163.0`.
@@ -112,13 +113,12 @@ Codex or consume quota.
 | GitHub Actions | Passed on Draft PR #31 head `1c4584e8ab57e812b1b904852e8255e63fec0766` (CI + release-candidate workflows) |
 | Linux/macOS x86_64/macOS ARM64/Windows x86_64 | Rust CI and release-candidate builds passed on all four platform targets; installed-runtime Python matrix passed on Linux, macOS, and Windows |
 | Arch live-device validation | **Pending; reference device unavailable** |
-| PR / merge / release | Draft PR #31 created; no merge or release authorized by P036 |
+| PR / merge / release | PR #31 merged with merge commit `18225c724813d85eaa76324e3f3674d116eee9a7`; no v0.2.0 release authorized |
 
-## P037 handoff
+## P037 implementation follow-up
 
-P037 should implement a private, atomic, versioned, identifier-only execution recovery journal and
-startup reconciliation, with no prompt, transcript, response, reasoning, tool argument, credential,
-or workspace path persistence. It should verify handling of lost `thread/start` and `turn/start`
-responses after process restart, prevent accidental duplicate submissions, preserve honest unknown
-states, and complete the Arch device compatibility and terminal restoration gate. Do not add quota
-forecasting, Savings Goals, plugin packaging, cloud execution, or v0.2.0 release work under P036.
+P037 implements the private identifier-only journal and Unix PTY restart coverage; see
+`V02_EXECUTION_RECOVERY.md` and `PROMPT037_MANIFEST.md`. The Arch device compatibility gate remains
+pending. P038 should complete Windows private storage and terminal validation and the reference Arch
+read-only gate. Do not add quota forecasting, Savings Goals, plugin packaging, cloud execution, or
+v0.2.0 release work under P036.

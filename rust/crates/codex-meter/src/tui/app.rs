@@ -25,7 +25,7 @@ use super::state::{
 };
 use super::theme::Theme;
 use crate::cli::{CliError, TuiArguments};
-use crate::codex_app_server::ArchiveFilter;
+use crate::codex_app_server::{ApprovalChoice, ArchiveFilter, ControllerEvent, ExecutionPhase};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -259,6 +259,15 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
 
 fn handle_composer_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
     if let Some(overlay) = state.overlay.clone() {
+        if matches!(
+            overlay,
+            Overlay::ExecutionConfirm
+                | Overlay::ExecutionView
+                | Overlay::ExecutionApproval
+                | Overlay::ExecutionExitConfirm
+        ) {
+            return handle_execution_key(state, backend, overlay, key);
+        }
         return handle_composer_overlay(state, backend, overlay, key);
     }
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -696,6 +705,7 @@ fn handle_composer_overlay(
                 state.composer.preflight_scroll = state.composer.preflight_scroll.saturating_add(1)
             }
             KeyCode::Char('s') => start_saving_draft(state),
+            KeyCode::Char('e') => begin_execution_preflight(state, backend),
             _ => return false,
         },
         Overlay::UnsavedDraftExit => match key.code {
@@ -1139,6 +1149,251 @@ fn open_preflight(state: &mut AppState) {
     state.overlay = Some(Overlay::ComposerPreflight);
 }
 
+fn begin_execution_preflight(state: &mut AppState, backend: &Backend) {
+    let task = prepare_task(state);
+    if task.validation_status != ValidationStatus::Ready {
+        state.composer.status = Some(
+            task.validation_messages
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        state.overlay = Some(Overlay::ComposerPreflight);
+        return;
+    }
+    state.composer.prepared_task = Some(prepare_task(state));
+    state.composer.draft_state = DraftState::PreflightReady;
+    let id = state.next_request_id();
+    state.execution = super::state::ExecutionUiState {
+        id,
+        phase: ExecutionPhase::Ready,
+        pending: true,
+        status: Some("Checking the current Codex model and security configuration. No thread or turn is being started.".to_owned()),
+        ..super::state::ExecutionUiState::default()
+    };
+    state.overlay = Some(Overlay::ExecutionConfirm);
+    if let Err(error) = backend.prepare_execution(id, task) {
+        state.execution.pending = false;
+        state.execution.status = Some(error);
+    }
+}
+
+fn handle_execution_key(
+    state: &mut AppState,
+    backend: &Backend,
+    overlay: Overlay,
+    key: KeyEvent,
+) -> bool {
+    if state.execution.pending {
+        if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+            return true;
+        }
+        return false;
+    }
+    match overlay {
+        Overlay::ExecutionConfirm => match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => {
+                if state.execution.preflight.is_none() {
+                    state.execution = super::state::ExecutionUiState::default();
+                    state.overlay = Some(Overlay::ComposerPreflight);
+                    return true;
+                }
+                let id = state.execution.id;
+                state.execution.pending = true;
+                if let Err(error) = backend.cancel_execution(id) {
+                    state.execution.pending = false;
+                    state.execution.status = Some(error);
+                }
+                true
+            }
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if state.execution.phase != ExecutionPhase::AwaitingConfirmation {
+                    return true;
+                }
+                let Some(preflight) = state.execution.preflight.as_ref() else {
+                    return true;
+                };
+                if preflight.existing_settings_pending {
+                    state.execution.pending = true;
+                    state.execution.status = Some("Loading the selected thread's current security settings. No turn will start.".to_owned());
+                    if let Err(error) = backend.inspect_execution(state.execution.id) {
+                        state.execution.pending = false;
+                        state.execution.status = Some(error);
+                    }
+                } else if preflight.sandbox.is_some()
+                    && preflight.approval.is_some()
+                    && preflight.network_access == Some(false)
+                {
+                    state.execution.phase = ExecutionPhase::Submitting;
+                    state.execution.pending = true;
+                    state.execution.status =
+                        Some("Submitting the confirmed task to Codex.".to_owned());
+                    state.overlay = Some(Overlay::ExecutionView);
+                    if let Err(error) = backend.submit_execution(state.execution.id) {
+                        state.execution.pending = false;
+                        state.execution.phase = ExecutionPhase::Failed;
+                        state.execution.status = Some(error);
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        Overlay::ExecutionApproval => {
+            if key.code == KeyCode::Char('i')
+                && matches!(
+                    state.execution.phase,
+                    ExecutionPhase::Running
+                        | ExecutionPhase::SubmissionAccepted
+                        | ExecutionPhase::AwaitingApproval
+                )
+            {
+                state.execution.pending = true;
+                state.execution.status = Some("Requesting interruption; pending approvals will be denied while Codex reports the final turn state.".to_owned());
+                if let Err(error) = backend.interrupt_execution(state.execution.id) {
+                    state.execution.pending = false;
+                    state.execution.status = Some(error);
+                } else {
+                    state.execution.approvals.clear();
+                    state.overlay = Some(Overlay::ExecutionView);
+                }
+                return true;
+            }
+            let Some(approval) = state.execution.approvals.front() else {
+                state.overlay = Some(Overlay::ExecutionView);
+                return true;
+            };
+            let request_id = approval.request_id.clone();
+            let allow_available = approval.allow_once_available;
+            let has_cancel = matches!(
+                approval.kind,
+                crate::codex_app_server::ApprovalKind::CommandExecution
+                    | crate::codex_app_server::ApprovalKind::FileChange
+            );
+            let choice = match key.code {
+                KeyCode::Enter | KeyCode::Char('n') | KeyCode::Char('d') => {
+                    Some(ApprovalChoice::Deny)
+                }
+                KeyCode::Char('a') if allow_available => Some(ApprovalChoice::AllowOnce),
+                KeyCode::Char('c') if has_cancel => Some(ApprovalChoice::Cancel),
+                KeyCode::Esc => Some(ApprovalChoice::Deny),
+                _ => None,
+            };
+            if let Some(choice) = choice {
+                state.execution.pending = true;
+                if let Err(error) = backend.decide_approval(state.execution.id, request_id, choice)
+                {
+                    state.execution.pending = false;
+                    state.execution.status = Some(error);
+                } else {
+                    state.execution.approvals.pop_front();
+                    state.overlay = if state.execution.approvals.is_empty() {
+                        Some(Overlay::ExecutionView)
+                    } else {
+                        Some(Overlay::ExecutionApproval)
+                    };
+                }
+            }
+            true
+        }
+        Overlay::ExecutionView => match key.code {
+            KeyCode::Esc | KeyCode::Enter if state.execution.phase.terminal() => {
+                state.overlay = None;
+                state.active = Screen::Overview;
+                true
+            }
+            KeyCode::Char('q') | KeyCode::Char('c') if !state.execution.phase.terminal() => {
+                state.execution.exit_choice = 0;
+                state.overlay = Some(Overlay::ExecutionExitConfirm);
+                true
+            }
+            KeyCode::Char('i')
+                if matches!(
+                    state.execution.phase,
+                    ExecutionPhase::Running
+                        | ExecutionPhase::SubmissionAccepted
+                        | ExecutionPhase::AwaitingApproval
+                ) =>
+            {
+                state.execution.pending = true;
+                state.execution.status = Some(
+                    "Requesting interruption from Codex; waiting for turn completion.".to_owned(),
+                );
+                if let Err(error) = backend.interrupt_execution(state.execution.id) {
+                    state.execution.pending = false;
+                    state.execution.status = Some(error);
+                }
+                true
+            }
+            KeyCode::Char('r') if state.execution.phase == ExecutionPhase::OutcomeUnknown => {
+                state.execution.phase = ExecutionPhase::Reconciling;
+                state.execution.pending = true;
+                state.execution.status = Some("Reconciling with the Codex session.".to_owned());
+                if let Err(error) = backend.reconcile_execution(state.execution.id) {
+                    state.execution.pending = false;
+                    state.execution.phase = ExecutionPhase::OutcomeUnknown;
+                    state.execution.status = Some(error);
+                }
+                true
+            }
+            KeyCode::Char('a') if !state.execution.approvals.is_empty() => {
+                state.overlay = Some(Overlay::ExecutionApproval);
+                true
+            }
+            KeyCode::Char('d') => {
+                state.execution.show_details = !state.execution.show_details;
+                state.execution.scroll = 0;
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.execution.scroll = state.execution.scroll.saturating_sub(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.execution.scroll = state.execution.scroll.saturating_add(1);
+                true
+            }
+            KeyCode::PageUp => {
+                state.execution.scroll = state.execution.scroll.saturating_sub(12);
+                true
+            }
+            KeyCode::PageDown => {
+                state.execution.scroll = state.execution.scroll.saturating_add(12);
+                true
+            }
+            _ => false,
+        },
+        Overlay::ExecutionExitConfirm => match key.code {
+            KeyCode::Esc | KeyCode::Char('c') => {
+                state.overlay = Some(Overlay::ExecutionView);
+                true
+            }
+            KeyCode::Char('i') | KeyCode::Enter => {
+                if matches!(
+                    state.execution.phase,
+                    ExecutionPhase::Running
+                        | ExecutionPhase::SubmissionAccepted
+                        | ExecutionPhase::AwaitingApproval
+                ) {
+                    state.execution.pending = true;
+                    state.status = Some("An active Codex turn cannot be detached safely here. Requesting interruption; keep this view open until the final turn state arrives.".to_owned());
+                    if let Err(error) = backend.interrupt_execution(state.execution.id) {
+                        state.execution.pending = false;
+                        state.execution.status = Some(error);
+                    } else {
+                        state.overlay = Some(Overlay::ExecutionView);
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn prepare_task(state: &AppState) -> PreparedTask {
     let mut messages = Vec::new();
     if state.composer.editor.text().trim().is_empty() {
@@ -1552,6 +1807,10 @@ fn handle_overlay(
         | Overlay::ComposerDraftDeleteConfirm
         | Overlay::ComposerTemplatePicker
         | Overlay::ComposerPreflight
+        | Overlay::ExecutionConfirm
+        | Overlay::ExecutionView
+        | Overlay::ExecutionApproval
+        | Overlay::ExecutionExitConfirm
         | Overlay::UnsavedDraftExit => return false,
     }
     true
@@ -2078,7 +2337,122 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
             }
             true
         }
+        BackendEvent::ExecutionPreflight { id, result } => {
+            if id != state.execution.id {
+                return false;
+            }
+            state.execution.pending = false;
+            match result {
+                Ok(preflight) => {
+                    state.execution.thread_id = preflight.thread_id.clone();
+                    state.execution.preflight = Some(preflight);
+                    state.execution.phase = ExecutionPhase::AwaitingConfirmation;
+                    state.execution.status = None;
+                }
+                Err(error) => {
+                    state.execution.preflight = None;
+                    state.execution.status = Some(error);
+                }
+            }
+            state.overlay = Some(Overlay::ExecutionConfirm);
+            true
+        }
+        BackendEvent::ExecutionProgress { id, event } => {
+            if id != state.execution.id {
+                return false;
+            }
+            match event {
+                ControllerEvent::State(phase) => {
+                    state.execution.phase = phase;
+                    if phase == ExecutionPhase::AwaitingConfirmation {
+                        state.overlay = Some(Overlay::ExecutionConfirm);
+                    } else if phase.terminal() || phase == ExecutionPhase::OutcomeUnknown {
+                        state.execution.approvals.clear();
+                        if state.overlay == Some(Overlay::ExecutionApproval) {
+                            state.overlay = Some(Overlay::ExecutionView);
+                        }
+                    }
+                }
+                ControllerEvent::Preflight(preflight) => {
+                    state.execution.thread_id = preflight.thread_id.clone();
+                    state.execution.preflight = Some(preflight);
+                }
+                ControllerEvent::Identity { thread_id, turn_id } => {
+                    state.execution.thread_id = thread_id;
+                    state.execution.turn_id = turn_id;
+                }
+                ControllerEvent::Activity(activity) => {
+                    if state.execution.activity.len() >= 256 {
+                        state.execution.activity.pop_front();
+                    }
+                    state.execution.activity.push_back(activity);
+                }
+                ControllerEvent::Output(output) => {
+                    state.execution.output = bounded_execution_text(output, 256 * 1024);
+                }
+                ControllerEvent::ToolOutput(output) => {
+                    state.execution.tool_output = bounded_execution_text(output, 256 * 1024);
+                }
+                ControllerEvent::Diff(diff) => {
+                    state.execution.diff = bounded_execution_text(diff, 64 * 1024);
+                }
+                ControllerEvent::Approval(approval) => {
+                    if !state
+                        .execution
+                        .approvals
+                        .iter()
+                        .any(|pending| pending.request_id == approval.request_id)
+                    {
+                        state.execution.approvals.push_back(approval);
+                    }
+                    if state.overlay == Some(Overlay::ExecutionView) {
+                        state.overlay = Some(Overlay::ExecutionApproval);
+                    }
+                }
+                ControllerEvent::ApprovalResolved(request_id) => {
+                    state
+                        .execution
+                        .approvals
+                        .retain(|value| value.request_id != request_id);
+                    if state.execution.approvals.is_empty()
+                        && state.overlay == Some(Overlay::ExecutionApproval)
+                    {
+                        state.overlay = Some(Overlay::ExecutionView);
+                    }
+                }
+                ControllerEvent::Status(status) => state.execution.status = Some(status),
+            }
+            true
+        }
+        BackendEvent::ExecutionActionComplete { id } => {
+            if id != state.execution.id {
+                return false;
+            }
+            state.execution.pending = false;
+            true
+        }
+        BackendEvent::ExecutionCancelled { id } => {
+            if id != state.execution.id {
+                return false;
+            }
+            state.execution = super::state::ExecutionUiState::default();
+            state.overlay = Some(Overlay::ComposerPreflight);
+            state.composer.status =
+                Some("Execution confirmation cancelled. No task was submitted.".to_owned());
+            true
+        }
     }
+}
+
+fn bounded_execution_text(mut value: String, max_bytes: usize) -> String {
+    if value.len() > max_bytes {
+        let mut start = value.len() - max_bytes;
+        while !value.is_char_boundary(start) {
+            start += 1;
+        }
+        value.drain(..start);
+    }
+    value
 }
 
 fn revalidate_composer_model(state: &mut AppState) {
@@ -2293,6 +2667,36 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("rejected in full"));
+    }
+
+    #[test]
+    fn pending_execution_and_approval_keys_are_ignored_until_the_worker_finishes() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::Composer;
+        state.overlay = Some(Overlay::ExecutionConfirm);
+        state.execution.phase = ExecutionPhase::AwaitingConfirmation;
+        state.execution.pending = true;
+        handle_key(&mut state, &backend, key(KeyCode::Enter));
+        assert_eq!(state.execution.phase, ExecutionPhase::AwaitingConfirmation);
+        assert!(state.execution.pending);
+
+        state.overlay = Some(Overlay::ExecutionApproval);
+        state
+            .execution
+            .approvals
+            .push_back(crate::codex_app_server::ApprovalView {
+                request_id: "approval-test".to_owned(),
+                kind: crate::codex_app_server::ApprovalKind::CommandExecution,
+                requested_action: "cargo test".to_owned(),
+                working_context: Some("workspace".to_owned()),
+                details: String::new(),
+                allow_once_available: true,
+                network_request: false,
+            });
+        handle_key(&mut state, &backend, key(KeyCode::Char('a')));
+        assert_eq!(state.execution.approvals.len(), 1);
+        assert!(state.execution.pending);
     }
 
     #[test]

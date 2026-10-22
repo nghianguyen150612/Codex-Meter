@@ -1,9 +1,10 @@
 # Codex App Server integration (P033)
 
-P033 adds an unreleased, local-only session and model interface to the Rust CLI. It uses the
-installed Codex App Server so Codex remains responsible for authentication, session loading, model
-execution, sandboxing, approvals, and lifecycle rules. Codex Meter does not implement an agent
-runtime, open a login flow, or start model turns.
+P033 adds an unreleased, local-only session and model interface to the Rust CLI. P036 adds a
+separate opt-in interactive execution capability in the Composer. Both use the installed Codex App
+Server so Codex remains responsible for authentication, agent runtime, sandboxing, approvals, and
+provider communication. The P033 management interface remains read-only with respect to turn
+execution; P036 requires fresh preflight and explicit user confirmation before starting a task.
 
 ## Commands
 
@@ -48,7 +49,10 @@ The typed adapters use these stable methods:
 | `thread/fork` | Explicitly clone a thread with `excludeTurns: true` |
 | `model/list` | Current model catalog, including hidden entries |
 
-Compatibility was checked against `codex-cli 0.159.2` installed in the implementation environment.
+P033's compatibility was checked against `codex-cli 0.159.2` installed in that milestone's
+implementation environment. P036 separately audited `codex-cli 0.163.0` and its generated stable
+schemas before adding an isolated interactive capability; see the
+[P036 task execution guide](V02_TASK_EXECUTION.md) for its allowlist and current limitations.
 The installed executable's stable JSON Schemas were generated and inspected for initialization,
 thread list/read/resume/fork/turns/loaded methods, and model list. The client sends all stable
 `sourceKinds` in `thread/list`, uses `useStateDbOnly: true`, and follows each server cursor. Response

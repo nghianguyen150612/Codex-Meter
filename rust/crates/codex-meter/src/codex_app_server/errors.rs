@@ -8,6 +8,7 @@ use std::fmt;
 pub enum CodexAppError {
     CodexCliUnavailable,
     AppServerUnsupported,
+    UnsupportedExecutionRuntime,
     AppServerStartupFailure,
     InitializationFailure,
     AuthenticationUnavailable,
@@ -21,6 +22,19 @@ pub enum CodexAppError {
     RequestLimitExceeded,
     RequestIdExhausted,
     ResponseLimitExceeded,
+    CriticalEventLoss,
+    UnsafeExecutionConfiguration,
+    InvalidExecutionTransition,
+    MutationAlreadyPending,
+    UnsupportedApprovalType,
+    DuplicateApprovalRequest,
+    WrongApprovalScope,
+    StaleApprovalRequest,
+    InvalidPreparedTask,
+    SelectedModelUnavailable,
+    UnsupportedReasoningEffort,
+    ActiveThreadConflict,
+    ExecutionPreflightChanged,
     UnknownThread,
     RemoteRequestRejected {
         method: &'static str,
@@ -33,6 +47,7 @@ impl CodexAppError {
         match self {
             Self::CodexCliUnavailable => "codex_cli_unavailable",
             Self::AppServerUnsupported => "app_server_unsupported",
+            Self::UnsupportedExecutionRuntime => "unsupported_execution_runtime",
             Self::AppServerStartupFailure => "app_server_startup_failure",
             Self::InitializationFailure => "initialization_failure",
             Self::AuthenticationUnavailable => "authentication_unavailable",
@@ -46,6 +61,19 @@ impl CodexAppError {
             Self::RequestLimitExceeded => "request_limit_exceeded",
             Self::RequestIdExhausted => "request_id_exhausted",
             Self::ResponseLimitExceeded => "app_server_response_limit_exceeded",
+            Self::CriticalEventLoss => "critical_app_server_event_lost",
+            Self::UnsafeExecutionConfiguration => "unsafe_execution_configuration",
+            Self::InvalidExecutionTransition => "invalid_execution_transition",
+            Self::MutationAlreadyPending => "execution_mutation_pending",
+            Self::UnsupportedApprovalType => "unsupported_approval_type",
+            Self::DuplicateApprovalRequest => "duplicate_approval_request",
+            Self::WrongApprovalScope => "approval_scope_mismatch",
+            Self::StaleApprovalRequest => "stale_approval_request",
+            Self::InvalidPreparedTask => "invalid_prepared_task",
+            Self::SelectedModelUnavailable => "selected_model_unavailable",
+            Self::UnsupportedReasoningEffort => "unsupported_reasoning_effort",
+            Self::ActiveThreadConflict => "active_thread_conflict",
+            Self::ExecutionPreflightChanged => "execution_preflight_changed",
             Self::UnknownThread => "unknown_thread",
             Self::RemoteRequestRejected { .. } => "app_server_request_rejected",
         }
@@ -59,6 +87,10 @@ impl fmt::Display for CodexAppError {
             Self::AppServerUnsupported => {
                 write!(f, "the installed Codex CLI does not support `app-server`")
             }
+            Self::UnsupportedExecutionRuntime => write!(
+                f,
+                "this Codex App Server version has not been audited for task execution"
+            ),
             Self::AppServerStartupFailure => write!(f, "Codex App Server failed to start"),
             Self::InitializationFailure => write!(f, "Codex App Server initialization failed"),
             Self::AuthenticationUnavailable => write!(
@@ -95,6 +127,59 @@ impl fmt::Display for CodexAppError {
             }
             Self::ResponseLimitExceeded => {
                 write!(f, "Codex App Server exceeded the bounded response limit")
+            }
+            Self::CriticalEventLoss => write!(
+                f,
+                "Codex Meter could not preserve a critical App Server execution event"
+            ),
+            Self::UnsafeExecutionConfiguration => write!(
+                f,
+                "the current Codex sandbox or approval configuration could not be verified as safe"
+            ),
+            Self::InvalidExecutionTransition => {
+                write!(
+                    f,
+                    "Codex App Server reported an invalid execution lifecycle transition"
+                )
+            }
+            Self::MutationAlreadyPending => {
+                write!(f, "an execution mutation is already pending")
+            }
+            Self::UnsupportedApprovalType => {
+                write!(f, "Codex App Server requested an unsupported approval type")
+            }
+            Self::DuplicateApprovalRequest => {
+                write!(f, "Codex App Server reused an approval request ID")
+            }
+            Self::WrongApprovalScope => {
+                write!(
+                    f,
+                    "Codex App Server approval did not match the active thread and turn"
+                )
+            }
+            Self::StaleApprovalRequest => {
+                write!(f, "the approval request is no longer pending")
+            }
+            Self::InvalidPreparedTask => {
+                write!(f, "the prepared task failed fresh execution validation")
+            }
+            Self::SelectedModelUnavailable => {
+                write!(
+                    f,
+                    "the selected model is no longer in the live Codex catalog"
+                )
+            }
+            Self::UnsupportedReasoningEffort => {
+                write!(f, "the selected reasoning effort is no longer supported")
+            }
+            Self::ActiveThreadConflict => {
+                write!(f, "the selected Codex thread already has an active turn")
+            }
+            Self::ExecutionPreflightChanged => {
+                write!(
+                    f,
+                    "execution settings changed; review a fresh preflight before submitting"
+                )
             }
             Self::UnknownThread => write!(f, "the requested thread is unavailable"),
             Self::RemoteRequestRejected { method, code } => {

@@ -1,3 +1,4 @@
+use super::transport::ClientCapability;
 use serde_json::{json, Value};
 
 pub(crate) const CLIENT_NAME: &str = "codex-meter";
@@ -28,4 +29,85 @@ pub(crate) fn reject_server_request(id: Value) -> Value {
             "message": "Codex Meter does not approve server-initiated requests"
         }
     })
+}
+
+pub(crate) fn reject_overflowed_request(id: Value) -> Value {
+    json!({"id": id, "error": {"code": -32603, "message": "Codex Meter could not preserve the approval request"}})
+}
+
+pub(crate) fn server_response(id: Value, result: Value) -> Value {
+    json!({"id": id, "result": result})
+}
+
+pub(crate) fn server_error_response(id: Value, code: i64, message: &str) -> Value {
+    json!({"id": id, "error": {"code": code, "message": message}})
+}
+
+pub(crate) fn valid_request_id(id: &Value) -> bool {
+    matches!(id, Value::String(value) if !value.is_empty() && value.len() <= 128)
+        || id.as_i64().is_some()
+        || id.as_u64().is_some()
+}
+
+pub(crate) fn request_allowed(capability: ClientCapability, method: &str) -> bool {
+    if method == "initialize" {
+        return true;
+    }
+    match capability {
+        ClientCapability::ReadOnlyManagement => !matches!(
+            method,
+            "thread/start" | "turn/start" | "turn/steer" | "turn/interrupt"
+        ),
+        ClientCapability::InteractiveExecution => matches!(
+            method,
+            "config/read"
+                | "model/list"
+                | "thread/read"
+                | "thread/turns/list"
+                | "thread/start"
+                | "thread/resume"
+                | "turn/start"
+                | "turn/interrupt"
+        ),
+    }
+}
+
+pub(crate) fn server_request_supported(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+    )
+}
+
+pub(crate) fn notification_supported(method: &str) -> bool {
+    matches!(
+        method,
+        "thread/started"
+            | "thread/status/changed"
+            | "turn/started"
+            | "turn/completed"
+            | "turn/plan/updated"
+            | "turn/diff/updated"
+            | "item/started"
+            | "item/completed"
+            | "item/agentMessage/delta"
+            | "item/commandExecution/outputDelta"
+            | "item/fileChange/outputDelta"
+            | "serverRequest/resolved"
+    )
+}
+
+pub(crate) fn notification_is_critical(method: &str) -> bool {
+    matches!(
+        method,
+        "thread/started"
+            | "thread/status/changed"
+            | "turn/started"
+            | "turn/completed"
+            | "item/started"
+            | "item/completed"
+            | "serverRequest/resolved"
+    )
 }

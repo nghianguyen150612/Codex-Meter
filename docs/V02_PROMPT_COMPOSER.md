@@ -2,9 +2,8 @@
 
 P035 adds a task preparation screen to the Ratatui application. It composes a prompt, selects a
 new-thread or existing-thread target, uses live Codex App Server model capabilities, reviews local
-quota evidence, and optionally saves an explicitly named draft. Preparation is local and
-read-only. **Task execution is planned for P036.** The Composer does not call `thread/start`,
-`turn/start`, `thread/resume`, or `thread/read`.
+quota evidence, and optionally saves an explicitly named draft. P035 preparation and saved drafts
+remain separate from P036's execution flow. Opening or saving preflight never starts a task.
 
 The feature is development functionality and is not included in the published v0.1.0 assets.
 
@@ -126,20 +125,38 @@ never become token/quota evidence, diagnostics, or log entries.
 The action bar is keyboard-focusable for terminals with limited Ctrl-key reporting. If a terminal
 does not distinguish `Ctrl+Enter`, focus Actions and activate Review Preflight.
 
-## App Server compatibility and P036 handoff
+## App Server compatibility
 
-Composer uses the existing P033 App Server connection and protocol parsing. It does not read
-credentials itself or invent a separate authentication/runtime. The installed runtime in the P035
-development environment reported Codex CLI `0.163.0`; P033 had previously validated basic
-operations with `0.159.2`. There is no fixed supported-version range: App Server protocol behavior
-can evolve, so live discovery and the repository's compatibility checks remain authoritative.
-Stable schema generation was checked with the installed CLI, but schemas do not guarantee every
-future server has identical behavior.
+Composer uses the existing P033 App Server discovery. It does not read credentials or create a
+separate authentication/runtime. The installed runtime reported Codex CLI `0.163.0`; P033 had
+previously validated basic operations against `0.159.2`. P036 separately audited stable generated
+schemas against `0.163.0` before enabling an isolated execution capability. There is no fixed
+supported-version range; protocol behavior can evolve and schemas do not guarantee future runtime
+compatibility. See the [task execution guide](V02_TASK_EXECUTION.md) for methods, schemas,
+confirmation, and the security boundary.
 
-P036 owns explicit execution confirmation, target availability checks, any required session start
-or resume, sandbox and approval-policy review, `thread/start` or `turn/start`, approval handling,
-turn-event processing, and execution lifecycle reporting. It should consume the prepared task
-contract here instead of adding a second composer. P035 does not start those operations.
+P035 task preparation remains read-only. The P036 execution flow consumes its `PreparedTask` only
+after fresh validation and explicit user confirmation. The Arch reference desktop gate remains
+pending; see the [P036 manifest](PROMPT036_MANIFEST.md) for validation status.
 
-The Arch reference desktop gate remains pending until independently tested. See the
-[P035 manifest](PROMPT035_MANIFEST.md) for current validation and CI status.
+## P036 execution
+
+After reviewing P035's preflight, press `e` to request a fresh execution preflight. This reads the
+current App Server model catalog and checks the chosen workspace or existing thread and relevant
+sandbox/approval settings. It does not create or resume a thread. The execution confirmation shows
+the task and current security configuration. Existing targets use an additional inspect/resume step
+and require a second confirmation before submission. Each model, workspace, target, or security
+change invalidates the previous confirmation.
+
+The exact prepared prompt is sent to `turn/start` only after explicit confirmation. Codex Meter
+shows the accepted, running, terminal, and unknown states separately. Approval requests require an
+explicit one-time allow/deny/cancel choice; the default is deny. The `i` key requests Codex
+interruption, and `r` reconciles an unknown outcome by known turn ID. A timeout does not trigger a
+retry. See the [P036 task execution guide](V02_TASK_EXECUTION.md) for protocol, sandbox, approval,
+privacy, recovery, and keyboard details.
+
+Execution output, prompt text, tool output, and diffs are transient. They are not saved to the P035
+draft store or the token/quota evidence ledger. P036 does not implement a durable recovery journal;
+after an abrupt exit, inspect the Codex session before deciding whether to submit again. This is a
+known limitation and the Arch live-device validation gate remains pending. See the
+[P036 manifest](PROMPT036_MANIFEST.md).

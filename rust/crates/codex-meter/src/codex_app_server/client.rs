@@ -1,6 +1,6 @@
 use super::errors::CodexAppError;
 use super::protocol::{CLIENT_NAME, CLIENT_TITLE, REQUEST_TIMEOUT_SECS};
-use super::transport::ProcessTransport;
+use super::transport::{ClientCapability, ProcessTransport};
 use serde_json::{json, Value};
 use std::ffi::OsStr;
 #[cfg(test)]
@@ -41,7 +41,8 @@ impl CodexAppServer {
     /// when the Codex executable is not named `codex` on PATH.
     pub fn connect_with_program(program: &OsStr) -> Result<Self, CodexAppError> {
         let args = [OsStr::new("app-server")];
-        let transport = ProcessTransport::spawn(program, &args)?;
+        let transport =
+            ProcessTransport::spawn(program, &args, ClientCapability::ReadOnlyManagement)?;
         Self::initialize_transport(transport)
     }
 
@@ -79,7 +80,8 @@ impl CodexAppServer {
         let script =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_app_server.py");
         let args = [script.as_os_str(), OsStr::new(mode)];
-        let transport = ProcessTransport::spawn(&program, &args)?;
+        let transport =
+            ProcessTransport::spawn(&program, &args, ClientCapability::ReadOnlyManagement)?;
         Self::initialize_transport(transport)
     }
 

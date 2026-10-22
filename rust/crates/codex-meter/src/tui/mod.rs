@@ -2,7 +2,7 @@
 
 mod app;
 mod backend;
-mod composer;
+pub(crate) mod composer;
 mod drafts;
 mod layout;
 mod render;

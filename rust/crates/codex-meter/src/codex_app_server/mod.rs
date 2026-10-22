@@ -1,18 +1,27 @@
 //! Local Codex App Server integration.
 //!
-//! The client uses Codex's supported newline-delimited stdio transport,
-//! initializes once per process, and never starts or steers a model turn.
+//! The P033 management client uses Codex's newline-delimited stdio transport
+//! and retains its read-only execution boundary. P036's separate interactive
+//! controller is version-gated and owns the explicitly confirmed turn flow.
 
+mod approvals;
 mod client;
 mod errors;
+mod execution;
+mod execution_events;
+mod execution_protocol;
 mod models;
 mod projects;
 mod protocol;
 mod sessions;
 mod transport;
 
+pub use approvals::{ApprovalChoice, ApprovalKind, ApprovalView};
 pub use client::{AppServerInfo, CodexAppServer};
 pub use errors::CodexAppError;
+pub use execution::{ControllerEvent, ExecutionPreflight, InteractiveExecution};
+pub use execution_events::{ExecutionMachine, ExecutionPhase};
+pub use execution_protocol::{ApprovalPolicy, SandboxMode, VerifiedSecurity};
 pub use models::{ModelCatalog, ModelInfo, ReasoningEffortInfo};
 pub use projects::{ProjectAssociation, ProjectAssociationKind, ProjectSummary};
 pub use sessions::{

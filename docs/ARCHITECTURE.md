@@ -83,7 +83,37 @@ Python owns robust capacity estimation, median and weighted-median calculations,
 
 ### Presentation
 
-The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034–P035 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, typed task-preparation state, and existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. Composer drafts use a separate, explicit user-owned document store; they do not create a second usage ledger. A web dashboard is outside v1.
+The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034–P036 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, typed task-preparation and execution state, and existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. Composer drafts use a separate, explicit user-owned document store; they do not create a second usage ledger. P036 execution output is bounded and transient; it is not written to the SQLite evidence database or draft store. A web dashboard is outside v1.
+
+### Native Codex task execution (unreleased P036)
+
+```text
+PreparedTask → fresh execution preflight → explicit confirmation
+             → InteractiveExecution capability → Codex App Server
+             → typed lifecycle/progress/approval events → Ratatui
+```
+
+Execution is a controller around the installed Codex App Server, not another agent runtime or
+provider client. It reuses Codex authentication and sandbox enforcement. The App Server transport
+has separate read-only and interactive capability allowlists. The read-only management client
+cannot start or interrupt turns and rejects server requests; the interactive controller adds only
+the audited execution methods, notifications, approvals, interruption, and reconciliation. Typed
+state, approval validation, RPC serialization, and transient bounded output live below the TUI
+rendering layer.
+
+The controller requires current validation and a user confirmation before `thread/start` or
+`turn/start`. It treats accepted submission, active execution, authoritative completion,
+interruption, and uncertain outcomes as separate states. Critical lifecycle/approval event loss and
+ambiguous RPC timeouts require reconciliation; the controller never replays a possibly accepted
+turn. Approval responses are human-directed and bounded to verified one-time decisions or exact
+turn-scoped permission subsets. Sandbox or approval configuration that cannot be verified safely
+fails closed.
+
+Prompt and streamed output are transient in-memory task state. They never enter the telemetry
+database, diagnostics, or automatic exports. P036 does not yet persist a crash-recovery journal, so
+an abrupt process exit loses local reconciliation identifiers; startup recovery is a documented
+follow-on. See [task execution](V02_TASK_EXECUTION.md) for protocol compatibility, security,
+failure semantics, and this limitation.
 
 ## Logical Rust components
 
@@ -223,8 +253,9 @@ Prompts, responses, source code, repository contents, Git remotes, user email, c
 The P035 Composer may persist prompt text only after an explicit user save action, in a versioned,
 per-user draft directory separate from telemetry SQLite. Draft files are plaintext and are not
 encrypted by filesystem permissions. They are not autosaved, logged, synchronized, or included in
-telemetry. Composer preflight is read-only and prepares a `PreparedTask` for the future P036
-execution controller; it does not start a thread or turn.
+telemetry. P035 Composer preflight prepares a `PreparedTask`; it does not start a thread or turn.
+P036 execution displays the prompt and user-facing task output transiently in memory after an
+explicit confirmation. It does not persist them to telemetry or an execution journal.
 
 Diagnostics may report sanitized metadata such as source type, normalized event type, timestamps, counters, errors, and offsets/cursors. They must not dump whole source records or payloads that may contain content. Debug mode follows exactly the same privacy contract. Troubleshooting features require privacy review and cannot bypass it for convenience.
 

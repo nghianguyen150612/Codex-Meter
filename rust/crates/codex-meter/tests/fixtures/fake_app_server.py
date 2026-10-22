@@ -7,7 +7,10 @@ import time
 
 
 mode = sys.argv[1]
+execution_workspace = sys.argv[2] if len(sys.argv) > 2 else None
 initialized = False
+config_read_count = 0
+thread_read_count = 0
 if mode == "startup_failure":
     raise SystemExit(3)
 
@@ -89,7 +92,13 @@ while True:
         result = {
                 "id": message["id"],
                 "result": {
-                    "userAgent": "codex_cli_rs/test",
+                    "userAgent": (
+                        "codex_cli_rs/0.162.0"
+                        if mode == "execution_unsupported_version"
+                        else "codex_cli_rs/0.163.0"
+                        if mode.startswith("execution_")
+                        else "codex_cli_rs/test"
+                    ),
                     "codexHome": "/not-retained",
                     "platformFamily": "unix",
                     "platformOs": "linux",
@@ -106,6 +115,181 @@ while True:
             time.sleep(30)
     elif not initialized:
         raise SystemExit(14)
+    elif mode in ("interactive_request", "interactive_notification_flood", "interactive_oversized_event", "server_request") and method == "thread/read":
+        if message.get("params") != {"threadId": "thread-test", "includeTurns": False}:
+            raise SystemExit(50)
+        if mode == "interactive_request":
+            send({"method": "turn/started", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": "inProgress", "items": []}}})
+            send({"id": "approval-test", "method": "item/commandExecution/requestApproval", "params": {
+                "threadId": "thread-test", "turnId": "turn-test", "itemId": "item-test",
+                "startedAtMs": 1, "command": "printf safe", "cwd": "/tmp"
+            }})
+            approval = read_message()
+            accepted = approval is not None and approval.get("id") == "approval-test" and approval.get("result") == {"decision": "accept"}
+            send({"id": message["id"], "result": {"approved": accepted}})
+        elif mode == "interactive_notification_flood":
+            for _ in range(256):
+                send({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": "completed", "items": []}}})
+            send({"id": message["id"], "result": {"ok": True}})
+        elif mode == "interactive_oversized_event":
+            send({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": "completed", "items": []}, "padding": "x" * (128 * 1024)}})
+            send({"id": message["id"], "result": {"ok": True}})
+        else:
+            send({"id": "unknown-server-request", "method": "item/unknown/requestApproval", "params": {"sensitive": "ignored"}})
+            response = read_message()
+            send({"id": message["id"], "result": {"approved": "error" not in response, "code": response.get("error", {}).get("code")}})
+    elif mode.startswith("execution_") and method == "model/list":
+        params = message.get("params", {})
+        if params != {"limit": 100, "includeHidden": True}:
+            raise SystemExit(40)
+        send({"id": message["id"], "result": {"data": [model("fixture-model", default=True)], "nextCursor": None}})
+    elif mode.startswith("execution_") and method == "config/read":
+        config_read_count += 1
+        params = message.get("params", {})
+        if params != {"cwd": execution_workspace, "includeLayers": False}:
+            raise SystemExit(41)
+        config = {
+            "approval_policy": "on-request",
+            "sandbox_mode": "workspace-write",
+            "sandbox_workspace_write": {"network_access": False, "writable_roots": []},
+        }
+        if mode == "execution_new_model_changed":
+            config["model"] = "fixture-model" if config_read_count == 1 else "changed-model"
+            config["model_reasoning_effort"] = "medium"
+        send({"id": message["id"], "result": {"config": config, "origins": {}}})
+    elif mode.startswith("execution_") and method == "thread/read":
+        thread_read_count += 1
+        params = message.get("params", {})
+        if params != {"threadId": "thread-existing", "includeTurns": False}:
+            raise SystemExit(42)
+        status = "active" if mode == "execution_active_thread" else "idle"
+        send({"id": message["id"], "result": {"thread": {
+            "id": "thread-existing",
+            "cwd": execution_workspace,
+            "model": "changed-model" if mode == "execution_existing_model_changed" and thread_read_count >= 2 else "fixture-model",
+            "status": {"type": status},
+        }}})
+    elif mode.startswith("execution_") and method == "thread/resume":
+        params = message.get("params", {})
+        expected_thread_id = "thread-created" if mode == "execution_reconcile" else "thread-existing"
+        if params != {"threadId": expected_thread_id, "excludeTurns": True}:
+            raise SystemExit(43)
+        if mode == "execution_reconcile":
+            send({"id": message["id"], "result": {
+                "thread": {"id": "thread-created", "cwd": execution_workspace, "model": "fixture-model", "status": {"type": "idle"}},
+                "cwd": execution_workspace,
+                "model": "fixture-model",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "sandbox": {"type": "workspaceWrite", "networkAccess": False, "writableRoots": []},
+            }})
+            continue
+        resumed_model = "changed-model" if mode == "execution_existing_model_changed" and thread_read_count >= 2 else "fixture-model"
+        send({"id": message["id"], "result": {
+            "thread": {"id": "thread-existing", "cwd": execution_workspace, "model": resumed_model, "status": {"type": "idle"}},
+            "cwd": execution_workspace,
+            "model": "fixture-model",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": {"type": "workspaceWrite", "networkAccess": False, "writableRoots": []},
+        }})
+    elif mode.startswith("execution_") and method == "thread/start":
+        params = message.get("params", {})
+        expected = {
+            "cwd": execution_workspace,
+            "sandbox": "workspace-write",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "config": {"sandbox_workspace_write": {"network_access": False}},
+        }
+        if params != expected:
+            raise SystemExit(44)
+        if mode == "execution_lost_thread_start":
+            raise SystemExit(45)
+        send({"id": message["id"], "result": {
+            "thread": {"id": "thread-created", "cwd": execution_workspace, "model": "fixture-model", "status": {"type": "idle"}},
+            "cwd": execution_workspace,
+            "model": "fixture-model",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": {"type": "workspaceWrite", "networkAccess": False, "writableRoots": []},
+        }})
+    elif mode.startswith("execution_") and method == "turn/start":
+        params = message.get("params", {})
+        if params not in (
+            {"threadId": "thread-created", "input": [{"type": "text", "text": "P036_SYNTHETIC_PROMPT"}]},
+            {"threadId": "thread-existing", "input": [{"type": "text", "text": "P036_SYNTHETIC_PROMPT"}]},
+        ):
+            raise SystemExit(46)
+        if mode == "execution_lost_turn_start":
+            raise SystemExit(47)
+        if mode == "execution_reconcile":
+            send({"id": message["id"], "result": {"turn": {"id": "turn-p036", "status": "inProgress", "items": []}}})
+            raise SystemExit(53)
+        if mode == "execution_terminal_response":
+            send({"id": message["id"], "result": {"turn": {
+                "id": "turn-p036", "status": "completed", "items": [
+                    {"id": "reasoning-item", "type": "reasoning", "text": "INTERNAL_REASONING_SENTINEL"},
+                    {"id": "final-item", "type": "agentMessage", "text": "Authoritative final response"},
+                ]
+            }}})
+            continue
+        send({"id": message["id"], "result": {"turn": {"id": "turn-p036", "status": "inProgress", "items": []}}})
+        if mode == "execution_interrupt":
+            send({"method": "turn/started", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "inProgress", "items": []}}})
+            continue
+        send({"method": "turn/started", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "inProgress", "items": []}}})
+        if mode in ("execution_approval", "execution_approval_interrupt"):
+            send({"id": "approval-p036", "method": "item/commandExecution/requestApproval", "params": {
+                "threadId": params["threadId"], "turnId": "turn-p036", "itemId": "item-command",
+                "startedAtMs": 1, "cwd": execution_workspace, "command": "cargo test",
+            }})
+            approval = read_message()
+            expected = {"decision": "decline"} if mode == "execution_approval_interrupt" else {"decision": "accept"}
+            if approval is None or approval.get("id") != "approval-p036" or approval.get("result") != expected:
+                raise SystemExit(48)
+            send({"method": "serverRequest/resolved", "params": {"threadId": params["threadId"], "requestId": "approval-p036"}})
+            if mode == "execution_approval":
+                send({"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "completed", "items": []}}})
+        elif mode in ("execution_file_approval", "execution_permission_approval"):
+            send({"method": "turn/diff/updated", "params": {"threadId": params["threadId"], "turnId": "turn-p036", "diff": "--- a/generated.txt\n+++ b/generated.txt\n+approved content"}})
+            if mode == "execution_file_approval":
+                send({"id": "approval-p036", "method": "item/fileChange/requestApproval", "params": {
+                    "threadId": params["threadId"], "turnId": "turn-p036", "itemId": "item-file",
+                    "startedAtMs": 1, "reason": "Write generated.txt",
+                }})
+                approval = read_message()
+                expected = {"decision": "accept"}
+            else:
+                permissions = {"fileSystem": {"entries": [{"access": "write", "path": {"type": "path", "path": "/repo/generated"}}]}}
+                send({"id": "approval-p036", "method": "item/permissions/requestApproval", "params": {
+                    "threadId": params["threadId"], "turnId": "turn-p036", "itemId": "item-permission",
+                    "startedAtMs": 1, "cwd": "/repo", "permissions": permissions,
+                }})
+                approval = read_message()
+                expected = {"permissions": permissions, "scope": "turn"}
+            if approval is None or approval.get("id") != "approval-p036" or approval.get("result") != expected:
+                raise SystemExit(51)
+            send({"method": "serverRequest/resolved", "params": {"threadId": params["threadId"], "requestId": "approval-p036"}})
+            send({"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "completed", "items": []}}})
+        elif mode == "execution_missing_output":
+            send({"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "completed", "items": []}}})
+        else:
+            send({"method": "item/agentMessage/delta", "params": {"threadId": params["threadId"], "turnId": "turn-p036", "itemId": "item-agent", "delta": "Streaming response"}})
+            send({"method": "item/completed", "params": {"threadId": params["threadId"], "turnId": "turn-p036", "completedAtMs": 2, "item": {"id": "item-agent", "type": "agentMessage", "text": "Final response from fake Codex."}}})
+            send({"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": "turn-p036", "status": "completed", "items": []}}})
+    elif mode in ("execution_interrupt", "execution_approval_interrupt") and method == "turn/interrupt":
+        if message.get("params") != {"threadId": "thread-created", "turnId": "turn-p036"}:
+            raise SystemExit(49)
+        send({"id": message["id"], "result": {}})
+        send({"method": "turn/completed", "params": {"threadId": "thread-created", "turn": {"id": "turn-p036", "status": "interrupted", "items": []}}})
+    elif mode == "execution_reconcile" and method == "thread/turns/list":
+        expected = {"threadId": "thread-created", "limit": 50, "itemsView": "notLoaded", "sortDirection": "desc"}
+        if message.get("params") != expected:
+            raise SystemExit(54)
+        send({"id": message["id"], "result": {"data": [
+            {"id": "turn-p036", "status": "completed", "items": []}
+        ], "nextCursor": None}})
     elif method in ("thread/start", "turn/start", "turn/steer"):
         # Preparation-only tests must fail loudly if a thread or model turn is started.
         raise SystemExit(30)

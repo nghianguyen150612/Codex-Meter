@@ -24,8 +24,8 @@ in `scripts/p030_release_candidate.py`.
 | `just lint` | Check Rust formatting/Clippy and Python Ruff lint/format. |
 | `just contracts` | Validate all schemas and positive/negative fixtures. |
 | `just check` | Run the complete local quality gate. |
-| `cargo run --manifest-path rust/Cargo.toml -- tui` | Run the unreleased P034 local terminal dashboard in an interactive terminal. |
-| `cargo run --manifest-path rust/Cargo.toml -- compose` | Open the unreleased P035 task composer in an interactive terminal. |
+| `cargo run --manifest-path rust/Cargo.toml -- tui` | Run the unreleased P034–P036 local terminal dashboard in an interactive terminal. |
+| `cargo run --manifest-path rust/Cargo.toml -- compose` | Open the unreleased Composer and P036 execution workflow in an interactive terminal. |
 | `uv build --project python --wheel --out-dir <directory>` | Build a local analytics wheel for installation/runtime validation. |
 | `python scripts/p029_runtime_smoke.py` | Build and compare two wheels, check contents, install one in a fresh venv, and test the relocated CLI. |
 | `python scripts/p030_release_candidate.py check-version` | Check product versions and preserve schema/method/protocol versions. |
@@ -85,8 +85,8 @@ error. An unknown or missing fixture fails validation rather than being silently
 
 ## Current scope
 
-The Rust executable exposes `codex-meter tui` for the unreleased P034 interactive dashboard and
-`codex-meter compose` to open its P035 Composer screen directly;
+The Rust executable exposes `codex-meter tui` for the unreleased P034–P036 interactive dashboard
+and `codex-meter compose` to open its P035 Composer screen directly;
 `sync` for one-shot local Codex rollout ingestion,
 `tokens`, `history`, `inspect`, and `quota` for read-only evidence reporting, and `estimate` for
 empirical current-capacity estimates. The unreleased P033 CLI adds `sessions`, `session show`,
@@ -107,7 +107,9 @@ analysis types are not exposed by these commands.
 The TUI calls the same P031/P032 SQLite reporting and P033 App Server services; it does not add a
 second usage database. Read-only screens and Composer preflight use SQLite query-only access.
 Composer draft files are a separate, explicit user-owned document feature and never enter usage
-telemetry. The `s` key on other screens starts one-shot sync only after an in-TUI confirmation. See
-[the TUI dashboard guide](V02_TUI_DASHBOARD.md) and
-[the Composer guide](V02_PROMPT_COMPOSER.md) for keyboard controls, quota/token semantics, draft
-privacy, terminal restoration, and current live-device limits.
+telemetry. P036 adds explicit confirmed App Server execution, approvals, interruption, and
+reconciliation; execution output is transient and no crash journal is implemented. The `s` key on
+other screens starts one-shot sync only after an in-TUI confirmation. See the
+[TUI dashboard guide](V02_TUI_DASHBOARD.md), [Composer guide](V02_PROMPT_COMPOSER.md), and
+[task execution guide](V02_TASK_EXECUTION.md) for keyboard controls, quota/token semantics, privacy,
+terminal restoration, and current validation limits.

@@ -1,8 +1,9 @@
-# Codex Meter TUI dashboard, Composer, and task execution (P034–P036)
+# Codex Meter TUI dashboard, Composer, task execution, and recovery (P034–P037)
 
 P034 adds an interactive Rust terminal dashboard over the existing P031 telemetry ledger, P032
 reporting queries, and P033 Codex App Server services. P035 adds task preparation through the
-Composer. P036 adds an explicitly confirmed execution overlay around Codex App Server. Codex stays
+Composer. P036 adds an explicitly confirmed execution overlay around Codex App Server. P037 adds
+startup detection and explicit recovery for unfinished execution records. Codex stays
 the agent runtime. These are unreleased development features and are not part of the published
 v0.1.0 assets.
 
@@ -24,7 +25,8 @@ create a missing database or apply migrations. The optional path is used consist
 operations and for an explicitly confirmed sync.
 
 At startup, the overview database read and one App Server session query run in bounded background
-workers. A missing Codex executable leaves the telemetry overview available and reports session,
+workers. A separate journal snapshot checks for unresolved execution records; it does not start a
+turn, resume a thread, approve a request, or send an interrupt. A missing Codex executable leaves the telemetry overview available and reports session,
 project, and model features as unavailable. No telemetry sync runs automatically. There is no
 periodic refresh.
 
@@ -54,6 +56,7 @@ uses the existing deterministic SQLite keyset cursor and reads only 50 records a
 | `c` (Sessions) | Open Composer with the selected session as target; no resume or transcript read |
 | `r` | Refresh the current view |
 | `s` | Open the local telemetry sync confirmation |
+| `F6` | Open unresolved execution recovery from the dashboard or Composer |
 | `?` | Show help |
 | `q` or `Ctrl+C` | Exit and restore the terminal |
 
@@ -162,17 +165,19 @@ approvals, interruption, and unknown-outcome reconciliation.
 
 App Server request acceptance does not mean completion. The `i` key requests interruption and
 waits for authoritative terminal state. Timeouts and lost lifecycle events become Outcome unknown;
-`r` reconciles by exact known turn ID and never resubmits it. `q` or `c` opens the exit options while
-a task is active. Safe detachment is unavailable, so the UI explains that closing the terminal may
-leave the server-side task running.
+`r` reconciles by exact known turn ID and never resubmits it. At startup, unresolved records open a
+recovery view. There, `r` explicitly reconciles, `a` acknowledges the warning without changing task
+status, `i` sends a newly journaled interrupt only after fresh read-only validation reports the
+exact turn is running, and `Esc` returns to the dashboard. `F6` reopens this view. Safe detachment
+is unavailable, so the UI explains that closing the terminal may leave the server-side task running.
 
 The interactive view displays only user-facing agent response text, relevant tool output, and
 proposed changes; internal reasoning is not displayed. Those values and approval details are
-transient and bounded in memory. They are not written to telemetry SQLite, saved drafts, or
-automatic exports. No durable execution journal or restart recovery exists yet. If Codex Meter exits
-abruptly, inspect the Codex session before manually deciding whether to submit again. Codex may
-persist its own thread history. See the [task execution guide](V02_TASK_EXECUTION.md) for security,
-approvals, lifecycle semantics, and limitations.
+transient and bounded in memory. They are not written to telemetry SQLite, saved drafts, the
+recovery journal, or automatic exports. The journal persists private execution/thread/turn IDs,
+mutation phases, acknowledgement, authoritative status, and timestamps only. An abrupt exit leaves
+an evidence-backed recovery record when a mutation may have been sent; it never causes automatic
+resubmission. See the [task execution guide](V02_TASK_EXECUTION.md) and [recovery guide](V02_EXECUTION_RECOVERY.md) for security and failure semantics.
 
 ## Data and provenance rules
 
@@ -220,11 +225,12 @@ The TUI consumes sanitized P031/P032/P033 interfaces and a narrowly allowlisted 
 event stream. It does not parse raw rollout payloads or display credentials, raw App Server JSON,
 internal reasoning, working-directory paths outside the explicit task review, or Git remotes.
 Prompt and execution output remain transient in-memory data except for drafts the user explicitly
-saves. No execution transcript or UI state is persisted.
+saves. The recovery journal is separate from both drafts and telemetry and stores no transcript or
+prompt content.
 
 `NO_COLOR` disables semantic colors. Selection uses bold styling and text markers in lists, so the
-active row remains interpretable without color. Non-UTF-8 locales receive ASCII borders and
-sanitized displayed labels. Session titles are not rendered; path-like metadata identifiers are
+active row remains interpretable without color. A Linux PTY test submits Unicode input under
+`LC_ALL=C`. Session titles are not rendered; path-like metadata identifiers are
 redacted, and unsafe thread identifiers cannot be resumed or forked. Terminal lifecycle uses
 scoped cleanup for raw mode, alternate screen, and cursor visibility. Normal exit, `Ctrl+C`,
 recoverable terminal errors, and Rust unwinding restore those settings. Mouse capture is not
@@ -246,11 +252,13 @@ records. This is measured test coverage, not a claim about performance on every 
 The reference Arch Linux desktop was not attached to this implementation environment. Live startup,
 real quota observations, model catalog, sandbox configuration, task confirmation, approval view,
 resize, and shell restoration on that device remain an explicit gate; controlled fixtures do not
-establish live compatibility. See the [P036 manifest](PROMPT036_MANIFEST.md) for validation
-outcomes and PR state.
+establish live compatibility. See the [P037 manifest](PROMPT037_MANIFEST.md) and
+[compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md) for validation outcomes and platform
+status.
 
-## P037 handoff
+## P038 handoff
 
-P036 does not persist a crash-recovery journal. P037 should add private, identifier-only restart
-reconciliation and complete the reference Arch device gate. Quota forecasting, Savings Goals,
-Codex Cloud adapters, PR/CI integration, plugin packaging, and cloud workspaces remain outside P036.
+The Unix P037 journal fails closed on Windows until private ACL-backed storage and replacement
+semantics are implemented. The Arch live-device gate also remains pending. P038 should complete
+those platform checks and any further audited runtime compatibility work. Quota forecasting,
+Savings Goals, Codex Cloud adapters, plugin packaging, and cloud workspaces remain outside P037.

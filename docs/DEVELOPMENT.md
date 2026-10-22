@@ -24,8 +24,8 @@ in `scripts/p030_release_candidate.py`.
 | `just lint` | Check Rust formatting/Clippy and Python Ruff lint/format. |
 | `just contracts` | Validate all schemas and positive/negative fixtures. |
 | `just check` | Run the complete local quality gate. |
-| `cargo run --manifest-path rust/Cargo.toml -- tui` | Run the unreleased P034–P036 local terminal dashboard in an interactive terminal. |
-| `cargo run --manifest-path rust/Cargo.toml -- compose` | Open the unreleased Composer and P036 execution workflow in an interactive terminal. |
+| `cargo run --manifest-path rust/Cargo.toml -- tui` | Run the unreleased P034–P037 local terminal dashboard in an interactive terminal. |
+| `cargo run --manifest-path rust/Cargo.toml -- compose` | Open the unreleased Composer, P036 execution, and P037 recovery workflow in an interactive terminal. |
 | `uv build --project python --wheel --out-dir <directory>` | Build a local analytics wheel for installation/runtime validation. |
 | `python scripts/p029_runtime_smoke.py` | Build and compare two wheels, check contents, install one in a fresh venv, and test the relocated CLI. |
 | `python scripts/p030_release_candidate.py check-version` | Check product versions and preserve schema/method/protocol versions. |
@@ -85,7 +85,7 @@ error. An unknown or missing fixture fails validation rather than being silently
 
 ## Current scope
 
-The Rust executable exposes `codex-meter tui` for the unreleased P034–P036 interactive dashboard
+The Rust executable exposes `codex-meter tui` for the unreleased P034–P037 interactive dashboard
 and `codex-meter compose` to open its P035 Composer screen directly;
 `sync` for one-shot local Codex rollout ingestion,
 `tokens`, `history`, `inspect`, and `quota` for read-only evidence reporting, and `estimate` for
@@ -108,8 +108,8 @@ The TUI calls the same P031/P032 SQLite reporting and P033 App Server services; 
 second usage database. Read-only screens and Composer preflight use SQLite query-only access.
 Composer draft files are a separate, explicit user-owned document feature and never enter usage
 telemetry. P036 adds explicit confirmed App Server execution, approvals, interruption, and
-reconciliation; execution output is transient and no crash journal is implemented. The `s` key on
-other screens starts one-shot sync only after an in-TUI confirmation. See the
-[TUI dashboard guide](V02_TUI_DASHBOARD.md), [Composer guide](V02_PROMPT_COMPOSER.md), and
-[task execution guide](V02_TASK_EXECUTION.md) for keyboard controls, quota/token semantics, privacy,
-terminal restoration, and current validation limits.
+reconciliation. P037 stores only execution/thread/turn identifiers and state in a separate private
+recovery journal; prompt, transcript, tool output, and workspace path remain transient. The Unix
+journal supports Linux/macOS semantics, while execution fails closed on Windows pending private
+ACL-backed storage. The `s` key on other screens starts one-shot sync only after an in-TUI
+confirmation. See the [TUI dashboard guide](V02_TUI_DASHBOARD.md), [Composer guide](V02_PROMPT_COMPOSER.md), [task execution guide](V02_TASK_EXECUTION.md), [execution recovery guide](V02_EXECUTION_RECOVERY.md), and [compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md) for keyboard controls, quota/token semantics, privacy, terminal restoration, and validation limits.

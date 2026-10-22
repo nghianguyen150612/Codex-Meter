@@ -109,7 +109,7 @@ task was submitted. The Arch gate remains **Pending**.
 | Rust all-features workspace suite | Passed: 460 library, 2 analytics CLI, 19 sync CLI, 5 TUI CLI, and 9 PTY tests |
 | Python tests and tooling | Passed: 638 pytest tests; Ruff lint and format; dependency lock verification; 6 schemas, 16 positive and 5 negative contract fixtures |
 | P029 installed-runtime smoke | Passed: reproducible wheel, isolated install, relocation, source mode, cwd/path, deterministic output, concurrency, and read-only SQLite checks |
-| P030 local release candidate | Pending clean-commit package and extracted-candidate smoke |
+| P030 local release candidate | Passed: clean Linux x86_64 candidate packaged from source `a10de413ba5bf0cac409cd92a2738fa3ac408b2f`; extracted-candidate smoke verified installed worker, estimates, deterministic JSON, version compatibility, and read-only SQLite |
 | P031–P036 regressions | Passed through retained Rust workspace and Python regression suites; no separate per-milestone executable smoke scripts exist |
 | Linux x86_64 | Local implementation environment; Rust, Python, P029, and journal/PTY suites passed |
 | macOS x86_64 and ARM64 | Not run locally; CI pending |

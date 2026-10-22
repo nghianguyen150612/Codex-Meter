@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_RECORDS: usize = 32;
+#[cfg(unix)]
 const MAX_JOURNAL_BYTES: usize = 64 * 1024;
 const MAX_ID_BYTES: usize = 128;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
@@ -225,6 +226,7 @@ impl std::error::Error for RecoveryJournalError {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(unix)]
 struct JournalPayload {
     schema_version: u32,
     generation: u64,
@@ -233,6 +235,7 @@ struct JournalPayload {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(unix)]
 struct JournalEnvelope {
     payload: JournalPayload,
     checksum: String,
@@ -256,6 +259,13 @@ impl RecoveryJournal {
     pub fn open_at(path: &Path) -> Result<Self, RecoveryJournalError> {
         Ok(Self {
             store: platform::Store::open(path)?,
+        })
+    }
+
+    #[cfg(all(test, not(unix)))]
+    pub fn open_memory_for_tests() -> Result<Self, RecoveryJournalError> {
+        Ok(Self {
+            store: platform::Store::open_for_tests(),
         })
     }
 
@@ -480,6 +490,7 @@ fn validate_protocol_id(value: &str) -> Result<(), RecoveryJournalError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn encode(data: &JournalData) -> Result<Vec<u8>, RecoveryJournalError> {
     if data.records.len() > MAX_RECORDS {
         return Err(RecoveryJournalError::TooManyUnresolvedRecords);
@@ -505,6 +516,7 @@ fn encode(data: &JournalData) -> Result<Vec<u8>, RecoveryJournalError> {
     Ok(bytes)
 }
 
+#[cfg(unix)]
 fn decode(bytes: &[u8]) -> Result<JournalData, RecoveryJournalError> {
     if bytes.len() > MAX_JOURNAL_BYTES {
         return Err(RecoveryJournalError::CorruptJournal);
@@ -849,22 +861,75 @@ mod platform {
 #[cfg(not(unix))]
 mod platform {
     use super::*;
+    #[cfg(test)]
+    use std::sync::{Arc, Mutex};
+
+    #[cfg(test)]
+    #[derive(Clone)]
+    pub struct Store {
+        data: Arc<Mutex<JournalData>>,
+    }
+
+    #[cfg(not(test))]
     pub struct Store;
+
     impl Store {
         pub fn open(_path: &Path) -> Result<Self, RecoveryJournalError> {
             Err(RecoveryJournalError::UnsupportedPlatform)
         }
+
+        #[cfg(test)]
+        pub fn open_for_tests() -> Self {
+            Self {
+                data: Arc::new(Mutex::new(JournalData::default())),
+            }
+        }
+
         pub fn with_lock<T>(
             &self,
-            _action: impl FnOnce() -> Result<T, RecoveryJournalError>,
+            action: impl FnOnce() -> Result<T, RecoveryJournalError>,
         ) -> Result<T, RecoveryJournalError> {
-            Err(RecoveryJournalError::UnsupportedPlatform)
+            #[cfg(test)]
+            {
+                // This store exists only for platform-independent controller
+                // unit tests. Production Windows access still fails closed.
+                action()
+            }
+            #[cfg(not(test))]
+            {
+                let _ = action;
+                Err(RecoveryJournalError::UnsupportedPlatform)
+            }
         }
+
         pub fn read(&self) -> Result<JournalData, RecoveryJournalError> {
-            Err(RecoveryJournalError::UnsupportedPlatform)
+            #[cfg(test)]
+            {
+                self.data
+                    .lock()
+                    .map(|data| data.clone())
+                    .map_err(|_| RecoveryJournalError::Io)
+            }
+            #[cfg(not(test))]
+            {
+                Err(RecoveryJournalError::UnsupportedPlatform)
+            }
         }
-        pub fn write(&self, _data: &mut JournalData) -> Result<(), RecoveryJournalError> {
-            Err(RecoveryJournalError::UnsupportedPlatform)
+
+        pub fn write(&self, data: &mut JournalData) -> Result<(), RecoveryJournalError> {
+            #[cfg(test)]
+            {
+                data.generation = data.generation.saturating_add(1);
+                self.data
+                    .lock()
+                    .map(|mut current| *current = data.clone())
+                    .map_err(|_| RecoveryJournalError::Io)
+            }
+            #[cfg(not(test))]
+            {
+                let _ = data;
+                Err(RecoveryJournalError::UnsupportedPlatform)
+            }
         }
     }
 }

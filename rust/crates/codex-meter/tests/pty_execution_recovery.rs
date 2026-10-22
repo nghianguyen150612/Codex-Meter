@@ -7,12 +7,19 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+static PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
 const PROMPT: &str = "P037_λ_SYNTHETIC_PROMPT";
+
+fn serialize_pty_test() -> MutexGuard<'static, ()> {
+    PTY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 struct TestPaths {
     root: std::path::PathBuf,
@@ -108,7 +115,7 @@ impl PtyHarness {
     fn new(paths: TestPaths) -> Self {
         let mut master_fd = -1;
         let mut slave_fd = -1;
-        let window = libc::winsize {
+        let mut window = libc::winsize {
             ws_row: 40,
             ws_col: 120,
             ws_xpixel: 0,
@@ -119,8 +126,8 @@ impl PtyHarness {
                 &mut master_fd,
                 &mut slave_fd,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                &window,
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(window),
             )
         };
         assert_eq!(opened, 0);
@@ -156,7 +163,9 @@ impl PtyHarness {
                 match reader_file.read(&mut buffer) {
                     Ok(0) => thread::sleep(Duration::from_millis(10)),
                     Ok(count) => {
-                        let mut output = reader_output.lock().unwrap();
+                        let mut output = reader_output
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if output.len() < 8 * 1024 * 1024 {
                             output.extend_from_slice(&buffer[..count]);
                         }
@@ -231,7 +240,10 @@ impl PtyHarness {
     fn wait_for(&self, text: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let output = self.output.lock().unwrap();
+            let output = self
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if visible_screen(&output).contains(text) {
                 return true;
             }
@@ -244,16 +256,32 @@ impl PtyHarness {
         assert!(
             self.wait_for(text, Duration::from_secs(15)),
             "expected PTY output to contain {text:?}; recent output: {}",
-            visible_screen(&self.output.lock().unwrap())
+            visible_screen(
+                &self
+                    .output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
         );
     }
 
     fn output_text(&self) -> String {
-        visible_screen(&self.output.lock().unwrap())
+        visible_screen(
+            &self
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     fn raw_output_text(&self) -> String {
-        String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
+        String::from_utf8_lossy(
+            &self
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_owned()
     }
 
     fn begin_task(&mut self) {
@@ -490,6 +518,7 @@ fn temp_file(path: &std::path::Path) {
 
 #[test]
 fn compiled_tui_executes_unicode_prompt_and_restores_the_terminal() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "success");
@@ -519,6 +548,7 @@ fn compiled_tui_executes_unicode_prompt_and_restores_the_terminal() {
 
 #[test]
 fn pty_approval_allows_only_the_explicit_one_time_decision() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "approval_allow");
@@ -541,6 +571,7 @@ fn pty_approval_allows_only_the_explicit_one_time_decision() {
 
 #[test]
 fn pty_approval_denial_is_the_default_enter_action() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "approval_deny");
@@ -562,6 +593,7 @@ fn pty_approval_denial_is_the_default_enter_action() {
 
 #[test]
 fn pty_interrupt_acknowledgement_waits_for_terminal_turn_state() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "interrupt");
@@ -585,6 +617,7 @@ fn pty_interrupt_acknowledgement_waits_for_terminal_turn_state() {
 
 #[test]
 fn pty_connection_loss_reconciles_without_resubmission() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "connection_loss");
@@ -608,6 +641,7 @@ fn pty_connection_loss_reconciles_without_resubmission() {
 
 #[test]
 fn pty_process_crash_persists_recovery_and_never_replays_the_turn() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "crash");
@@ -641,6 +675,7 @@ fn pty_process_crash_persists_recovery_and_never_replays_the_turn() {
 
 #[test]
 fn pty_crash_after_possible_thread_start_preserves_unknown_identity_without_replay() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "thread_start_crash");
@@ -674,6 +709,7 @@ fn pty_crash_after_possible_thread_start_preserves_unknown_identity_without_repl
 
 #[test]
 fn pty_crash_after_possible_turn_start_keeps_thread_known_and_never_replays() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "turn_start_crash");
@@ -709,6 +745,7 @@ fn pty_crash_after_possible_turn_start_keeps_thread_known_and_never_replays() {
 
 #[test]
 fn pty_dirty_composer_exit_restores_terminal_settings() {
+    let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "success");

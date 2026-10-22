@@ -119,7 +119,7 @@ impl InteractiveExecution {
         task: PreparedTask,
         transport: ProcessTransport,
     ) -> Result<Self, CodexAppError> {
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         let journal = {
             use std::sync::atomic::{AtomicU64, Ordering};
             static NEXT_TEST_JOURNAL: AtomicU64 = AtomicU64::new(1);
@@ -130,6 +130,8 @@ impl InteractiveExecution {
             ));
             RecoveryJournal::open_at(&path).map_err(map_recovery_error)?
         };
+        #[cfg(all(test, not(unix)))]
+        let journal = RecoveryJournal::open_memory_for_tests().map_err(map_recovery_error)?;
         #[cfg(not(test))]
         let journal = RecoveryJournal::open_default().map_err(map_recovery_error)?;
         Self::prepare_with_journal(task, transport, journal)

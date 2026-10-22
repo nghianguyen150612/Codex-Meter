@@ -352,11 +352,20 @@ impl PtyHarness {
             unsafe {
                 libc::tcsetattr(
                     self.terminal_probe.as_raw_fd(),
-                    libc::TCSANOW,
+                    libc::TCSAFLUSH,
                     &self.baseline,
                 )
             },
             0
+        );
+        let mut restored = unsafe { std::mem::zeroed::<libc::termios>() };
+        assert_eq!(
+            unsafe { libc::tcgetattr(self.terminal_probe.as_raw_fd(), &mut restored) },
+            0
+        );
+        assert_eq!(
+            restored.c_lflag, self.baseline.c_lflag,
+            "test driver could not restore terminal mode after forceful termination"
         );
     }
 

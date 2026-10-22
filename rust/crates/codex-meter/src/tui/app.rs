@@ -71,6 +71,11 @@ fn run_with_screen(arguments: TuiArguments, initial_screen: Screen) -> Result<St
     let mut state = AppState::default();
     state.active = initial_screen;
     let theme = Theme::detect();
+    let recovery_id = state.next_request_id();
+    state.recovery_request_id = recovery_id;
+    if let Err(error) = backend.refresh_recovery(recovery_id) {
+        state.recovery_error = Some(error);
+    }
     request_screen(&mut state, &backend, initial_screen);
     terminal.clear().map_err(terminal_error)?;
 
@@ -169,6 +174,9 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
             });
         }
         KeyCode::Char('?') => state.overlay = Some(Overlay::Help),
+        KeyCode::F(6) if !state.recovery_records.is_empty() => {
+            state.overlay = Some(Overlay::ExecutionRecovery)
+        }
         KeyCode::Char('r') => {
             state.status = Some("Refreshing the active view...".to_owned());
             refresh_screen(state, backend);
@@ -258,6 +266,10 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
 }
 
 fn handle_composer_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
+    if key.code == KeyCode::F(6) && !state.recovery_records.is_empty() {
+        state.overlay = Some(Overlay::ExecutionRecovery);
+        return true;
+    }
     if let Some(overlay) = state.overlay.clone() {
         if matches!(
             overlay,
@@ -537,6 +549,9 @@ fn handle_composer_overlay(
 ) -> bool {
     if overlay == Overlay::Help {
         return handle_overlay(state, backend, Overlay::Help, key);
+    }
+    if overlay == Overlay::ExecutionRecovery {
+        return handle_overlay(state, backend, Overlay::ExecutionRecovery, key);
     }
     let text_entry = matches!(
         &overlay,
@@ -1730,6 +1745,11 @@ fn handle_overlay(
     key: KeyEvent,
 ) -> bool {
     if matches!(key.code, KeyCode::Char('q')) {
+        if overlay == Overlay::ExecutionRecovery {
+            state.overlay = None;
+            state.recovery_show_details = false;
+            return true;
+        }
         if state.composer.dirty {
             state.active = Screen::Composer;
             state.overlay = Some(Overlay::UnsavedDraftExit);
@@ -1744,6 +1764,81 @@ fn handle_overlay(
                 state.overlay = None;
             }
         }
+        Overlay::ExecutionRecovery => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                state.overlay = None;
+                state.recovery_show_details = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.recovery_selected = state.recovery_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.recovery_selected = state
+                    .recovery_selected
+                    .saturating_add(1)
+                    .min(state.recovery_records.len().saturating_sub(1));
+            }
+            KeyCode::Enter | KeyCode::Char('v') => {
+                state.recovery_show_details = !state.recovery_show_details;
+            }
+            KeyCode::Char('r') if !state.recovery_pending => {
+                if let Some(record) = state.recovery_records.get(state.recovery_selected) {
+                    let execution_id = record.execution_id.clone();
+                    let id = state.next_request_id();
+                    state.recovery_request_id = id;
+                    state.recovery_pending = true;
+                    state.status = Some("Inspecting the exact recorded thread and turn using read-only App Server requests.".to_owned());
+                    if let Err(error) = backend.reconcile_recovery(id, execution_id) {
+                        state.recovery_pending = false;
+                        state.status = Some(error);
+                    }
+                }
+            }
+            KeyCode::Char('i') if !state.recovery_pending => {
+                if let Some(record) = state.recovery_records.get(state.recovery_selected) {
+                    if record.last_authoritative_status
+                        == Some(crate::codex_app_server::AuthoritativeStatus::InProgress)
+                    {
+                        let execution_id = record.execution_id.clone();
+                        let id = state.next_request_id();
+                        state.recovery_request_id = id;
+                        state.recovery_pending = true;
+                        state.status = Some("Checking the exact recorded turn; an interrupt will be sent only if Codex still reports it running.".to_owned());
+                        if let Err(error) = backend.interrupt_recovery(id, execution_id) {
+                            state.recovery_pending = false;
+                            state.status = Some(error);
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('a') if !state.recovery_pending => {
+                if let Some(record) = state.recovery_records.get(state.recovery_selected) {
+                    let execution_id = record.execution_id.clone();
+                    let id = state.next_request_id();
+                    state.recovery_request_id = id;
+                    state.recovery_pending = true;
+                    state.status = Some(
+                        "Acknowledging the recovery warning; the execution remains unresolved."
+                            .to_owned(),
+                    );
+                    if let Err(error) = backend.acknowledge_recovery(id, execution_id) {
+                        state.recovery_pending = false;
+                        state.status = Some(error);
+                    }
+                }
+            }
+            KeyCode::Char('f') if !state.recovery_pending => {
+                let id = state.next_request_id();
+                state.recovery_request_id = id;
+                state.recovery_pending = true;
+                if let Err(error) = backend.refresh_recovery(id) {
+                    state.recovery_pending = false;
+                    state.recovery_error = Some(error.clone());
+                    state.status = Some(error);
+                }
+            }
+            _ => return false,
+        },
         Overlay::ForkConfirm { thread_id } => match key.code {
             KeyCode::Char('y') | KeyCode::Enter => {
                 state.overlay = None;
@@ -2439,6 +2534,60 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
             state.overlay = Some(Overlay::ComposerPreflight);
             state.composer.status =
                 Some("Execution confirmation cancelled. No task was submitted.".to_owned());
+            true
+        }
+        BackendEvent::RecoverySnapshot { id, result } => {
+            if id != state.recovery_request_id {
+                return false;
+            }
+            state.recovery_pending = false;
+            match result {
+                Ok(records) => {
+                    state.recovery_error = None;
+                    state.recovery_records = records;
+                    if !state.recovery_records.is_empty() && state.overlay.is_none() {
+                        state.overlay = Some(Overlay::ExecutionRecovery);
+                    } else if state.recovery_records.is_empty()
+                        && state.overlay == Some(Overlay::ExecutionRecovery)
+                    {
+                        state.overlay = None;
+                    }
+                    state.recovery_selected = state
+                        .recovery_selected
+                        .min(state.recovery_records.len().saturating_sub(1));
+                }
+                Err(error) => {
+                    state.recovery_error = Some(error.clone());
+                    state.status = Some(format!("Execution recovery is unavailable: {error}"));
+                }
+            }
+            true
+        }
+        BackendEvent::RecoveryActionComplete {
+            id,
+            outcome,
+            records,
+        } => {
+            if id != state.recovery_request_id {
+                return false;
+            }
+            state.recovery_pending = false;
+            if let Ok(records) = records {
+                state.recovery_records = records;
+                state.recovery_selected = state
+                    .recovery_selected
+                    .min(state.recovery_records.len().saturating_sub(1));
+            }
+            state.status = Some(match outcome {
+                Ok(None) => "Recovery warning acknowledged. Execution status remains unresolved until supported evidence is available.".to_owned(),
+                Ok(Some(outcome)) => outcome.label().to_owned(),
+                Err(error) => format!("Recovery action failed: {error}"),
+            });
+            if state.recovery_records.is_empty()
+                && state.overlay == Some(Overlay::ExecutionRecovery)
+            {
+                state.overlay = None;
+            }
             true
         }
     }

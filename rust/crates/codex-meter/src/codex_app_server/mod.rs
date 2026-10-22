@@ -10,6 +10,7 @@ mod errors;
 mod execution;
 mod execution_events;
 mod execution_protocol;
+mod execution_recovery;
 mod models;
 mod projects;
 mod protocol;
@@ -19,9 +20,16 @@ mod transport;
 pub use approvals::{ApprovalChoice, ApprovalKind, ApprovalView};
 pub use client::{AppServerInfo, CodexAppServer};
 pub use errors::CodexAppError;
-pub use execution::{ControllerEvent, ExecutionPreflight, InteractiveExecution};
+pub use execution::{
+    interrupt_recovery_record, reconcile_recovery_record, ControllerEvent, ExecutionPreflight,
+    InteractiveExecution,
+};
 pub use execution_events::{ExecutionMachine, ExecutionPhase};
 pub use execution_protocol::{ApprovalPolicy, SandboxMode, VerifiedSecurity};
+pub use execution_recovery::{
+    AuthoritativeStatus, ExecutionOrigin, ExecutionRecoveryRecord, MutationIntent, RecoveryJournal,
+    RecoveryJournalError, RecoveryOutcome, RecoveryPhase,
+};
 pub use models::{ModelCatalog, ModelInfo, ReasoningEffortInfo};
 pub use projects::{ProjectAssociation, ProjectAssociationKind, ProjectSummary};
 pub use sessions::{

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::codex_app_server::{
-    ApprovalView, ArchiveFilter, ExecutionPhase, ExecutionPreflight, ModelCatalog, ProjectSummary,
-    SessionDetail, SessionMetadata,
+    ApprovalView, ArchiveFilter, ExecutionPhase, ExecutionPreflight, ExecutionRecoveryRecord,
+    ModelCatalog, ProjectSummary, SessionDetail, SessionMetadata,
 };
 use crate::storage::{EvidenceDetail, QuotaHistoryPage, TokenHistoryCursor, TokenHistoryPage};
 
@@ -169,6 +169,7 @@ pub enum Overlay {
     ExecutionView,
     ExecutionApproval,
     ExecutionExitConfirm,
+    ExecutionRecovery,
     UnsavedDraftExit,
 }
 
@@ -326,6 +327,12 @@ pub struct AppState {
     pub evidence_detail: Resource<EvidenceDetail>,
     pub composer: ComposerState,
     pub execution: ExecutionUiState,
+    pub recovery_records: Vec<ExecutionRecoveryRecord>,
+    pub recovery_error: Option<String>,
+    pub recovery_selected: usize,
+    pub recovery_show_details: bool,
+    pub recovery_pending: bool,
+    pub recovery_request_id: u64,
     pub session_archive_filter: ArchiveFilter,
     pub sessions_active_only: bool,
     pub session_page: usize,
@@ -365,6 +372,12 @@ impl Default for AppState {
             evidence_detail: Resource::default(),
             composer: ComposerState::default(),
             execution: ExecutionUiState::default(),
+            recovery_records: Vec::new(),
+            recovery_error: None,
+            recovery_selected: 0,
+            recovery_show_details: false,
+            recovery_pending: false,
+            recovery_request_id: 0,
             session_archive_filter: ArchiveFilter::NonArchived,
             sessions_active_only: false,
             session_page: 0,

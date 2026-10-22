@@ -9,9 +9,10 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime, Ti
 
 use crate::cli::{self, TuiArguments};
 use crate::codex_app_server::{
-    ApprovalChoice, CodexAppError, CodexAppServer, ControllerEvent, ExecutionPreflight,
-    InteractiveExecution, ModelCatalog, ProjectSummary, SessionDetail, SessionListOptions,
-    SessionMetadata,
+    interrupt_recovery_record, reconcile_recovery_record, ApprovalChoice, CodexAppError,
+    CodexAppServer, ControllerEvent, ExecutionPreflight, ExecutionRecoveryRecord,
+    InteractiveExecution, ModelCatalog, ProjectSummary, RecoveryJournal, RecoveryOutcome,
+    SessionDetail, SessionListOptions, SessionMetadata,
 };
 use crate::storage::{
     EvidenceDetail, EvidenceQualitySummary, QuotaHistoryCursor, QuotaHistoryPage, QuotaTimeline,
@@ -101,6 +102,15 @@ pub enum BackendEvent {
     ExecutionCancelled {
         id: u64,
     },
+    RecoverySnapshot {
+        id: u64,
+        result: Result<Vec<ExecutionRecoveryRecord>, String>,
+    },
+    RecoveryActionComplete {
+        id: u64,
+        outcome: Result<Option<RecoveryOutcome>, String>,
+        records: Result<Vec<ExecutionRecoveryRecord>, String>,
+    },
 }
 
 enum DatabaseCommand {
@@ -171,6 +181,21 @@ enum AppServerCommand {
     },
     CancelExecution {
         id: u64,
+    },
+    RecoveryRefresh {
+        id: u64,
+    },
+    RecoveryAcknowledge {
+        id: u64,
+        execution_id: String,
+    },
+    RecoveryReconcile {
+        id: u64,
+        execution_id: String,
+    },
+    RecoveryInterrupt {
+        id: u64,
+        execution_id: String,
     },
 }
 
@@ -355,6 +380,22 @@ impl Backend {
 
     pub fn cancel_execution(&self, id: u64) -> Result<(), String> {
         self.send_app_server(AppServerCommand::CancelExecution { id })
+    }
+
+    pub fn refresh_recovery(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::RecoveryRefresh { id })
+    }
+
+    pub fn acknowledge_recovery(&self, id: u64, execution_id: String) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::RecoveryAcknowledge { id, execution_id })
+    }
+
+    pub fn reconcile_recovery(&self, id: u64, execution_id: String) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::RecoveryReconcile { id, execution_id })
+    }
+
+    pub fn interrupt_recovery(&self, id: u64, execution_id: String) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::RecoveryInterrupt { id, execution_id })
     }
 
     pub fn request_sync(&self, id: u64) -> Result<(), String> {
@@ -581,6 +622,12 @@ fn database_error(error: StorageError) -> String {
     format!("Local SQLite reporting failed ({})", error.code())
 }
 
+fn recovery_snapshot() -> Result<Vec<ExecutionRecoveryRecord>, String> {
+    RecoveryJournal::open_default()
+        .and_then(|journal| journal.unresolved())
+        .map_err(|error| error.to_string())
+}
+
 fn run_sync(database_override: Option<&std::path::Path>) -> Result<String, String> {
     let mut arguments = vec![
         std::ffi::OsString::from("sync"),
@@ -633,6 +680,70 @@ fn app_server_worker(
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
         match command {
+            AppServerCommand::RecoveryRefresh { id } => {
+                if sender
+                    .send(BackendEvent::RecoverySnapshot {
+                        id,
+                        result: recovery_snapshot(),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::RecoveryAcknowledge { id, execution_id } => {
+                let outcome = RecoveryJournal::open_default()
+                    .and_then(|journal| journal.acknowledge(&execution_id).map(|_| ()))
+                    .map_err(|error| error.to_string());
+                let records = recovery_snapshot();
+                if sender
+                    .send(BackendEvent::RecoveryActionComplete {
+                        id,
+                        outcome: outcome.map(|()| None),
+                        records,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::RecoveryReconcile { id, execution_id } => {
+                let outcome = RecoveryJournal::open_default()
+                    .and_then(|journal| reconcile_recovery_record(&journal, &execution_id))
+                    .map_err(|error| error.to_string());
+                let records = recovery_snapshot();
+                if sender
+                    .send(BackendEvent::RecoveryActionComplete {
+                        id,
+                        outcome: outcome.map(Some),
+                        records,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::RecoveryInterrupt { id, execution_id } => {
+                let outcome = RecoveryJournal::open_default()
+                    .and_then(|journal| interrupt_recovery_record(&journal, &execution_id))
+                    .map(Some)
+                    .map_err(|error| error.to_string());
+                let records = recovery_snapshot();
+                if sender
+                    .send(BackendEvent::RecoveryActionComplete {
+                        id,
+                        outcome,
+                        records,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
             AppServerCommand::PrepareExecution { id, task } => {
                 if execution
                     .as_ref()
@@ -843,33 +954,44 @@ fn app_server_worker(
                 continue;
             }
             AppServerCommand::CancelExecution { id } => {
-                let can_cancel = execution
-                    .as_ref()
-                    .is_some_and(|(execution_id, controller)| {
+                let result = execution
+                    .as_mut()
+                    .filter(|(execution_id, controller)| {
                         *execution_id == id
                             && controller.phase()
                                 == crate::codex_app_server::ExecutionPhase::AwaitingConfirmation
                             && controller.turn_id().is_none()
-                    });
-                if can_cancel {
-                    execution = None;
-                    if sender
-                        .send(BackendEvent::ExecutionCancelled { id })
-                        .is_err()
-                    {
-                        return;
-                    }
-                } else if sender
-                    .send(BackendEvent::ExecutionProgress {
-                        id,
-                        event: ControllerEvent::Status(
-                            "This execution cannot be cancelled safely from its current state."
-                                .to_owned(),
-                        ),
                     })
-                    .is_err()
-                {
-                    return;
+                    .ok_or_else(|| {
+                        "This execution cannot be cancelled safely from its current state."
+                            .to_owned()
+                    })
+                    .and_then(|(_, controller)| {
+                        controller
+                            .cancel_before_submission()
+                            .map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(()) => {
+                        execution = None;
+                        if sender
+                            .send(BackendEvent::ExecutionCancelled { id })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if sender
+                            .send(BackendEvent::ExecutionProgress {
+                                id,
+                                event: ControllerEvent::Status(error),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
                 }
                 continue;
             }
@@ -953,7 +1075,11 @@ fn app_server_worker(
                     | AppServerCommand::DecideApproval { .. }
                     | AppServerCommand::InterruptExecution { .. }
                     | AppServerCommand::ReconcileExecution { .. }
-                    | AppServerCommand::CancelExecution { .. } => unreachable!(),
+                    | AppServerCommand::CancelExecution { .. }
+                    | AppServerCommand::RecoveryRefresh { .. }
+                    | AppServerCommand::RecoveryAcknowledge { .. }
+                    | AppServerCommand::RecoveryReconcile { .. }
+                    | AppServerCommand::RecoveryInterrupt { .. } => unreachable!(),
                 };
                 if failed {
                     client = None;

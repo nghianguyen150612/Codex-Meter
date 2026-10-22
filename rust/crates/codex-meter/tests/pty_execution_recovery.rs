@@ -267,16 +267,23 @@ impl PtyHarness {
     }
 
     fn assert_text(&self, text: &str) {
-        assert!(
-            self.wait_for(text, Duration::from_secs(15)),
-            "expected PTY output to contain {text:?}; recent output: {}",
-            visible_screen(
-                &self
-                    .output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )
-        );
+        if !self.wait_for(text, Duration::from_secs(15)) {
+            let visible = self.output_text();
+            let raw = self.raw_output_text();
+            let raw_tail = raw
+                .chars()
+                .rev()
+                .take(4_000)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>();
+            let request_log = fs::read_to_string(&self.paths.request_log).unwrap_or_default();
+            let state = fs::read_to_string(&self.paths.state).unwrap_or_default();
+            panic!(
+                "expected PTY output to contain {text:?}; visible screen: {visible}; recent raw PTY output: {raw_tail}; fake requests: {request_log:?}; fake state: {state:?}"
+            );
+        }
     }
 
     fn output_text(&self) -> String {
@@ -694,9 +701,14 @@ fn pty_crash_after_possible_thread_start_preserves_unknown_identity_without_repl
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "thread_start_crash");
     pty.begin_task();
-    assert!(pty
-        .paths
-        .wait_for_request_count("thread/start", 1, Duration::from_secs(10)));
+    assert!(
+        pty.paths
+            .wait_for_request_count("thread/start", 1, Duration::from_secs(10)),
+        "thread/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
+        pty.output_text(),
+        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
+        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+    );
     pty.kill_process_group();
 
     let journal: serde_json::Value =
@@ -728,9 +740,14 @@ fn pty_crash_after_possible_turn_start_keeps_thread_known_and_never_replays() {
     let mut pty = PtyHarness::new(paths);
     pty.spawn("compose", "turn_start_crash");
     pty.begin_task();
-    assert!(pty
-        .paths
-        .wait_for_request_count("turn/start", 1, Duration::from_secs(10)));
+    assert!(
+        pty.paths
+            .wait_for_request_count("turn/start", 1, Duration::from_secs(10)),
+        "turn/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
+        pty.output_text(),
+        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
+        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+    );
     pty.kill_process_group();
 
     let journal: serde_json::Value =

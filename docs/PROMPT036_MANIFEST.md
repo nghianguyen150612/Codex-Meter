@@ -102,7 +102,7 @@ Codex or consume quota.
 | Contract validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures. |
 | P029 installed-runtime smoke | Passed with the local Linux debug binary and synthetic SQLite evidence. |
 | P030 version policy | Passed: product version remains `0.1.0`. |
-| P030 release-candidate smoke | Pending a clean committed-source candidate build. |
+| P030 release-candidate smoke | Passed for source `e264fb747b7cf9957e0b1b3a5fb106552429fc7c`: Linux x86_64 candidate extracted, relocated, and exercised with the installed worker and synthetic evidence. |
 | P031/P032/P033/P034/P035 regressions | Passed in default and all-features workspace suites. |
 | PTY execution-view validation | Pending; automated render and key-isolation tests pass. |
 | Git diff review / `git diff --check` | Pending final pass. |

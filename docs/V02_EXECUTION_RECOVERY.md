@@ -80,8 +80,10 @@ exactly-once execution.
 
 ## Startup and explicit recovery
 
-Startup reads and validates the journal without performing an App Server mutation. The TUI opens a
-recovery view for unresolved entries and continues to leave the ordinary dashboard available.
+Startup reads and validates the journal without performing an App Server mutation, before drawing
+the first interactive screen. The TUI opens a recovery view for unresolved entries, so a slow App
+Server connection cannot leave a keyboard window before the warning appears. The ordinary
+dashboard remains available after the user returns from recovery.
 Thread and turn IDs are hidden in the list; the user can open the local detail view to inspect them.
 `r` requests reconciliation, `a` acknowledges the warning, `i` explicitly requests an interrupt
 only after a fresh read verifies that the exact known turn is still running, and `Esc` returns to
@@ -108,9 +110,9 @@ acknowledgement remains distinct from authoritative interruption.
 
 ## Tests and terminal behavior
 
-The Unix PTY integration tests launch the compiled `codex-meter` binary with an isolated XDG data
-directory and a synthetic `codex app-server` executable injected only into that test process's
-`PATH`. They exercise Unicode prompt submission, completion, allow-once and deny approvals,
+The Unix PTY integration tests launch the compiled `codex-meter` binary with isolated per-test
+`HOME` and XDG data directories and a synthetic `codex app-server` executable injected only into
+that test process's `PATH`. They exercise Unicode prompt submission, completion, allow-once and deny approvals,
 interrupt acknowledgement followed by terminal interruption, connection loss and read-only
 reconciliation, SIGKILL during active execution, SIGKILL after possible `thread/start` and
 `turn/start` transmissions, restart detection, request counts, and no replay. They run with
@@ -125,7 +127,8 @@ exit, and execution terminal paths use the application cleanup guard.
 
 The PTY tests require Unix `openpty` and do not constitute Windows ConPTY validation. Windows
 storage and terminal behavior remain unverified and execution fails closed there. macOS storage and
-PTY behavior have not run in this environment.
+PTY behavior are covered only when native architecture CI jobs complete; they have not run in the
+local implementation environment.
 
 ## Provenance and limits
 

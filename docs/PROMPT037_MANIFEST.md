@@ -41,8 +41,10 @@ validated thread/turn identities before the next mutation. Terminal state is sto
 reports it as final. An uncertain error, journal failure after possible acceptance, or critical
 event loss leaves an unresolved record. No mutation is automatically retried.
 
-Startup snapshots unresolved records and shows the recovery view. Reconciliation is an explicit
-user action, validates the exact known thread and turn through P036 read-only APIs, and never
+Startup opens and validates the journal before the first interactive draw, then shows the recovery
+view for unresolved records. This prevents startup latency from leaving a keyboard window before
+the warning appears. Reconciliation is an explicit user action, validates the exact known thread
+and turn through P036 read-only APIs, and never
 submits, resumes, approves, or interrupts automatically. A known thread with unknown turn identity
 and an unknown thread remain outcome-unknown; this build does not guess from turn position,
 timestamp, workspace, or prompt content. Warning acknowledgement is stored separately and does
@@ -55,7 +57,7 @@ kept distinct from a terminal interrupted state.
 
 ## PTY and recovery evidence
 
-`pty_execution_recovery.rs` launches the compiled binary on a Unix PTY, isolates XDG data and
+`pty_execution_recovery.rs` launches the compiled binary on a Unix PTY, isolates HOME, XDG data, and
 workspace paths in a temporary directory, and injects a synthetic `codex app-server` executable
 only through that child process's `PATH`. The fake verifies exact prompt bytes and synthetic request
 parameters and counts mutation methods. The scenarios cover:
@@ -74,7 +76,7 @@ parameters and counts mutation methods. The scenarios cover:
 
 SIGKILL bypasses cleanup. Crash tests restore their PTY from the test process before restart and do
 not claim that the killed process restored terminal settings. The PTY framework uses Unix
-`openpty`; Windows ConPTY and macOS PTY runs remain unverified.
+`openpty`; Windows ConPTY remains unverified.
 
 Journal unit tests cover privacy canaries, checksums/truncation, schema mismatch, process-store
 reopen after possible submission, stale compare-and-swap updates, warning acknowledgement without
@@ -112,10 +114,10 @@ task was submitted. The Arch gate remains **Pending**.
 | P030 local release candidate | Passed: clean Linux x86_64 candidate packaged from source `a10de413ba5bf0cac409cd92a2738fa3ac408b2f`; extracted-candidate smoke verified installed worker, estimates, deterministic JSON, version compatibility, and read-only SQLite |
 | P031–P036 regressions | Passed through retained Rust workspace and Python regression suites; no separate per-milestone executable smoke scripts exist |
 | Linux x86_64 | Local implementation environment; Rust, Python, P029, and journal/PTY suites passed |
-| macOS x86_64 and ARM64 | Not run locally; CI pending |
-| Windows x86_64 | Cross-platform CI pending; journal execution deliberately fails closed until ACL-backed storage is implemented |
+| macOS x86_64 and ARM64 | Native CI jobs added; awaiting validation on this head |
+| Windows x86_64 | Previous head's Rust CI passed; journal execution deliberately fails closed until ACL-backed storage is implemented |
 | Arch live read-only validation | **Pending; reference device unavailable** |
-| GitHub Actions | Pending PR creation |
+| GitHub Actions | Corrected startup/isolation tests and native macOS architecture jobs await CI on the latest head; the previous head failed Linux/macOS PTY recovery cases |
 | Merge / release | Not performed; v0.2.0 release is not authorized by this work |
 
 The implementation runtime check was run in a Linux x86_64 workspace; it does not substitute for

@@ -25,7 +25,9 @@ use super::state::{
 };
 use super::theme::Theme;
 use crate::cli::{CliError, TuiArguments};
-use crate::codex_app_server::{ApprovalChoice, ArchiveFilter, ControllerEvent, ExecutionPhase};
+use crate::codex_app_server::{
+    ApprovalChoice, ArchiveFilter, ControllerEvent, ExecutionPhase, RecoveryJournal,
+};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -58,6 +60,9 @@ fn run_with_screen(arguments: TuiArguments, initial_screen: Screen) -> Result<St
             message: "could not determine the default Codex Meter database location".to_owned(),
         })?,
     };
+    // Read recovery before creating workers or entering raw mode. A slow store
+    // read must not leave the terminal hidden or allow input before the warning.
+    let recovery = RecoveryJournal::open_default().and_then(|journal| journal.unresolved());
     let backend = Backend::new(&arguments, database_path).map_err(|_| CliError {
         code: "tui_worker_start_failed",
         message: "could not start bounded local data workers".to_owned(),
@@ -71,10 +76,14 @@ fn run_with_screen(arguments: TuiArguments, initial_screen: Screen) -> Result<St
     let mut state = AppState::default();
     state.active = initial_screen;
     let theme = Theme::detect();
-    let recovery_id = state.next_request_id();
-    state.recovery_request_id = recovery_id;
-    if let Err(error) = backend.refresh_recovery(recovery_id) {
-        state.recovery_error = Some(error);
+    match recovery {
+        Ok(records) => {
+            state.recovery_records = records;
+            if !state.recovery_records.is_empty() {
+                state.overlay = Some(Overlay::ExecutionRecovery);
+            }
+        }
+        Err(error) => state.recovery_error = Some(error.to_string()),
     }
     request_screen(&mut state, &backend, initial_screen);
     terminal.clear().map_err(terminal_error)?;

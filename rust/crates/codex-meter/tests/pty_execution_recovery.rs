@@ -70,7 +70,15 @@ impl TestPaths {
     }
 
     fn journal(&self) -> std::path::PathBuf {
-        self.data.join("codex-meter/recovery/journal.json")
+        #[cfg(target_os = "macos")]
+        {
+            self.root
+                .join("Library/Application Support/codex-meter/recovery/journal.json")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.data.join("codex-meter/recovery/journal.json")
+        }
     }
 
     fn request_count(&self, method: &str) -> usize {
@@ -207,6 +215,10 @@ impl PtyHarness {
             .env("TERM", "xterm-256color")
             .env("NO_COLOR", "1")
             .env("LC_ALL", "C")
+            // macOS stores recovery under ~/Library/Application Support;
+            // point HOME at this test's isolated root so no user's journal
+            // can affect the test and restarts share only this fixture.
+            .env("HOME", &self.paths.root)
             .env("XDG_DATA_HOME", &self.paths.data)
             .env("CODEX_METER_TEST_MODE", mode)
             .env("CODEX_METER_TEST_WORKSPACE", &self.paths.workspace)

@@ -165,8 +165,9 @@ approvals, interruption, and unknown-outcome reconciliation.
 
 App Server request acceptance does not mean completion. The `i` key requests interruption and
 waits for authoritative terminal state. Timeouts and lost lifecycle events become Outcome unknown;
-`r` reconciles by exact known turn ID and never resubmits it. At startup, unresolved records open a
-recovery view. There, `r` explicitly reconciles, `a` acknowledges the warning without changing task
+`r` reconciles by exact known turn ID and never resubmits it. Startup validates recovery records
+before the first interactive draw; unresolved records open a recovery view. There, `r` explicitly
+reconciles, `a` acknowledges the warning without changing task
 status, `i` sends a newly journaled interrupt only after fresh read-only validation reports the
 exact turn is running, and `Esc` returns to the dashboard. `F6` reopens this view. Safe detachment
 is unavailable, so the UI explains that closing the terminal may leave the server-side task running.

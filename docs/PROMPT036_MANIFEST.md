@@ -103,12 +103,14 @@ Codex or consume quota.
 | Contract validation | Passed: 6 schemas, 16 positive fixtures, 5 negative fixtures. |
 | P029 installed-runtime smoke | Passed with the local Linux debug binary and synthetic SQLite evidence. |
 | P030 version policy | Passed: product version remains `0.1.0`. |
-| P030 release-candidate smoke | Passed for source `261b27d6ecedef89577d6d49d0d267ad54f7eb51`: Linux x86_64 candidate extracted, relocated, and exercised with the installed worker and synthetic evidence. |
+| P030 release-candidate smoke | Passed locally for source `261b27d6ecedef89577d6d49d0d267ad54f7eb51`: Linux x86_64 candidate extracted, relocated, and exercised with the installed worker and synthetic evidence. |
+| GitHub Actions CI | Passed for PR head `1c4584e8ab57e812b1b904852e8255e63fec0766`: 15 jobs in run `39714855760`, including Linux, macOS, and Windows Rust jobs and Python 3.11/3.12/3.13 installed-runtime matrix. |
+| GitHub P030 release-candidate matrix | Passed for PR head `1c4584e8ab57e812b1b904852e8255e63fec0766`: all 6 jobs in run `39714855728`, including Linux x86_64, macOS x86_64/ARM64, Windows x86_64, and aggregate provenance verification. |
 | P031/P032/P033/P034/P035 regressions | Passed in default and all-features workspace suites. |
 | PTY execution-view validation | Pending; automated render and key-isolation tests pass. |
 | Git diff review / `git diff --check` | Pending final pass. |
-| GitHub Actions | Running on Draft PR #31 |
-| Linux/macOS x86_64/macOS ARM64/Windows x86_64 | CI pending; only the current Linux environment has run locally |
+| GitHub Actions | Passed on Draft PR #31 head `1c4584e8ab57e812b1b904852e8255e63fec0766` (CI + release-candidate workflows) |
+| Linux/macOS x86_64/macOS ARM64/Windows x86_64 | Rust CI and release-candidate builds passed on all four platform targets; installed-runtime Python matrix passed on Linux, macOS, and Windows |
 | Arch live-device validation | **Pending; reference device unavailable** |
 | PR / merge / release | Draft PR #31 created; no merge or release authorized by P036 |
 

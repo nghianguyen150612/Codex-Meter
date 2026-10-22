@@ -1,9 +1,10 @@
-# Codex Meter TUI dashboard and Composer (P034–P035)
+# Codex Meter TUI dashboard, Composer, and task execution (P034–P036)
 
 P034 adds an interactive Rust terminal dashboard over the existing P031 telemetry ledger, P032
 reporting queries, and P033 Codex App Server services. P035 adds task preparation through the
-Composer. The TUI does not replace the Codex agent runtime and does not submit model turns. It is
-unreleased development functionality and is not part of the published v0.1.0 assets.
+Composer. P036 adds an explicitly confirmed execution overlay around Codex App Server. Codex stays
+the agent runtime. These are unreleased development features and are not part of the published
+v0.1.0 assets.
 
 ## Run
 
@@ -139,9 +140,9 @@ invalidates any open preflight so the user can review the current evidence again
 Review Preflight shows the exact prepared configuration and prompt, latest local five-hour/weekly
 quota observations with timestamps, resets and freshness, local source coverage, and readiness
 limitations. Expected task quota cost remains unavailable without calibrated evidence. Preflight
-uses read-only reporting and metadata calls; it does not call `thread/start`, `turn/start`,
-`thread/resume`, or `thread/read`. The user-facing interface has no enabled execution action;
-execution is planned for P036.
+uses read-only reporting and metadata calls; it does not call `thread/start` or `turn/start`. Press
+`e` from the preflight to request a fresh execution preflight. See the next section for confirmation
+and task execution behavior.
 
 Saved drafts are user-owned documents, separate from telemetry SQLite. Prompt text stays in memory
 until the user explicitly saves it; there is no autosave. On Unix-like systems, versioned plaintext
@@ -149,6 +150,29 @@ draft files are stored in the per-user data directory with private permissions, 
 bounded storage, and no-follow file operations. Permissions are not encryption. Saving is disabled
 where private storage behavior is not implemented. See the
 [Composer guide](V02_PROMPT_COMPOSER.md) for exact storage, shortcuts, and P036 handoff details.
+
+### Task execution
+
+The `e` action performs a fresh preflight with an interactive App Server capability. It does not
+start a task. An explicit confirmation is required before a new thread or turn can be created. An
+existing thread requires an inspect/resume confirmation and then a separate turn confirmation.
+Only idle threads can accept a new turn. The execution overlay shows event-based lifecycle status,
+thread/turn IDs, user-facing streamed output, bounded activity, proposed file changes, explicit
+approvals, interruption, and unknown-outcome reconciliation.
+
+App Server request acceptance does not mean completion. The `i` key requests interruption and
+waits for authoritative terminal state. Timeouts and lost lifecycle events become Outcome unknown;
+`r` reconciles by exact known turn ID and never resubmits it. `q` or `c` opens the exit options while
+a task is active. Safe detachment is unavailable, so the UI explains that closing the terminal may
+leave the server-side task running.
+
+The interactive view displays only user-facing agent response text, relevant tool output, and
+proposed changes; internal reasoning is not displayed. Those values and approval details are
+transient and bounded in memory. They are not written to telemetry SQLite, saved drafts, or
+automatic exports. No durable execution journal or restart recovery exists yet. If Codex Meter exits
+abruptly, inspect the Codex session before manually deciding whether to submit again. Codex may
+persist its own thread history. See the [task execution guide](V02_TASK_EXECUTION.md) for security,
+approvals, lifecycle semantics, and limitations.
 
 ## Data and provenance rules
 
@@ -192,10 +216,11 @@ views. No network upload or cloud synchronization is performed.
 
 ## Privacy and terminal recovery
 
-The TUI consumes only sanitized P031/P032/P033 interfaces. It does not parse raw rollout payloads
-or display prompts, responses, reasoning text, tool content, credentials, raw App Server JSON,
-working-directory paths, or Git remotes. Error text is reduced to bounded local error categories.
-Session metadata and UI state are not persisted.
+The TUI consumes sanitized P031/P032/P033 interfaces and a narrowly allowlisted P036 execution
+event stream. It does not parse raw rollout payloads or display credentials, raw App Server JSON,
+internal reasoning, working-directory paths outside the explicit task review, or Git remotes.
+Prompt and execution output remain transient in-memory data except for drafts the user explicitly
+saves. No execution transcript or UI state is persisted.
 
 `NO_COLOR` disables semantic colors. Selection uses bold styling and text markers in lists, so the
 active row remains interpretable without color. Non-UTF-8 locales receive ASCII borders and
@@ -207,24 +232,25 @@ enabled.
 
 ## Compatibility and validation limits
 
-The telemetry parser remains verified for the audited Codex CLI `0.157.1` format. The App Server
-interface is described upstream as experimental/unsupported for production; this TUI inherits
-P033's protocol compatibility limits. A live empty catalog or missing Codex install is shown as
-unavailable/empty without crashing. P033's service response limits bound session and model metadata;
-the TUI pages rendering at 50 rows, while the service may hold a larger bounded result in its worker.
+The telemetry parser remains verified for the audited Codex CLI `0.157.1` format. P036 generated
+the stable App Server schema using Codex CLI `0.163.0` without the experimental fields flag; the
+CLI still labels the App Server command experimental, and this audit is not a forward-compatibility
+promise. A live empty catalog or missing Codex install is shown as unavailable/empty without
+crashing. App Server requests and interactive events are bounded; the TUI pages ordinary lists at
+50 rows.
 
 No dedicated large-ledger or live rendering benchmark was run. Unit rendering tests cover wide,
 medium, narrow, short, and low-height test backends; the history request remains bounded to 50
 records. This is measured test coverage, not a claim about performance on every terminal or ledger.
 
 The reference Arch Linux desktop was not attached to this implementation environment. Live startup,
-real quota observations, resize, session views, and shell restoration on that device remain an
-explicit gate; controlled fixtures do not establish live quota accuracy or compatibility. See the
-[P034 manifest](PROMPT034_MANIFEST.md) for validation outcomes and PR state.
+real quota observations, model catalog, sandbox configuration, task confirmation, approval view,
+resize, and shell restoration on that device remain an explicit gate; controlled fixtures do not
+establish live compatibility. See the [P036 manifest](PROMPT036_MANIFEST.md) for validation
+outcomes and PR state.
 
-## P035 handoff
+## P037 handoff
 
-P034 stops at observation and guarded session lifecycle actions. Prompt composition, model
-switching, quota prediction, Codex Cloud adapters, persistent project management, PR/CI integration,
-plugin packaging, and cloud workspaces remain future milestones requiring their own evidence and
-scope.
+P036 does not persist a crash-recovery journal. P037 should add private, identifier-only restart
+reconciliation and complete the reference Arch device gate. Quota forecasting, Savings Goals,
+Codex Cloud adapters, PR/CI integration, plugin packaging, and cloud workspaces remain outside P036.

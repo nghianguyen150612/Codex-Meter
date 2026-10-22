@@ -1007,7 +1007,7 @@ pub fn tui_help_text() -> &'static str {
 }
 
 pub fn compose_help_text() -> &'static str {
-    "Codex Meter — prepare a local Codex task\n\nUSAGE:\n    codex-meter compose [--database PATH]\n\nOPTIONS:\n    --database PATH   Read an explicit Codex Meter SQLite database for quota evidence\n    --help            Show this help\n\nCompose opens the Ratatui composer with live model and session metadata. It prepares a typed task, reads quota evidence locally, and saves prompt drafts only on explicit request. It never starts a thread or model turn.\n"
+    "Codex Meter — prepare and explicitly run a local Codex task\n\nUSAGE:\n    codex-meter compose [--database PATH]\n\nOPTIONS:\n    --database PATH   Read an explicit Codex Meter SQLite database for quota evidence\n    --help            Show this help\n\nCompose opens the Ratatui composer with live model and session metadata. Preparation and saved drafts do not start a task. Execution requires fresh preflight and explicit confirmation, then uses the installed Codex App Server. Prompts and execution output remain transient and are not written to the telemetry database.\n"
 }
 
 fn error(code: &'static str, message: &str) -> CliError {

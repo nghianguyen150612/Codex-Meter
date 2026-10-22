@@ -26,6 +26,20 @@ use super::state::{
 use super::theme::Theme;
 
 pub fn draw(frame: &mut Frame<'_>, state: &AppState, theme: Theme) {
+    if matches!(
+        state.overlay,
+        Some(Overlay::ExecutionApproval | Overlay::ExecutionExitConfirm)
+    ) {
+        draw_execution_view(frame, state, theme);
+        if let Some(overlay) = state.overlay.as_ref() {
+            draw_execution_dialog(frame, overlay, state, theme);
+        }
+        return;
+    }
+    if state.overlay == Some(Overlay::ExecutionView) {
+        draw_execution_view(frame, state, theme);
+        return;
+    }
     let layout = responsive_layout(frame.area());
     draw_header(frame, layout.header, state, theme);
     if let Some(tabs) = layout.tabs {
@@ -1644,6 +1658,13 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
 }
 
 fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, theme: Theme) {
+    if matches!(
+        overlay,
+        Overlay::ExecutionConfirm | Overlay::ExecutionApproval | Overlay::ExecutionExitConfirm
+    ) {
+        draw_execution_dialog(frame, overlay, state, theme);
+        return;
+    }
     let area = frame.area();
     if area.width < 20 || area.height < 5 {
         let message = match overlay {
@@ -1718,6 +1739,12 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
         Overlay::ModelDetail => ("Model details", model_detail_lines(state)),
         Overlay::ProjectDetail => ("Project details", project_detail_lines(state)),
         Overlay::EvidenceDetail => ("Evidence details", evidence_detail_lines(state)),
+        Overlay::ExecutionConfirm
+        | Overlay::ExecutionView
+        | Overlay::ExecutionApproval
+        | Overlay::ExecutionExitConfirm => {
+            unreachable!("execution views are rendered above")
+        }
         Overlay::ComposerModelPicker
         | Overlay::ComposerReasoningPicker
         | Overlay::ComposerTargetPicker
@@ -1811,6 +1838,10 @@ fn draw_composer_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppSt
             preflight_lines(state),
             state.composer.preflight_scroll,
         ),
+        Overlay::ExecutionConfirm
+        | Overlay::ExecutionView
+        | Overlay::ExecutionApproval
+        | Overlay::ExecutionExitConfirm => return,
         Overlay::UnsavedDraftExit => (
             "Unsaved in-memory task",
             vec![
@@ -1837,7 +1868,7 @@ fn draw_composer_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppSt
         Overlay::ComposerDraftDeleteConfirm => "y delete | n/Esc cancel",
         Overlay::ComposerTemplatePicker => "Up/Down select | Enter insert for editing | Esc close",
         Overlay::ComposerPreflight => {
-            "Up/Down scroll | s save | Esc return | execution is planned for P036"
+            "Up/Down scroll | s save | e fresh execution preflight | Esc return"
         }
         Overlay::UnsavedDraftExit => "y quit | n return | s save",
         _ => "",
@@ -1868,6 +1899,393 @@ fn draw_composer_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppSt
             .wrap(Wrap { trim: true }),
         footer_area,
     );
+}
+
+fn draw_execution_view(frame: &mut Frame<'_>, state: &AppState, theme: Theme) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+    if area.width < 20 || area.height < 5 {
+        frame.render_widget(
+            Paragraph::new("Resize terminal to view Codex task execution")
+                .style(theme.warning())
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+    let title = format!(
+        "CODEX METER — TASK EXECUTION | {}",
+        state.execution.phase.label()
+    );
+    let outer = Block::default()
+        .title(title)
+        .border_set(theme.border_set())
+        .borders(Borders::ALL)
+        .border_style(theme.title());
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+    let preflight = state.execution.preflight.as_ref();
+    let thread = state
+        .execution
+        .thread_id
+        .as_deref()
+        .or_else(|| preflight.and_then(|value| value.thread_id.as_deref()))
+        .unwrap_or("Pending Codex response");
+    let model = preflight.map_or("Unknown", |value| value.model.as_str());
+    let header = vec![
+        Line::from(format!(
+            "Thread: {} | Turn: {}",
+            clean(thread, 64),
+            state.execution.turn_id.as_deref().unwrap_or("Pending")
+        )),
+        Line::from(format!("Model: {}", clean(model, 100))),
+        Line::from(format!("Status: {}", state.execution.phase.label())),
+    ];
+    frame.render_widget(
+        Paragraph::new(header).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(theme.border()),
+        ),
+        chunks[0],
+    );
+    let body = if chunks[1].width >= 82 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+            .split(chunks[1])
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(chunks[1])
+    };
+    let activity = if state.execution.activity.is_empty() {
+        "Waiting for Codex lifecycle events.".to_owned()
+    } else {
+        state
+            .execution
+            .activity
+            .iter()
+            .map(|line| format!("• {}", clean(line, 300)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    frame.render_widget(
+        Paragraph::new(activity).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title("ACTIVITY")
+                .border_set(theme.border_set())
+                .borders(Borders::ALL)
+                .border_style(theme.border()),
+        ),
+        body[0],
+    );
+    let output = if state.execution.phase.terminal() {
+        let result = if state.execution.output.is_empty() {
+            "No user-facing final response was received.".to_owned()
+        } else {
+            state.execution.output.clone()
+        };
+        let quota = preflight.map_or_else(
+            || "Quota: Unavailable".to_owned(),
+            |value| {
+                format!(
+                    "Quota: {}; {}",
+                    quota_confirmation_line("5-hour", value.quota_snapshot.five_hour.as_ref()),
+                    quota_confirmation_line("weekly", value.quota_snapshot.weekly.as_ref())
+                )
+            },
+        );
+        format!(
+            "TASK RESULT\nStatus: {}\nThread: {}\nTurn: {}\nModel: {}\nToken usage: Unavailable\n{}\n\nResult:\n{}",
+            state.execution.phase.label(),
+            state.execution.thread_id.as_deref().unwrap_or("Unknown"),
+            state.execution.turn_id.as_deref().unwrap_or("Unknown"),
+            model,
+            quota,
+            result
+        )
+    } else if state.execution.show_details {
+        format!(
+            "OUTPUT\n{}\n\nTOOL OUTPUT\n{}\n\nPROPOSED CHANGES\n{}",
+            state.execution.output, state.execution.tool_output, state.execution.diff
+        )
+    } else if state.execution.output.is_empty() {
+        "No user-facing response received yet. Tool progress appears in Activity; Codex may still be working.".to_owned()
+    } else {
+        state.execution.output.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(output)
+            .wrap(Wrap { trim: false })
+            .scroll((state.execution.scroll, 0))
+            .block(
+                Block::default()
+                    .title(if state.execution.show_details {
+                        "OUTPUT / TOOL DETAILS / PROPOSED CHANGES"
+                    } else {
+                        "USER-FACING OUTPUT"
+                    })
+                    .border_set(theme.border_set())
+                    .borders(Borders::ALL)
+                    .border_style(theme.border()),
+            ),
+        body[1],
+    );
+    let shortcuts = match state.execution.phase {
+        crate::codex_app_server::ExecutionPhase::OutcomeUnknown => {
+            "r reconcile | d details | Up/Down scroll | Esc return to dashboard".to_owned()
+        }
+        phase if phase.terminal() => {
+            "d details | Up/Down scroll | Enter return to dashboard".to_owned()
+        }
+        _ => "i interrupt | a approvals | d details | Up/Down scroll | q exit options".to_owned(),
+    };
+    let controls = if let Some(status) = state.execution.status.as_deref() {
+        format!("{} | {}", clean(status, 120), shortcuts)
+    } else {
+        shortcuts
+    };
+    frame.render_widget(
+        Paragraph::new(controls)
+            .style(theme.muted())
+            .wrap(Wrap { trim: true }),
+        chunks[2],
+    );
+}
+
+fn draw_execution_dialog(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, theme: Theme) {
+    let area = frame.area();
+    if area.width < 18 || area.height < 5 {
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new("Resize to review execution safely")
+                .style(theme.warning())
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+    let (title, lines, footer) = match overlay {
+        Overlay::ExecutionConfirm => {
+            let mut lines = vec![Line::from("TASK EXECUTION")];
+            if let Some(preflight) = state.execution.preflight.as_ref() {
+                let target = match preflight.target_kind {
+                    TargetKind::NewThread => "New thread".to_owned(),
+                    TargetKind::ExistingThread => preflight.thread_id.as_deref().map_or_else(
+                        || "Existing thread (unknown)".to_owned(),
+                        |id| format!("Existing thread ({})", clean(id, 48)),
+                    ),
+                };
+                lines.extend([
+                    Line::from(format!("Target:         {target}")),
+                    Line::from(format!("Model:          {}", clean(&preflight.model, 96))),
+                    Line::from(format!(
+                        "Reasoning:      {}",
+                        clean(&preflight.reasoning, 72)
+                    )),
+                    Line::from(format!(
+                        "Workspace:      {}",
+                        clean(&preflight.workspace, 100)
+                    )),
+                    Line::from(format!(
+                        "Sandbox:        {}",
+                        preflight
+                            .sandbox
+                            .map_or("Unverified".to_owned(), |value| value.label().to_owned())
+                    )),
+                    Line::from(format!(
+                        "Approval mode:  {}",
+                        preflight
+                            .approval
+                            .map_or("Unverified".to_owned(), |value| value.label().to_owned())
+                    )),
+                    Line::from(format!(
+                        "Reviewer:       {}",
+                        clean(&preflight.approval_reviewer, 88)
+                    )),
+                    Line::from(format!(
+                        "Network access: {}",
+                        preflight
+                            .network_access
+                            .map_or("Unknown".to_owned(), |value| if value {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            }
+                            .to_owned())
+                    )),
+                    Line::from(quota_confirmation_line(
+                        "5-hour quota",
+                        preflight.quota_snapshot.five_hour.as_ref(),
+                    )),
+                    Line::from(quota_confirmation_line(
+                        "Weekly quota",
+                        preflight.quota_snapshot.weekly.as_ref(),
+                    )),
+                    Line::from("Task cost:      Unavailable (not calibrated)"),
+                    Line::from(format!(
+                        "Prompt preview: {}",
+                        clean(state.composer.editor.text(), 240)
+                    )),
+                ]);
+                if preflight.existing_settings_pending {
+                    lines.push(Line::from("First confirmation loads the selected thread and reads its current Codex security settings. No turn starts yet."));
+                } else {
+                    lines.push(Line::from("This action starts a real Codex task."));
+                }
+            } else if let Some(status) = state.execution.status.as_deref() {
+                lines.push(Line::from(format!(
+                    "Fresh preflight unavailable: {}",
+                    clean(status, 320)
+                )));
+                lines.push(Line::from("No thread or turn was started."));
+            } else {
+                lines.push(Line::from(
+                    "Checking Codex configuration. No thread or turn is being started.",
+                ));
+            }
+            (
+                "Confirm Codex task",
+                lines,
+                if state.execution.pending {
+                    "Please wait | no duplicate submission"
+                } else if state.execution.preflight.is_some() {
+                    if state
+                        .execution
+                        .preflight
+                        .as_ref()
+                        .is_some_and(|value| value.existing_settings_pending)
+                    {
+                        "Enter inspect thread settings | n/Esc cancel"
+                    } else {
+                        "Enter confirm and submit once | n/Esc cancel"
+                    }
+                } else {
+                    "Esc return | task remains unsubmitted"
+                },
+            )
+        }
+        Overlay::ExecutionApproval => {
+            let mut lines = vec![Line::from("APPROVAL REQUIRED")];
+            if let Some(approval) = state.execution.approvals.front() {
+                lines.push(Line::from(format!(
+                    "Type: {}",
+                    if approval.network_request {
+                        "Network access request"
+                    } else {
+                        approval.kind.label()
+                    }
+                )));
+                lines.push(Line::from("Requested action:"));
+                lines.push(Line::from(clean(&approval.requested_action, 320)));
+                if let Some(context) = approval.working_context.as_deref() {
+                    lines.push(Line::from(format!(
+                        "Working context: {}",
+                        clean(context, 160)
+                    )));
+                }
+                lines.push(Line::from(clean(&approval.details, 1600)));
+                lines.push(Line::from(format!(
+                    "Request: {}",
+                    clean(&approval.request_id, 96)
+                )));
+                if !approval.allow_once_available {
+                    lines.push(Line::from("Allow Once is disabled because the requested details are incomplete or unsupported."));
+                }
+            } else {
+                lines.push(Line::from("The pending request is no longer available."));
+            }
+            (
+                "Codex approval",
+                lines,
+                "Enter / n deny | a allow once when available | c cancel command/file | Esc deny",
+            )
+        }
+        Overlay::ExecutionExitConfirm => (
+            "Execution still active",
+            vec![
+                Line::from(
+                    "Closing this terminal does not necessarily stop the Codex server-side turn.",
+                ),
+                Line::from(
+                    "Safe detachment is not available in this build. Keep the execution view open.",
+                ),
+                Line::from(
+                    "Continue watching, or request an interrupt and wait for Codex's final state.",
+                ),
+                Line::from(format!("Current state: {}", state.execution.phase.label())),
+            ],
+            "Esc / c continue watching | Enter / i request interrupt",
+        ),
+        _ => return,
+    };
+    let width = area.width.saturating_sub(4).clamp(14, 110);
+    let height = area.height.saturating_sub(2).max(3);
+    let modal = centered(area, width, height);
+    frame.render_widget(Clear, modal);
+    let body = Rect {
+        x: modal.x.saturating_add(1),
+        y: modal.y.saturating_add(1),
+        width: modal.width.saturating_sub(2),
+        height: modal.height.saturating_sub(3),
+    };
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(title)
+                    .border_set(theme.border_set())
+                    .borders(Borders::ALL)
+                    .border_style(theme.title()),
+            ),
+        modal,
+    );
+    frame.render_widget(
+        Paragraph::new(footer)
+            .style(theme.muted())
+            .wrap(Wrap { trim: true }),
+        Rect {
+            y: body.y.saturating_add(body.height),
+            height: 1,
+            ..body
+        },
+    );
+}
+
+fn quota_confirmation_line(
+    label: &str,
+    observation: Option<&crate::tui::composer::QuotaObservation>,
+) -> String {
+    let Some(value) = observation else {
+        return format!("{label}:   Unavailable");
+    };
+    let freshness = match value.freshness {
+        QuotaFreshness::Fresh => "Last observed",
+        QuotaFreshness::Stale | QuotaFreshness::TimeUnavailable | QuotaFreshness::Invalid => {
+            "Stale"
+        }
+    };
+    let reset = value
+        .reset_at
+        .as_deref()
+        .map_or_else(String::new, |value| format!("; reset {}", clean(value, 36)));
+    format!(
+        "{label}:   {freshness} {:.1}% at {}{}",
+        value.used_percent,
+        clean(&value.observed_at, 36),
+        reset
+    )
 }
 
 fn model_picker_lines(state: &AppState) -> Vec<Line<'static>> {
@@ -2826,6 +3244,79 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(content.contains("Resize"));
+    }
+
+    #[test]
+    fn execution_view_streams_output_shows_approval_and_summarizes_authoritative_failure() {
+        let mut state = AppState::default();
+        state.overlay = Some(Overlay::ExecutionView);
+        state.execution.phase = crate::codex_app_server::ExecutionPhase::Running;
+        state.execution.thread_id = Some("thread-test".to_owned());
+        state.execution.turn_id = Some("turn-test".to_owned());
+        state.execution.output = "USER_VISIBLE_OUTPUT_SENTINEL".to_owned();
+        state.execution.tool_output = "TOOL_OUTPUT_SENTINEL".to_owned();
+        state.execution.diff = "FILE_DIFF_SENTINEL".to_owned();
+        let mut terminal = Terminal::new(TestBackend::new(110, 32)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(rendered.contains("USER_VISIBLE_OUTPUT_SENTINEL"));
+        assert!(rendered.contains("Running"));
+        assert!(!rendered.contains("INTERNAL_REASONING_SENTINEL"));
+
+        state
+            .execution
+            .approvals
+            .push_back(crate::codex_app_server::ApprovalView {
+                request_id: "approval-test".to_owned(),
+                kind: crate::codex_app_server::ApprovalKind::CommandExecution,
+                requested_action: "cargo test".to_owned(),
+                working_context: Some("workspace".to_owned()),
+                details: "validated approval details".to_owned(),
+                allow_once_available: true,
+                network_request: false,
+            });
+        state.overlay = Some(Overlay::ExecutionApproval);
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(rendered.contains("APPROVAL REQUIRED"));
+        assert!(rendered.contains("validated approval details"));
+        assert!(rendered.contains("deny"));
+
+        state.overlay = Some(Overlay::ExecutionView);
+        state.execution.phase = crate::codex_app_server::ExecutionPhase::Failed;
+        state.execution.output.clear();
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(rendered.contains("TASK RESULT"));
+        assert!(rendered.contains("No user-facing final response was received."));
+        assert!(!rendered.contains("Codex completed without a user-facing final response"));
     }
 
     #[test]

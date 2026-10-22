@@ -19,7 +19,8 @@ fn compose_help_is_available_without_a_terminal_and_keeps_no_arg_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("codex-meter compose [--database PATH]"));
-    assert!(stdout.contains("never starts a thread or model turn"));
+    assert!(stdout.contains("fresh preflight and explicit confirmation"));
+    assert!(stdout.contains("Prompts and execution output remain transient"));
     assert!(!stdout.contains('\u{1b}'));
 }
 

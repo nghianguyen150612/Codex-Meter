@@ -5,7 +5,7 @@ use super::protocol::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,6 +17,26 @@ use std::time::{Duration, Instant};
 const STDERR_READ_BUFFER: usize = 8 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const EOF_PROCESS_EXIT_GRACE: Duration = Duration::from_millis(100);
+const MAX_EXECUTION_EVENT_BYTES: usize = 128 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ClientCapability {
+    ReadOnlyManagement,
+    InteractiveExecution,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum IncomingMessage {
+    Notification {
+        method: String,
+        params: Value,
+    },
+    ServerRequest {
+        id: Value,
+        method: String,
+        params: Value,
+    },
+}
 
 #[derive(Clone, Debug)]
 enum TransportFault {
@@ -27,6 +47,7 @@ enum TransportFault {
     UnexpectedProcessExit,
     ProcessIoFailure,
     MalformedResponse,
+    CriticalEventLoss,
 }
 
 impl TransportFault {
@@ -39,6 +60,7 @@ impl TransportFault {
             Self::UnexpectedProcessExit => CodexAppError::UnexpectedProcessExit,
             Self::ProcessIoFailure => CodexAppError::ProcessIoFailure,
             Self::MalformedResponse => CodexAppError::MalformedResponse,
+            Self::CriticalEventLoss => CodexAppError::CriticalEventLoss,
         }
     }
 }
@@ -55,7 +77,7 @@ struct SharedState {
     next_id: AtomicU64,
     issued_ids: AtomicU64,
     terminal: Mutex<Option<TransportFault>>,
-    notification_sender: SyncSender<String>,
+    notification_sender: SyncSender<IncomingMessage>,
     dropped_notifications: AtomicU64,
     stderr_bytes_read: AtomicU64,
     unsupported_hint: AtomicBool,
@@ -63,6 +85,7 @@ struct SharedState {
     initialized: AtomicBool,
     process_exited: AtomicBool,
     closing: AtomicBool,
+    critical_event_loss: AtomicBool,
 }
 
 enum PendingResponse {
@@ -118,15 +141,22 @@ impl SharedState {
 
 /// One bounded stdio process connection. The application layer owns and drops it.
 pub(crate) struct ProcessTransport {
+    program: OsString,
+    args: Vec<OsString>,
     writer: Arc<Mutex<ChildStdin>>,
     child: Arc<Mutex<Child>>,
     state: Arc<SharedState>,
-    notification_receiver: Mutex<Receiver<String>>,
+    notification_receiver: Mutex<Receiver<IncomingMessage>>,
+    capability: ClientCapability,
     workers: Vec<JoinHandle<()>>,
 }
 
 impl ProcessTransport {
-    pub(crate) fn spawn(program: &OsStr, args: &[&OsStr]) -> Result<Self, CodexAppError> {
+    pub(crate) fn spawn(
+        program: &OsStr,
+        args: &[&OsStr],
+        capability: ClientCapability,
+    ) -> Result<Self, CodexAppError> {
         let mut command = Command::new(program);
         command
             .args(args)
@@ -169,6 +199,7 @@ impl ProcessTransport {
             initialized: AtomicBool::new(false),
             process_exited: AtomicBool::new(false),
             closing: AtomicBool::new(false),
+            critical_event_loss: AtomicBool::new(false),
         });
 
         let mut workers = Vec::with_capacity(3);
@@ -179,7 +210,7 @@ impl ProcessTransport {
             workers.push(
                 thread::Builder::new()
                     .name("codex-meter-app-server-reader".to_owned())
-                    .spawn(move || read_stdout(stdout, state, writer, child))
+                    .spawn(move || read_stdout(stdout, state, writer, child, capability))
                     .map_err(|_| CodexAppError::AppServerStartupFailure)?,
             );
         }
@@ -204,12 +235,24 @@ impl ProcessTransport {
         }
 
         Ok(Self {
+            program: program.to_os_string(),
+            args: args.iter().map(|value| value.to_os_string()).collect(),
             writer,
             child,
             state,
             notification_receiver: Mutex::new(notification_receiver),
+            capability,
             workers,
         })
+    }
+
+    pub(crate) fn reconnect(&self) -> Result<Self, CodexAppError> {
+        let args = self
+            .args
+            .iter()
+            .map(OsString::as_os_str)
+            .collect::<Vec<_>>();
+        Self::spawn(self.program.as_os_str(), &args, self.capability)
     }
 
     pub(crate) fn request(
@@ -226,11 +269,18 @@ impl ProcessTransport {
         if (!initialized && method != "initialize") || (initialized && method == "initialize") {
             return Err(CodexAppError::InitializationFailure);
         }
+        if !super::protocol::request_allowed(self.capability, method) {
+            return Err(CodexAppError::UnsupportedMethod(method));
+        }
         let id = self.state.allocate_id()?;
         let (sender, receiver) = mpsc::channel();
         {
             let mut pending = self.state.pending.lock().unwrap_or_else(|e| e.into_inner());
-            if pending.len() >= MAX_PENDING_REQUESTS {
+            let request_limit = match self.capability {
+                ClientCapability::ReadOnlyManagement => MAX_PENDING_REQUESTS,
+                ClientCapability::InteractiveExecution => 8,
+            };
+            if pending.len() >= request_limit {
                 return Err(CodexAppError::RequestLimitExceeded);
             }
             pending.insert(id, sender);
@@ -278,11 +328,69 @@ impl ProcessTransport {
     }
 
     pub(crate) fn try_notification(&self) -> Option<String> {
+        match self
+            .notification_receiver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_recv()
+            .ok()?
+        {
+            IncomingMessage::Notification { method, .. } => Some(method),
+            IncomingMessage::ServerRequest { .. } => None,
+        }
+    }
+
+    pub(crate) fn try_incoming(&self) -> Option<IncomingMessage> {
+        if self.capability != ClientCapability::InteractiveExecution {
+            return None;
+        }
         self.notification_receiver
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .try_recv()
             .ok()
+    }
+
+    pub(crate) fn respond_server_request(
+        &self,
+        id: Value,
+        result: Value,
+    ) -> Result<(), CodexAppError> {
+        if self.capability != ClientCapability::InteractiveExecution
+            || !super::protocol::valid_request_id(&id)
+        {
+            return Err(CodexAppError::MalformedResponse);
+        }
+        self.write_value(
+            &super::protocol::server_response(id, result),
+            Instant::now() + Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        )
+    }
+
+    pub(crate) fn reject_server_request(
+        &self,
+        id: Value,
+        code: i64,
+        message: &str,
+    ) -> Result<(), CodexAppError> {
+        if self.capability != ClientCapability::InteractiveExecution
+            || !super::protocol::valid_request_id(&id)
+            || message.len() > 256
+        {
+            return Err(CodexAppError::MalformedResponse);
+        }
+        self.write_value(
+            &super::protocol::server_error_response(id, code, message),
+            Instant::now() + Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        )
+    }
+
+    pub(crate) fn critical_event_loss(&self) -> bool {
+        self.state.critical_event_loss.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn connection_error(&self) -> Option<CodexAppError> {
+        self.state.current_fault().map(|fault| fault.error())
     }
 
     pub(crate) fn dropped_notifications(&self) -> u64 {
@@ -388,6 +496,7 @@ fn read_stdout(
     state: Arc<SharedState>,
     writer: Arc<Mutex<ChildStdin>>,
     child: Arc<Mutex<Child>>,
+    capability: ClientCapability,
 ) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -397,7 +506,7 @@ fn read_stdout(
                     state.fail(TransportFault::MalformedResponse);
                     return;
                 };
-                if let Err(error) = route_message(value, &state, &writer) {
+                if let Err(error) = route_message(value, &state, &writer, capability) {
                     state.fail(match error {
                         RouteMessageError::Malformed => TransportFault::MalformedResponse,
                         RouteMessageError::Io => TransportFault::ProcessIoFailure,
@@ -499,6 +608,7 @@ fn route_message(
     value: Value,
     state: &SharedState,
     writer: &Arc<Mutex<ChildStdin>>,
+    capability: ClientCapability,
 ) -> Result<(), RouteMessageError> {
     let malformed = || RouteMessageError::Malformed;
     let object = value.as_object().ok_or_else(malformed)?;
@@ -508,23 +618,77 @@ fn route_message(
             return Err(RouteMessageError::Malformed);
         }
         if let Some(id) = object.get("id") {
-            let response = reject_server_request(id.clone());
-            let mut bytes = serde_json::to_vec(&response).map_err(|_| malformed())?;
-            bytes.push(b'\n');
-            if bytes.len() > MAX_MESSAGE_BYTES {
-                return Err(RouteMessageError::Malformed);
+            let params = object.get("params").cloned().unwrap_or(Value::Null);
+            if capability == ClientCapability::InteractiveExecution
+                && super::protocol::server_request_supported(method)
+                && super::protocol::valid_request_id(id)
+            {
+                if serde_json::to_vec(&params)
+                    .map_or(true, |bytes| bytes.len() > MAX_EXECUTION_EVENT_BYTES)
+                {
+                    state.critical_event_loss.store(true, Ordering::Release);
+                    state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+                    state.fail(TransportFault::CriticalEventLoss);
+                    send_direct_response(
+                        writer,
+                        &super::protocol::reject_overflowed_request(id.clone()),
+                    )?;
+                    return Ok(());
+                }
+                let incoming = IncomingMessage::ServerRequest {
+                    id: id.clone(),
+                    method: method.to_owned(),
+                    params,
+                };
+                if state.notification_sender.try_send(incoming).is_err() {
+                    state.critical_event_loss.store(true, Ordering::Release);
+                    state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+                    state.fail(TransportFault::CriticalEventLoss);
+                    send_direct_response(
+                        writer,
+                        &super::protocol::reject_overflowed_request(id.clone()),
+                    )?;
+                }
+            } else {
+                send_direct_response(writer, &reject_server_request(id.clone()))?;
             }
-            let mut writer = writer.lock().map_err(|_| RouteMessageError::Io)?;
-            writer
-                .write_all(&bytes)
-                .and_then(|()| writer.flush())
-                .map_err(|_| RouteMessageError::Io)?;
-        } else if state
-            .notification_sender
-            .try_send(method.to_owned())
-            .is_err()
-        {
-            state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+        } else if capability == ClientCapability::ReadOnlyManagement {
+            if state
+                .notification_sender
+                .try_send(IncomingMessage::Notification {
+                    method: method.to_owned(),
+                    params: Value::Null,
+                })
+                .is_err()
+            {
+                state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+            }
+        } else if super::protocol::notification_supported(method) {
+            let params = object.get("params").cloned().unwrap_or(Value::Null);
+            let oversized = serde_json::to_vec(&params)
+                .map_or(true, |bytes| bytes.len() > MAX_EXECUTION_EVENT_BYTES);
+            if oversized {
+                state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+                if super::protocol::notification_is_critical(method) {
+                    state.critical_event_loss.store(true, Ordering::Release);
+                    state.fail(TransportFault::CriticalEventLoss);
+                }
+                return Ok(());
+            }
+            if state
+                .notification_sender
+                .try_send(IncomingMessage::Notification {
+                    method: method.to_owned(),
+                    params,
+                })
+                .is_err()
+            {
+                state.dropped_notifications.fetch_add(1, Ordering::Relaxed);
+                if super::protocol::notification_is_critical(method) {
+                    state.critical_event_loss.store(true, Ordering::Release);
+                    state.fail(TransportFault::CriticalEventLoss);
+                }
+            }
         }
         return Ok(());
     }
@@ -554,6 +718,22 @@ fn route_message(
         return Err(RouteMessageError::Malformed);
     }
     Ok(())
+}
+
+fn send_direct_response(
+    writer: &Arc<Mutex<ChildStdin>>,
+    response: &Value,
+) -> Result<(), RouteMessageError> {
+    let mut bytes = serde_json::to_vec(response).map_err(|_| RouteMessageError::Malformed)?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_MESSAGE_BYTES {
+        return Err(RouteMessageError::Malformed);
+    }
+    let mut writer = writer.lock().map_err(|_| RouteMessageError::Io)?;
+    writer
+        .write_all(&bytes)
+        .and_then(|()| writer.flush())
+        .map_err(|_| RouteMessageError::Io)
 }
 
 fn parse_response_error(error: &Value) -> RpcResponseError {
@@ -688,10 +868,23 @@ mod tests {
     }
 
     fn client(mode: &str, timeout: Duration) -> ProcessTransport {
+        client_with_capability(mode, timeout, ClientCapability::ReadOnlyManagement)
+    }
+
+    fn interactive_client(mode: &str, timeout: Duration) -> ProcessTransport {
+        client_with_capability(mode, timeout, ClientCapability::InteractiveExecution)
+    }
+
+    fn client_with_capability(
+        mode: &str,
+        timeout: Duration,
+        capability: ClientCapability,
+    ) -> ProcessTransport {
         let program = python();
         let script = script();
         let args = [script.as_os_str(), OsStr::new(mode)];
-        let transport = ProcessTransport::spawn(&program, &args).expect("fake server starts");
+        let transport =
+            ProcessTransport::spawn(&program, &args, capability).expect("fake server starts");
         let initialize = transport
             .request(
                 "initialize",
@@ -765,6 +958,84 @@ mod tests {
                 .unwrap(),
             json!({"approved":false,"code":-32601})
         );
+    }
+
+    #[test]
+    fn interactive_routes_typed_messages_and_approval_response_without_blocking() {
+        let client = Arc::new(interactive_client(
+            "interactive_request",
+            Duration::from_secs(2),
+        ));
+        let request_client = Arc::clone(&client);
+        let request = thread::spawn(move || {
+            request_client.request(
+                "thread/read",
+                json!({"threadId":"thread-test","includeTurns":false}),
+                Duration::from_secs(2),
+            )
+        });
+        let mut approval = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && approval.is_none() {
+            match client.try_incoming() {
+                Some(IncomingMessage::Notification { method, params }) => {
+                    assert_eq!(method, "turn/started");
+                    assert_eq!(params["turn"]["id"], "turn-test");
+                }
+                Some(message @ IncomingMessage::ServerRequest { .. }) => approval = Some(message),
+                None => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        let Some(IncomingMessage::ServerRequest { id, method, params }) = approval else {
+            panic!("interactive approval request must be delivered to the broker");
+        };
+        assert_eq!(id, json!("approval-test"));
+        assert_eq!(method, "item/commandExecution/requestApproval");
+        assert_eq!(params["command"], "printf safe");
+        client
+            .respond_server_request(id, json!({"decision":"accept"}))
+            .expect("explicit decision response");
+        assert_eq!(request.join().unwrap().unwrap(), json!({"approved":true}));
+    }
+
+    #[test]
+    fn interactive_unknown_server_requests_are_rejected_without_dispatch() {
+        let client = interactive_client("server_request", Duration::from_secs(2));
+        assert_eq!(
+            client
+                .request(
+                    "thread/read",
+                    json!({"threadId":"thread-test","includeTurns":false}),
+                    Duration::from_secs(2),
+                )
+                .unwrap(),
+            json!({"approved":false,"code":-32601})
+        );
+        assert!(client.try_incoming().is_none());
+    }
+
+    #[test]
+    fn critical_notification_queue_overflow_is_reported_as_transport_failure() {
+        let client = interactive_client("interactive_notification_flood", Duration::from_secs(2));
+        let result = client.request(
+            "thread/read",
+            json!({"threadId":"thread-test","includeTurns":false}),
+            Duration::from_secs(2),
+        );
+        assert_eq!(result.unwrap_err(), CodexAppError::CriticalEventLoss);
+        assert!(client.critical_event_loss());
+    }
+
+    #[test]
+    fn oversized_critical_execution_event_requires_recovery() {
+        let client = interactive_client("interactive_oversized_event", Duration::from_secs(2));
+        let result = client.request(
+            "thread/read",
+            json!({"threadId":"thread-test","includeTurns":false}),
+            Duration::from_secs(2),
+        );
+        assert_eq!(result.unwrap_err(), CodexAppError::CriticalEventLoss);
+        assert!(client.critical_event_loss());
     }
 
     #[test]

@@ -9,7 +9,8 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime, Ti
 
 use crate::cli::{self, TuiArguments};
 use crate::codex_app_server::{
-    CodexAppError, CodexAppServer, ModelCatalog, ProjectSummary, SessionDetail, SessionListOptions,
+    ApprovalChoice, CodexAppError, CodexAppServer, ControllerEvent, ExecutionPreflight,
+    InteractiveExecution, ModelCatalog, ProjectSummary, SessionDetail, SessionListOptions,
     SessionMetadata,
 };
 use crate::storage::{
@@ -17,6 +18,7 @@ use crate::storage::{
     SqliteReadStore, StorageError, TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery,
     TokenStatistics, TokenStatisticsQuery,
 };
+use crate::tui::composer::PreparedTask;
 
 use super::state::HistoryScope;
 
@@ -47,7 +49,6 @@ pub enum MutationKind {
     Sync,
 }
 
-#[derive(Debug)]
 pub enum BackendEvent {
     Overview {
         id: u64,
@@ -86,6 +87,20 @@ pub enum BackendEvent {
         kind: MutationKind,
         result: Result<String, String>,
     },
+    ExecutionPreflight {
+        id: u64,
+        result: Result<ExecutionPreflight, String>,
+    },
+    ExecutionProgress {
+        id: u64,
+        event: ControllerEvent,
+    },
+    ExecutionActionComplete {
+        id: u64,
+    },
+    ExecutionCancelled {
+        id: u64,
+    },
 }
 
 enum DatabaseCommand {
@@ -112,12 +127,51 @@ enum DatabaseCommand {
 }
 
 enum AppServerCommand {
-    Sessions { id: u64 },
-    SessionDetail { id: u64, thread_id: String },
-    Projects { id: u64 },
-    Models { id: u64 },
-    Resume { id: u64, thread_id: String },
-    Fork { id: u64, thread_id: String },
+    Sessions {
+        id: u64,
+    },
+    SessionDetail {
+        id: u64,
+        thread_id: String,
+    },
+    Projects {
+        id: u64,
+    },
+    Models {
+        id: u64,
+    },
+    Resume {
+        id: u64,
+        thread_id: String,
+    },
+    Fork {
+        id: u64,
+        thread_id: String,
+    },
+    PrepareExecution {
+        id: u64,
+        task: Box<PreparedTask>,
+    },
+    InspectExecution {
+        id: u64,
+    },
+    SubmitExecution {
+        id: u64,
+    },
+    DecideApproval {
+        id: u64,
+        request_id: String,
+        choice: ApprovalChoice,
+    },
+    InterruptExecution {
+        id: u64,
+    },
+    ReconcileExecution {
+        id: u64,
+    },
+    CancelExecution {
+        id: u64,
+    },
 }
 
 pub struct Backend {
@@ -261,6 +315,46 @@ impl Backend {
 
     pub fn request_fork(&self, id: u64, thread_id: String) -> Result<(), String> {
         self.send_app_server(AppServerCommand::Fork { id, thread_id })
+    }
+
+    pub fn prepare_execution(&self, id: u64, task: PreparedTask) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::PrepareExecution {
+            id,
+            task: Box::new(task),
+        })
+    }
+
+    pub fn inspect_execution(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::InspectExecution { id })
+    }
+
+    pub fn submit_execution(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::SubmitExecution { id })
+    }
+
+    pub fn decide_approval(
+        &self,
+        id: u64,
+        request_id: String,
+        choice: ApprovalChoice,
+    ) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::DecideApproval {
+            id,
+            request_id,
+            choice,
+        })
+    }
+
+    pub fn interrupt_execution(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::InterruptExecution { id })
+    }
+
+    pub fn reconcile_execution(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::ReconcileExecution { id })
+    }
+
+    pub fn cancel_execution(&self, id: u64) -> Result<(), String> {
+        self.send_app_server(AppServerCommand::CancelExecution { id })
     }
 
     pub fn request_sync(&self, id: u64) -> Result<(), String> {
@@ -523,92 +617,372 @@ fn app_server_worker(
     shutdown: Arc<AtomicBool>,
 ) {
     let mut client: Option<CodexAppServer> = None;
-    while let Some(command) = receive_command(&receiver, &shutdown) {
+    let mut execution: Option<(u64, InteractiveExecution)> = None;
+    loop {
         if shutdown.load(Ordering::Acquire) {
             return;
         }
-        let (event, failed) = match command {
-            AppServerCommand::Sessions { id } => {
-                let mut result = with_client(&mut client, connector, |client| {
-                    client.list_sessions(&SessionListOptions {
-                        archive_filter: crate::codex_app_server::ArchiveFilter::All,
-                        active_only: false,
-                        limit: None,
-                    })
-                });
-                if let Ok(sessions) = result.as_mut() {
-                    sessions.sort_by(|left, right| {
-                        right
-                            .updated_at
-                            .cmp(&left.updated_at)
-                            .then_with(|| left.thread_id.cmp(&right.thread_id))
-                    });
-                }
-                (BackendEvent::Sessions { id, result }, client.is_none())
+        if let Some((execution_id, controller)) = execution.as_mut() {
+            if !send_controller_events(&sender, *execution_id, controller.drain_events()) {
+                return;
             }
-            AppServerCommand::SessionDetail { id, thread_id } => {
-                let result = with_client(&mut client, connector, |client| {
-                    client.read_session(&thread_id)
-                });
-                (BackendEvent::SessionDetail { id, result }, client.is_none())
-            }
-            AppServerCommand::Projects { id } => {
-                let result = with_client(&mut client, connector, CodexAppServer::list_projects);
-                (BackendEvent::Projects { id, result }, client.is_none())
-            }
-            AppServerCommand::Models { id } => {
-                let result = with_client(&mut client, connector, CodexAppServer::list_models);
-                (BackendEvent::Models { id, result }, client.is_none())
-            }
-            AppServerCommand::Resume { id, thread_id } => {
-                let result = with_client(&mut client, connector, |client| {
-                    client.resume_session(&thread_id)
-                })
-                .map(|session| {
-                    format!(
-                        "Thread {} loaded. No prompt was sent and no turn was started.",
-                        session.thread_id
-                    )
-                });
-                (
-                    BackendEvent::Mutation {
-                        id,
-                        kind: MutationKind::Resume,
-                        result,
-                    },
-                    client.is_none(),
-                )
-            }
-            AppServerCommand::Fork { id, thread_id } => {
-                let result = with_client(&mut client, connector, |client| {
-                    client.fork_session(&thread_id)
-                })
-                .map(|fork| {
-                    format!(
-                        "Fork created as thread {}. No turn was started.",
-                        fork.thread_id
-                    )
-                });
-                (
-                    BackendEvent::Mutation {
-                        id,
-                        kind: MutationKind::Fork,
-                        result,
-                    },
-                    client.is_none(),
-                )
-            }
+        }
+        let command = match receiver.recv_timeout(StdDuration::from_millis(100)) {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
-        if failed {
-            client = None;
-        }
-        if shutdown.load(Ordering::Acquire) {
-            return;
-        }
-        if sender.send(event).is_err() {
-            return;
+        match command {
+            AppServerCommand::PrepareExecution { id, task } => {
+                if execution
+                    .as_ref()
+                    .is_some_and(|(_, current)| !current.phase().terminal())
+                {
+                    if sender
+                        .send(BackendEvent::ExecutionPreflight {
+                            id,
+                            result: Err("Another execution is still active. Finish or cancel its confirmation first.".to_owned()),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                execution = None;
+                match InteractiveExecution::prepare(*task) {
+                    Ok(controller) => {
+                        let preflight = controller.preflight().clone();
+                        execution = Some((id, controller));
+                        if sender
+                            .send(BackendEvent::ExecutionPreflight {
+                                id,
+                                result: Ok(preflight),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if sender
+                            .send(BackendEvent::ExecutionPreflight {
+                                id,
+                                result: Err(error.to_string()),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                continue;
+            }
+            AppServerCommand::InspectExecution { id } => {
+                let result = execution
+                    .as_mut()
+                    .filter(|(execution_id, _)| *execution_id == id)
+                    .ok_or_else(|| "Execution preflight is no longer active.".to_owned())
+                    .and_then(|(_, controller)| {
+                        controller
+                            .inspect_existing_after_confirmation()
+                            .map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(preflight) => {
+                        if sender
+                            .send(BackendEvent::ExecutionPreflight {
+                                id,
+                                result: Ok(preflight),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if sender
+                            .send(BackendEvent::ExecutionProgress {
+                                id,
+                                event: ControllerEvent::Status(error),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                        if sender
+                            .send(BackendEvent::ExecutionActionComplete { id })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                continue;
+            }
+            AppServerCommand::SubmitExecution { id } => {
+                let result = execution
+                    .as_mut()
+                    .filter(|(execution_id, _)| *execution_id == id)
+                    .ok_or_else(|| "Execution preflight is no longer active.".to_owned())
+                    .and_then(|(_, controller)| {
+                        controller.submit().map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(events) => {
+                        if !send_controller_events(&sender, id, events) {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if sender
+                            .send(BackendEvent::ExecutionProgress {
+                                id,
+                                event: ControllerEvent::Status(error),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                if sender
+                    .send(BackendEvent::ExecutionActionComplete { id })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::DecideApproval {
+                id,
+                request_id,
+                choice,
+            } => {
+                let result = execution
+                    .as_mut()
+                    .filter(|(execution_id, _)| *execution_id == id)
+                    .ok_or_else(|| "Execution is no longer active.".to_owned())
+                    .and_then(|(_, controller)| {
+                        controller
+                            .decide_approval(&request_id, choice)
+                            .map_err(|error| error.to_string())
+                    });
+                if let Err(error) = result {
+                    if sender
+                        .send(BackendEvent::ExecutionProgress {
+                            id,
+                            event: ControllerEvent::Status(error),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if sender
+                    .send(BackendEvent::ExecutionActionComplete { id })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::InterruptExecution { id } => {
+                let result = execution
+                    .as_mut()
+                    .filter(|(execution_id, _)| *execution_id == id)
+                    .ok_or_else(|| "Execution is no longer active.".to_owned())
+                    .and_then(|(_, controller)| {
+                        controller.interrupt().map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(events) => {
+                        if !send_controller_events(&sender, id, events) {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if sender
+                            .send(BackendEvent::ExecutionProgress {
+                                id,
+                                event: ControllerEvent::Status(error),
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                if sender
+                    .send(BackendEvent::ExecutionActionComplete { id })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::ReconcileExecution { id } => {
+                let events = execution
+                    .as_mut()
+                    .filter(|(execution_id, _)| *execution_id == id)
+                    .map(|(_, controller)| controller.reconcile())
+                    .unwrap_or_else(|| {
+                        vec![ControllerEvent::Status(
+                            "Execution recovery is no longer available.".to_owned(),
+                        )]
+                    });
+                if !send_controller_events(&sender, id, events) {
+                    return;
+                }
+                if sender
+                    .send(BackendEvent::ExecutionActionComplete { id })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            AppServerCommand::CancelExecution { id } => {
+                let can_cancel = execution
+                    .as_ref()
+                    .is_some_and(|(execution_id, controller)| {
+                        *execution_id == id
+                            && controller.phase()
+                                == crate::codex_app_server::ExecutionPhase::AwaitingConfirmation
+                            && controller.turn_id().is_none()
+                    });
+                if can_cancel {
+                    execution = None;
+                    if sender
+                        .send(BackendEvent::ExecutionCancelled { id })
+                        .is_err()
+                    {
+                        return;
+                    }
+                } else if sender
+                    .send(BackendEvent::ExecutionProgress {
+                        id,
+                        event: ControllerEvent::Status(
+                            "This execution cannot be cancelled safely from its current state."
+                                .to_owned(),
+                        ),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            command => {
+                let (event, failed) = match command {
+                    AppServerCommand::Sessions { id } => {
+                        let mut result = with_client(&mut client, connector, |client| {
+                            client.list_sessions(&SessionListOptions {
+                                archive_filter: crate::codex_app_server::ArchiveFilter::All,
+                                active_only: false,
+                                limit: None,
+                            })
+                        });
+                        if let Ok(sessions) = result.as_mut() {
+                            sessions.sort_by(|left, right| {
+                                right
+                                    .updated_at
+                                    .cmp(&left.updated_at)
+                                    .then_with(|| left.thread_id.cmp(&right.thread_id))
+                            });
+                        }
+                        (BackendEvent::Sessions { id, result }, client.is_none())
+                    }
+                    AppServerCommand::SessionDetail { id, thread_id } => {
+                        let result = with_client(&mut client, connector, |client| {
+                            client.read_session(&thread_id)
+                        });
+                        (BackendEvent::SessionDetail { id, result }, client.is_none())
+                    }
+                    AppServerCommand::Projects { id } => {
+                        let result =
+                            with_client(&mut client, connector, CodexAppServer::list_projects);
+                        (BackendEvent::Projects { id, result }, client.is_none())
+                    }
+                    AppServerCommand::Models { id } => {
+                        let result =
+                            with_client(&mut client, connector, CodexAppServer::list_models);
+                        (BackendEvent::Models { id, result }, client.is_none())
+                    }
+                    AppServerCommand::Resume { id, thread_id } => {
+                        let result = with_client(&mut client, connector, |client| {
+                            client.resume_session(&thread_id)
+                        })
+                        .map(|session| {
+                            format!(
+                                "Thread {} loaded. No prompt was sent and no turn was started.",
+                                session.thread_id
+                            )
+                        });
+                        (
+                            BackendEvent::Mutation {
+                                id,
+                                kind: MutationKind::Resume,
+                                result,
+                            },
+                            client.is_none(),
+                        )
+                    }
+                    AppServerCommand::Fork { id, thread_id } => {
+                        let result = with_client(&mut client, connector, |client| {
+                            client.fork_session(&thread_id)
+                        })
+                        .map(|fork| {
+                            format!(
+                                "Fork created as thread {}. No turn was started.",
+                                fork.thread_id
+                            )
+                        });
+                        (
+                            BackendEvent::Mutation {
+                                id,
+                                kind: MutationKind::Fork,
+                                result,
+                            },
+                            client.is_none(),
+                        )
+                    }
+                    AppServerCommand::PrepareExecution { .. }
+                    | AppServerCommand::InspectExecution { .. }
+                    | AppServerCommand::SubmitExecution { .. }
+                    | AppServerCommand::DecideApproval { .. }
+                    | AppServerCommand::InterruptExecution { .. }
+                    | AppServerCommand::ReconcileExecution { .. }
+                    | AppServerCommand::CancelExecution { .. } => unreachable!(),
+                };
+                if failed {
+                    client = None;
+                }
+                if shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                if sender.send(event).is_err() {
+                    return;
+                }
+            }
         }
     }
+}
+
+fn send_controller_events(
+    sender: &SyncSender<BackendEvent>,
+    id: u64,
+    events: Vec<ControllerEvent>,
+) -> bool {
+    for event in events {
+        if sender
+            .send(BackendEvent::ExecutionProgress { id, event })
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn receive_command<T>(receiver: &Receiver<T>, shutdown: &AtomicBool) -> Option<T> {

@@ -77,7 +77,7 @@ impl CodexAppServer {
     }
 }
 
-fn parse_model(value: &Value) -> Result<ModelInfo, CodexAppError> {
+pub(super) fn parse_model(value: &Value) -> Result<ModelInfo, CodexAppError> {
     let object = value
         .as_object()
         .ok_or(CodexAppError::ProtocolVersionMismatch)?;

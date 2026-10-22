@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crate::codex_app_server::{
-    ArchiveFilter, ModelCatalog, ProjectSummary, SessionDetail, SessionMetadata,
+    ApprovalView, ArchiveFilter, ExecutionPhase, ExecutionPreflight, ModelCatalog, ProjectSummary,
+    SessionDetail, SessionMetadata,
 };
 use crate::storage::{EvidenceDetail, QuotaHistoryPage, TokenHistoryCursor, TokenHistoryPage};
 
@@ -164,6 +165,10 @@ pub enum Overlay {
     ComposerDraftDeleteConfirm,
     ComposerTemplatePicker,
     ComposerPreflight,
+    ExecutionConfirm,
+    ExecutionView,
+    ExecutionApproval,
+    ExecutionExitConfirm,
     UnsavedDraftExit,
 }
 
@@ -190,6 +195,48 @@ pub struct ComposerState {
     pub action_selected: usize,
     pub preflight_scroll: u16,
     pub status: Option<String>,
+}
+
+/// Bounded, transient execution presentation. It never persists the prompt or
+/// output to the telemetry database or saved-draft store.
+pub struct ExecutionUiState {
+    pub id: u64,
+    pub preflight: Option<ExecutionPreflight>,
+    pub phase: ExecutionPhase,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub output: String,
+    pub tool_output: String,
+    pub diff: String,
+    pub activity: VecDeque<String>,
+    pub approvals: VecDeque<ApprovalView>,
+    pub status: Option<String>,
+    pub pending: bool,
+    pub scroll: u16,
+    pub show_details: bool,
+    pub exit_choice: usize,
+}
+
+impl Default for ExecutionUiState {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            preflight: None,
+            phase: ExecutionPhase::Idle,
+            thread_id: None,
+            turn_id: None,
+            output: String::new(),
+            tool_output: String::new(),
+            diff: String::new(),
+            activity: VecDeque::new(),
+            approvals: VecDeque::new(),
+            status: None,
+            pending: false,
+            scroll: 0,
+            show_details: false,
+            exit_choice: 0,
+        }
+    }
 }
 
 impl Default for ComposerState {
@@ -278,6 +325,7 @@ pub struct AppState {
     pub quota_history: Resource<QuotaHistoryPage>,
     pub evidence_detail: Resource<EvidenceDetail>,
     pub composer: ComposerState,
+    pub execution: ExecutionUiState,
     pub session_archive_filter: ArchiveFilter,
     pub sessions_active_only: bool,
     pub session_page: usize,
@@ -316,6 +364,7 @@ impl Default for AppState {
             quota_history: Resource::default(),
             evidence_detail: Resource::default(),
             composer: ComposerState::default(),
+            execution: ExecutionUiState::default(),
             session_archive_filter: ArchiveFilter::NonArchived,
             sessions_active_only: false,
             session_page: 0,

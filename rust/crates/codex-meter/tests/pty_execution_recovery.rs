@@ -321,6 +321,7 @@ impl PtyHarness {
         self.assert_text("Task preflight");
         self.key(b'e');
         self.assert_text("Confirm Codex task");
+        self.assert_text("Enter confirm and submit once");
         self.key(b'\r');
     }
 

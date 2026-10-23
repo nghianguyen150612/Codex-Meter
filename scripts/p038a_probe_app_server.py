@@ -59,7 +59,9 @@ async def probe(program: str, client_version: str) -> int:
                 }
             },
         }
-        process.stdin.write((json.dumps(request, separators=(",", ":")) + "\n").encode())
+        process.stdin.write(
+            (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        )
         await asyncio.wait_for(process.stdin.drain(), timeout=10)
 
         deadline = asyncio.get_running_loop().time() + 10
@@ -67,7 +69,9 @@ async def probe(program: str, client_version: str) -> int:
         while asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
             try:
-                line = await asyncio.wait_for(process.stdout.readline(), timeout=remaining)
+                line = await asyncio.wait_for(
+                    process.stdout.readline(), timeout=remaining
+                )
             except (asyncio.TimeoutError, asyncio.LimitOverrunError, ValueError):
                 break
             if not line:
@@ -92,7 +96,9 @@ async def probe(program: str, client_version: str) -> int:
             or not result["codexHome"]
         ):
             print("app_server_probe=FAIL")
-            print("diagnostic=Initialize response did not satisfy Codex Meter requirements")
+            print(
+                "diagnostic=Initialize response did not satisfy Codex Meter requirements"
+            )
             return 1
 
         user_agent = safe_field(result.get("userAgent"))
@@ -141,7 +147,9 @@ def main() -> int:
         print("app_server_probe=UNVERIFIED")
         print("diagnostic=Codex executable was not found")
         return 2
-    manifest = Path(__file__).resolve().parents[1] / "rust/crates/codex-meter/Cargo.toml"
+    manifest = (
+        Path(__file__).resolve().parents[1] / "rust/crates/codex-meter/Cargo.toml"
+    )
     try:
         manifest_text = manifest.read_text(encoding="utf-8")
         package_section = re.search(

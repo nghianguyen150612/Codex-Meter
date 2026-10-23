@@ -6,16 +6,21 @@ approval, interruption, and read-only reconciliation end to end.
 
 ## Matrix
 
-| Runtime | Schema evidence | Fake protocol / PTY coverage | Live read-only reference Arch | Execution enabled |
+| Runtime | Schema evidence | Fake protocol / PTY coverage | Live reference qualification | Execution enabled |
 | --- | --- | --- | --- | --- |
-| `codex_cli_rs/0.163.0` (`rust-v0.163.0`, commit `83086188ae0614bd882818ff1aa23f3194962012`) | P036 generated the stable schema with the installed 0.163.0 CLI; initialize, thread start/resume/read/list, turn start/interrupt/completion, approvals, and security settings were audited. | P036 fake App Server tests retained; P037 Unix PTY fixture identifies itself as 0.163.0 and exercises submission, approvals, interruption, connection loss, restart, and reconciliation. This is synthetic protocol evidence, not a live Codex run. | **Pending**. The reference Arch device is unavailable. | **Yes**, only when initialization identifies this exact audited runtime and the other fresh preflight/security checks pass. |
+| `codex_cli_rs/0.163.0` (`rust-v0.163.0`, commit `83086188ae0614bd882818ff1aa23f3194962012`) | P036 generated the stable schema with the installed 0.163.0 CLI; initialize, thread start/resume/read/list, turn start/interrupt/completion, approvals, and security settings were audited. | P036 fake App Server tests retained; P037 Unix PTY fixture identifies itself as 0.163.0 and exercises submission, approvals, interruption, connection loss, restart, and reconciliation. P038 Windows ConPTY tests also use a synthetic server. These tests do not establish a live Codex run. | **UNVERIFIED**. The physical Arch reference device and a live Windows installation with this App Server identity have not been qualified. | **Yes**, only when initialization identifies this exact audited runtime and the other fresh preflight/security checks pass. |
 | `codex_cli_rs/0.162.1` (`rust-v0.162.1`, commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`) | Targeted checked-in upstream protocol schemas compared with 0.163.0. Initialize, thread start/response, thread resume response, turn start response, turn started/completed, interrupt, approval request/response, turn-list, and server-request-resolved schemas match. `ClientRequest`, `ServerNotification`, `ThreadResumeParams`, `TurnStartParams`, and `ThreadReadResponse` differ; 0.163.0 adds conversation-item fields, an optional `retain` field, thread unread-state data, and a new notification. | **Not run against a 0.162.1 binary.** The existing fake server is a 0.163.0 fixture and does not establish 0.162.1 runtime behavior. | **Not run**. No 0.162.1 runtime is installed on the reference Arch device. | **No**. The stable schema subset is not enough to verify response semantics, security-policy behavior, interrupt handling, or reconciliation. |
 | Other stable tags available upstream, including `0.162.0`, `0.161.0`, and `0.160.x` | Not audited for P037. | Not run. | Not run. | **No**. |
 | `0.164.0-alpha.*` and other development builds | Not audited; prerelease tags are not considered stable compatibility evidence. | Not run. | Not run. | **No**. |
 
 The upstream tags endpoint showed `rust-v0.162.1` as the closest prior stable tag and `rust-v0.164.0-alpha.*` as current development tags on 2026-10-22. The local `codex --version` reports `codex-cli 0.163.0`; `codex app-server --help` was checked in the implementation environment. These checks do not satisfy the Arch live-device gate.
 
-The P036 runtime gate remains the exact 0.163.0 allowlist. It is not a numerical minimum and is not broadened based on static schema comparison.
+The P036 runtime gate remains the exact 0.163.0 allowlist. It is not a numerical minimum and is not broadened based on static schema comparison. Native Windows CI validates storage and synthetic process lifecycle behavior; it does not pass the live installed-Codex Windows gate.
+
+This matrix governs Codex protocol versions. OS execution and persistence qualification is recorded
+separately in the [P038 execution recovery platform matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md);
+the Codex 0.163.0 allowlist does not by itself certify Windows, macOS, Linux filesystems, or a live
+reference device.
 
 ## Protocol review scope
 

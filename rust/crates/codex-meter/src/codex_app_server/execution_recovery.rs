@@ -11,10 +11,54 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_RECORDS: usize = 32;
-#[cfg(unix)]
 const MAX_JOURNAL_BYTES: usize = 64 * 1024;
 const MAX_ID_BYTES: usize = 128;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy)]
+enum PersistenceFailurePoint {
+    BeforeWrite = 1 << 0,
+    DuringWrite = 1 << 1,
+    BeforeFlush = 1 << 2,
+    AfterFlush = 1 << 3,
+    BeforeReplace = 1 << 4,
+    AfterReplace = 1 << 5,
+    LockAcquisition = 1 << 6,
+    RevisionCas = 1 << 7,
+    Cleanup = 1 << 8,
+    Recovery = 1 << 9,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PERSISTENCE_FAILURES: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn inject_persistence_failures(points: &[PersistenceFailurePoint]) {
+    let mask = points.iter().fold(0, |mask, point| mask | *point as u16);
+    PERSISTENCE_FAILURES.with(|failures| failures.set(mask));
+}
+
+fn persistence_failure(point: PersistenceFailurePoint) -> bool {
+    #[cfg(test)]
+    return PERSISTENCE_FAILURES.with(|failures| {
+        let bit = point as u16;
+        let current = failures.get();
+        if current & bit == 0 {
+            false
+        } else {
+            failures.set(current & !bit);
+            true
+        }
+    });
+
+    #[cfg(not(test))]
+    {
+        let _ = point;
+        false
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -226,7 +270,7 @@ impl std::error::Error for RecoveryJournalError {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct JournalPayload {
     schema_version: u32,
     generation: u64,
@@ -235,7 +279,7 @@ struct JournalPayload {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct JournalEnvelope {
     payload: JournalPayload,
     checksum: String,
@@ -262,10 +306,17 @@ impl RecoveryJournal {
         })
     }
 
-    #[cfg(all(test, not(unix)))]
+    #[cfg(all(test, not(any(unix, windows))))]
     pub fn open_memory_for_tests() -> Result<Self, RecoveryJournalError> {
         Ok(Self {
             store: platform::Store::open_for_tests(),
+        })
+    }
+
+    #[cfg(all(test, windows))]
+    pub fn open_memory_for_tests() -> Result<Self, RecoveryJournalError> {
+        Ok(Self {
+            store: platform::Store::open_for_tests()?,
         })
     }
 
@@ -384,6 +435,9 @@ impl RecoveryJournal {
             if data.records[index].revision != proposed.revision {
                 return Err(RecoveryJournalError::ConcurrentUpdate);
             }
+            if persistence_failure(PersistenceFailurePoint::RevisionCas) {
+                return Err(RecoveryJournalError::ConcurrentUpdate);
+            }
             if data.records[index].schema_version != proposed.schema_version {
                 return Err(RecoveryJournalError::SchemaMismatch);
             }
@@ -490,7 +544,7 @@ fn validate_protocol_id(value: &str) -> Result<(), RecoveryJournalError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn encode(data: &JournalData) -> Result<Vec<u8>, RecoveryJournalError> {
     if data.records.len() > MAX_RECORDS {
         return Err(RecoveryJournalError::TooManyUnresolvedRecords);
@@ -516,7 +570,7 @@ fn encode(data: &JournalData) -> Result<Vec<u8>, RecoveryJournalError> {
     Ok(bytes)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn decode(bytes: &[u8]) -> Result<JournalData, RecoveryJournalError> {
     if bytes.len() > MAX_JOURNAL_BYTES {
         return Err(RecoveryJournalError::CorruptJournal);
@@ -704,6 +758,9 @@ mod platform {
             &self,
             action: impl FnOnce() -> Result<T, RecoveryJournalError>,
         ) -> Result<T, RecoveryJournalError> {
+            if persistence_failure(PersistenceFailurePoint::LockAcquisition) {
+                return Err(RecoveryJournalError::Io);
+            }
             // flock serializes separate processes. This mutex also serializes
             // independent opens and threads in this process on platforms where
             // flock ownership is tied to an open file description.
@@ -742,6 +799,9 @@ mod platform {
         }
 
         pub fn read(&self) -> Result<JournalData, RecoveryJournalError> {
+            if persistence_failure(PersistenceFailurePoint::Recovery) {
+                return Err(RecoveryJournalError::Io);
+            }
             let name = cstring("journal.json")?;
             let fd = unsafe {
                 libc::openat(
@@ -792,6 +852,9 @@ mod platform {
         pub fn write(&self, data: &mut JournalData) -> Result<(), RecoveryJournalError> {
             data.generation = data.generation.saturating_add(1);
             let bytes = encode(data)?;
+            if persistence_failure(PersistenceFailurePoint::BeforeWrite) {
+                return Err(RecoveryJournalError::Io);
+            }
             // One fixed, private replacement name keeps crash leftovers
             // bounded to a single file. The process lock serializes writers.
             let temporary = ".journal.tmp";
@@ -821,15 +884,37 @@ mod platform {
                 return Err(RecoveryJournalError::UnsafeStorage);
             }
             let mut output = File::from(owned);
-            if output
-                .write_all(&bytes)
-                .and_then(|()| output.sync_all())
-                .is_err()
+            let write_result = if persistence_failure(PersistenceFailurePoint::DuringWrite) {
+                output
+                    .write_all(&bytes[..bytes.len() / 2])
+                    .and_then(|()| Err(std::io::Error::other("injected journal write failure")))
+            } else {
+                output.write_all(&bytes)
+            };
+            let flush_result = if write_result.is_ok()
+                && !persistence_failure(PersistenceFailurePoint::BeforeFlush)
             {
-                let _ = self.unlink(temporary);
+                output.sync_all()
+            } else if write_result.is_ok() {
+                Err(std::io::Error::other("injected journal flush failure"))
+            } else {
+                write_result
+            };
+            if flush_result.is_err() || persistence_failure(PersistenceFailurePoint::AfterFlush) {
+                drop(output);
+                if !persistence_failure(PersistenceFailurePoint::Cleanup) {
+                    let _ = self.unlink(temporary);
+                }
                 return Err(RecoveryJournalError::Io);
             }
+            drop(output);
             let target = cstring("journal.json")?;
+            if persistence_failure(PersistenceFailurePoint::BeforeReplace) {
+                if !persistence_failure(PersistenceFailurePoint::Cleanup) {
+                    let _ = self.unlink(temporary);
+                }
+                return Err(RecoveryJournalError::Io);
+            }
             if unsafe {
                 libc::renameat(
                     self.directory.as_raw_fd(),
@@ -839,7 +924,12 @@ mod platform {
                 )
             } != 0
             {
-                let _ = self.unlink(temporary);
+                if !persistence_failure(PersistenceFailurePoint::Cleanup) {
+                    let _ = self.unlink(temporary);
+                }
+                return Err(RecoveryJournalError::Io);
+            }
+            if persistence_failure(PersistenceFailurePoint::AfterReplace) {
                 return Err(RecoveryJournalError::Io);
             }
             if unsafe { libc::fsync(self.directory.as_raw_fd()) } != 0 {
@@ -865,7 +955,10 @@ mod platform {
     use std::os::unix::fs::MetadataExt;
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+mod platform;
+
+#[cfg(not(any(unix, windows)))]
 mod platform {
     use super::*;
     #[cfg(test)]
@@ -941,14 +1034,20 @@ mod platform {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use std::fs;
     use std::sync::{Arc, Barrier};
 
     fn temp_path(label: &str) -> PathBuf {
-        std::env::temp_dir().canonicalize().unwrap().join(format!(
+        #[cfg(windows)]
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .expect("the Windows test runner provides a per-user local data directory");
+        #[cfg(not(windows))]
+        let base = std::env::temp_dir().canonicalize().unwrap();
+        base.join(format!(
             "codex-meter-recovery-{label}-{}-{}",
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
@@ -1058,6 +1157,7 @@ mod tests {
         fs::remove_dir_all(path).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn unix_journal_refuses_symlinks_and_public_file_permissions() {
         use std::os::unix::fs::{symlink, PermissionsExt};
@@ -1147,9 +1247,73 @@ mod tests {
             .all(|record| created.contains(&record.execution_id)));
         fs::remove_dir_all(path).unwrap();
     }
+
+    #[test]
+    fn deterministic_persistence_failures_keep_recovery_fail_closed() {
+        let path = temp_path("fault-injection");
+        let journal = RecoveryJournal::open_at(&path).unwrap();
+        let initial = journal.create(ExecutionOrigin::NewThread, None).unwrap();
+
+        for point in [
+            PersistenceFailurePoint::BeforeWrite,
+            PersistenceFailurePoint::BeforeFlush,
+            PersistenceFailurePoint::AfterFlush,
+            PersistenceFailurePoint::BeforeReplace,
+        ] {
+            inject_persistence_failures(&[point]);
+            assert_eq!(
+                journal.create(ExecutionOrigin::NewThread, None),
+                Err(RecoveryJournalError::Io)
+            );
+            assert_eq!(journal.snapshot().unwrap(), vec![initial.clone()]);
+        }
+
+        inject_persistence_failures(&[
+            PersistenceFailurePoint::DuringWrite,
+            PersistenceFailurePoint::Cleanup,
+        ]);
+        assert_eq!(
+            journal.create(ExecutionOrigin::NewThread, None),
+            Err(RecoveryJournalError::Io)
+        );
+        assert!(path.join(".journal.tmp").exists());
+        assert_eq!(journal.snapshot().unwrap(), vec![initial.clone()]);
+        let after_stale_temp = journal.create(ExecutionOrigin::NewThread, None).unwrap();
+        assert!(!path.join(".journal.tmp").exists());
+        assert_eq!(journal.snapshot().unwrap(), vec![after_stale_temp.clone()]);
+
+        inject_persistence_failures(&[PersistenceFailurePoint::LockAcquisition]);
+        assert_eq!(journal.snapshot(), Err(RecoveryJournalError::Io));
+        inject_persistence_failures(&[PersistenceFailurePoint::Recovery]);
+        assert_eq!(journal.snapshot(), Err(RecoveryJournalError::Io));
+
+        inject_persistence_failures(&[PersistenceFailurePoint::AfterReplace]);
+        assert_eq!(
+            journal.create(ExecutionOrigin::NewThread, None),
+            Err(RecoveryJournalError::Io)
+        );
+        let after_replacement = journal.snapshot().unwrap();
+        assert_eq!(after_replacement.len(), 1);
+        assert_ne!(
+            after_replacement[0].execution_id,
+            after_stale_temp.execution_id
+        );
+
+        let record = after_replacement[0].clone();
+        let mut stale = record.clone();
+        stale.execution_phase = RecoveryPhase::Cancelled;
+        inject_persistence_failures(&[PersistenceFailurePoint::RevisionCas]);
+        assert_eq!(
+            journal.update(&stale),
+            Err(RecoveryJournalError::ConcurrentUpdate)
+        );
+        assert_eq!(journal.get(&record.execution_id).unwrap(), record);
+        inject_persistence_failures(&[]);
+        fs::remove_dir_all(path).unwrap();
+    }
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(any(unix, windows))))]
 mod unsupported_platform_tests {
     use super::*;
 

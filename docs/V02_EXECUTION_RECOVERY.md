@@ -8,23 +8,27 @@ the journal is not a usage ledger and does not prove that a provider request was
 
 On Linux, the journal directory is `$XDG_DATA_HOME/codex-meter/recovery` when `XDG_DATA_HOME` is
 absolute, otherwise `~/.local/share/codex-meter/recovery`. On macOS it is
-`~/Library/Application Support/codex-meter/recovery`. The Windows location is reserved under
-`%LOCALAPPDATA%`, but this build fails closed there because Windows per-user ACL and replacement
-semantics have not been implemented. Execution is unavailable when private storage cannot be
-verified.
+`~/Library/Application Support/codex-meter/recovery`. On Windows it is
+`%LOCALAPPDATA%\codex-meter\recovery`. Execution fails closed if the platform backend cannot
+verify the private location and current-user ownership.
 
 The directory contains a single bounded `journal.json`, an advisory `.lock`, and at most one
 `.journal.tmp` replacement file. Unix directories are opened by components with no-follow checks;
 the journal directory is owned by the current user and mode `0700`, and journal, lock, and temporary
-files are owned by that user and mode `0600`. The store refuses symlinks, non-regular files, unsafe
-ownership, public journal permissions, and malformed or oversized data. Corrupt data is preserved
-for inspection and is never silently replaced.
+files are owned by that user and mode `0600`. Windows uses a protected DACL on the journal
+directory, lock, journal, and replacement file. The DACL grants full access only to the current
+user SID; the backend refuses non-local or non-fixed drives, reparse points, non-regular files,
+different owners, inherited or additional ACEs on private entries, and paths it cannot validate.
+Both backends preserve malformed or corrupt data instead of silently replacing it.
 
-Updates serialize through a process-local mutex and OS `flock`, compare the record revision before
-writing, write a fixed temporary file, `fsync` it, atomically rename it over the journal, then `fsync` the containing
-directory. Newly created directory entries are also synchronized in their parent. Locks are
-released by the operating system if a process dies. A stale writer receives a conflict instead of
-overwriting newer state.
+Unix updates serialize through a process-local mutex and OS `flock`, compare the record revision
+before writing, write a fixed temporary file, `fsync` it, atomically rename it over the journal, then
+`fsync` the containing directory. Newly created directory entries are also synchronized in their
+parent. Windows writers flush the same-directory temporary file with `FlushFileBuffers`, use
+`ReplaceFileW` for replacement or `MoveFileExW` with write-through for first creation, and
+coordinate with `LockFileEx`; acquisition is bounded to five seconds. The Windows kernel releases
+byte-range locks when the owning handle or process closes. A process-local mutex covers threads in
+the same process. A stale writer receives a revision conflict instead of overwriting newer state.
 
 ## Version 1 record
 
@@ -125,10 +129,17 @@ cursor. On a real terminal after a forceful kill, use the shell's `reset` comman
 the terminal remains in raw mode. Normal exit, Ctrl+C, dirty Composer confirmation, recovery-view
 exit, and execution terminal paths use the application cleanup guard.
 
-The PTY tests require Unix `openpty` and do not constitute Windows ConPTY validation. Native macOS
-x86_64 and ARM64 CI passed the journal and PTY test suites, including recovery after the test driver
-restores the terminal following SIGKILL. This does not satisfy the live Arch reference-device gate.
-Windows storage and terminal behavior remain unverified, and execution fails closed there.
+The Windows ConPTY integration tests launch the compiled binary inside a native pseudo console. A
+fixture `codex.exe` starts a synthetic local App Server, allowing approval denial, interruption,
+parent termination, restart reconciliation, and no-replay checks without sending a real prompt to
+Codex. Windows App Server descendants are placed in a Job Object configured to kill the job when
+Codex Meter closes its handle. This covers process termination; it does not prove behavior after a
+Windows kernel crash or sudden power loss.
+
+Unix PTY and Windows ConPTY tests exercise synthetic App Server behavior, not a live Codex task.
+Native P037 macOS x86_64 and ARM64 CI passed the Unix journal and PTY suites; P038 regression
+results are tracked in the [platform matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md). The live
+Arch reference-device gate remains separate and unverified.
 
 ## Provenance and limits
 
@@ -137,6 +148,19 @@ saved drafts. No task token attribution, quota delta, model cost, or account-wid
 derived from its records. `turn/completed` without matching token evidence is not a token-ledger
 entry; no journal record is not proof that Codex had no activity.
 
-P037 handoff: add independently audited Windows private storage and ConPTY validation, run the
-reference Arch live read-only compatibility gate, and expand platform crash testing. P038 should
-remain separate and must not infer task-token attribution or forecast quota from this journal.
+The durability evidence has four distinct boundaries:
+
+| Property | Current evidence |
+| --- | --- |
+| Process-crash recovery | Exercised by process termination/restart and deterministic persistence-failure tests. |
+| Filesystem write ordering | Unix file and directory syncs; Windows FlushFileBuffers and write-through replacement. |
+| Atomic namespace replacement | Same-directory rename on Unix; ReplaceFileW or write-through MoveFileExW on Windows. Tested, but not a claim about every storage layer. |
+| OS crash and hardware power loss | **UNVERIFIED**. No kernel-crash or physical power-loss experiment was performed. |
+
+Flush and write-through operations do not guarantee survival of every storage-controller cache,
+filesystem, operating-system crash, or hardware power-loss scenario. Power-loss testing is not an
+additional release prerequisite under this P038 task. See the
+[cross-platform execution matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md) and
+[P038A qualification record](PROMPT038A_MANIFEST.md) for current runtime evidence and open gates.
+The Arch reference gate remains outstanding; this journal must not be used to infer task-token
+attribution or forecast quota.

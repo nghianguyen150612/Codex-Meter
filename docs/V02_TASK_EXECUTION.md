@@ -153,13 +153,11 @@ the prior stable `0.162.1` was compared at the schema level but lacks runtime fa
 read-only validation, so it remains unsupported. The Arch reference desktop was unavailable during
 P037, so its installed Codex version, live model catalog, security configuration, and terminal
 behavior remain unverified. No paid task was submitted for validation. Controlled fake-server and
-PTY tests do not replace live-device evidence. See the [compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md) and [P037 manifest](PROMPT037_MANIFEST.md) for the gate record.
+PTY tests do not replace live-device evidence. See the [Codex compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md),
+[execution platform matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md), and [P037 manifest](PROMPT037_MANIFEST.md) for gate records.
 
-The Unix journal backend is implemented for Linux and macOS semantics. Windows execution fails
-closed until ACL-backed private storage and replacement behavior are implemented and validated.
-Windows ConPTY remains unverified. Native macOS x86_64 and ARM64 CI passed the journal and PTY
-scenarios; those tests have not run in the local Linux implementation environment.
-
-P038 should complete Windows journal/terminal support and the reference Arch read-only gate, then
-consider additional runtime audits. Do not infer task-token attribution or quota forecasting from
-execution records.
+P038 implements Windows ACL-backed journal storage and adds native ConPTY subprocess tests.
+Native Windows security and synthetic lifecycle CI passed in run 39888358799. That result does not
+qualify the actual installed Codex App Server on Windows. The live Windows runtime gate and the
+native Arch reference-device gate remain unverified release blockers. Do not infer task-token
+attribution or quota forecasting from execution records.

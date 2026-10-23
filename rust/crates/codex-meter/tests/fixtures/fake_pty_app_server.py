@@ -1,4 +1,4 @@
-"""Stateful synthetic App Server used by Unix PTY subprocess tests only."""
+"""Stateful synthetic App Server used by Unix PTY and Windows ConPTY tests."""
 
 import json
 import os
@@ -8,10 +8,16 @@ import time
 
 mode = sys.argv[1]
 workspace = sys.argv[2]
+pid_path = os.environ.get("CODEX_METER_TEST_SERVER_PID_FILE")
+if pid_path:
+    with open(pid_path, "w", encoding="ascii") as output:
+        output.write(str(os.getpid()))
 state_path = os.environ["CODEX_METER_TEST_STATE"]
 request_log = os.environ["CODEX_METER_TEST_REQUEST_LOG"]
 continue_path = os.environ["CODEX_METER_TEST_CONTINUE"]
 expected_prompt = os.environ.get("CODEX_METER_TEST_PROMPT", "P037_λ_SYNTHETIC_PROMPT")
+platform_family = os.environ.get("CODEX_METER_TEST_PLATFORM_FAMILY", "unix")
+platform_os = os.environ.get("CODEX_METER_TEST_PLATFORM_OS", "linux")
 
 
 def read_message():
@@ -73,6 +79,21 @@ def model():
     }
 
 
+def same_workspace(candidate):
+    if not isinstance(candidate, str):
+        return False
+    if os.name != "nt":
+        return candidate == workspace
+    try:
+        return os.path.samefile(candidate, workspace)
+    except OSError:
+        def normalized(path):
+            value = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+            return value[4:] if value.startswith("\\\\?\\") else value
+
+        return normalized(candidate) == normalized(workspace)
+
+
 def thread_status(state):
     return "active" if state.get("status") == "inProgress" else "idle"
 
@@ -99,15 +120,20 @@ while True:
         send({"id": message["id"], "result": {
             "userAgent": "codex_cli_rs/0.163.0",
             "codexHome": "/test-only/not-retained",
-            "platformFamily": "unix",
-            "platformOs": "linux",
+            "platformFamily": platform_family,
+            "platformOs": platform_os,
         }})
     elif method == "initialized":
         continue
     elif method == "model/list":
         send({"id": message["id"], "result": {"data": [model()], "nextCursor": None}})
     elif method == "config/read":
-        if message.get("params") != {"cwd": workspace, "includeLayers": False}:
+        params = message.get("params", {})
+        if (
+            set(params) != {"cwd", "includeLayers"}
+            or params.get("includeLayers") is not False
+            or not same_workspace(params.get("cwd"))
+        ):
             raise SystemExit(23)
         send({"id": message["id"], "result": {"config": {
             "model": "fixture-model",
@@ -122,13 +148,17 @@ while True:
         send({"id": message["id"], "result": {"data": [], "nextCursor": None}})
     elif method == "thread/start":
         params = message.get("params", {})
-        if params != {
-            "cwd": workspace,
+        expected = {
             "sandbox": "workspace-write",
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
             "config": {"sandbox_workspace_write": {"network_access": False}},
-        }:
+        }
+        if (
+            set(params) != {"cwd", *expected}
+            or not same_workspace(params.get("cwd"))
+            or {key: value for key, value in params.items() if key != "cwd"} != expected
+        ):
             raise SystemExit(24)
         state = {"threadId": "thread-pty", "turnId": None, "status": "idle"}
         save_state(state)

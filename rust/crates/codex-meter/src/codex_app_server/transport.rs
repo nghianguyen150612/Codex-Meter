@@ -149,6 +149,8 @@ pub(crate) struct ProcessTransport {
     notification_receiver: Mutex<Receiver<IncomingMessage>>,
     capability: ClientCapability,
     workers: Vec<JoinHandle<()>>,
+    #[cfg(windows)]
+    process_job: process_job::ProcessJob,
 }
 
 impl ProcessTransport {
@@ -157,6 +159,9 @@ impl ProcessTransport {
         args: &[&OsStr],
         capability: ClientCapability,
     ) -> Result<Self, CodexAppError> {
+        #[cfg(windows)]
+        let process_job =
+            process_job::ProcessJob::new().map_err(|_| CodexAppError::AppServerStartupFailure)?;
         let mut command = Command::new(program);
         command
             .args(args)
@@ -170,6 +175,12 @@ impl ProcessTransport {
                 CodexAppError::AppServerStartupFailure
             }
         })?;
+        #[cfg(windows)]
+        if process_job.assign(&child).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CodexAppError::AppServerStartupFailure);
+        }
         let stdin = child
             .stdin
             .take()
@@ -243,6 +254,8 @@ impl ProcessTransport {
             notification_receiver: Mutex::new(notification_receiver),
             capability,
             workers,
+            #[cfg(windows)]
+            process_job,
         })
     }
 
@@ -440,6 +453,8 @@ impl ProcessTransport {
 
     fn kill_child(&self) {
         if let Ok(mut child) = self.child.lock() {
+            #[cfg(windows)]
+            let _ = self.process_job.terminate();
             match child.try_wait() {
                 Ok(Some(_)) => {}
                 Ok(None) | Err(_) => {
@@ -461,6 +476,8 @@ impl Drop for ProcessTransport {
         }
         drop(pending);
         if let Ok(mut child) = self.child.lock() {
+            #[cfg(windows)]
+            let _ = self.process_job.terminate();
             match child.try_wait() {
                 Ok(Some(_)) => {}
                 Ok(None) | Err(_) => {
@@ -472,6 +489,71 @@ impl Drop for ProcessTransport {
         }
         for worker in self.workers.drain(..) {
             let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(windows)]
+mod process_job {
+    use std::io;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::process::Child;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// Owns the App Server process tree. Closing this handle after Codex Meter
+    /// exits or crashes asks the kernel to terminate every process in the job.
+    pub(super) struct ProcessJob {
+        handle: OwnedHandle,
+    }
+
+    impl ProcessJob {
+        pub(super) fn new() -> io::Result<Self> {
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let handle = unsafe { OwnedHandle::from_raw_handle(handle.cast()) };
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    handle.as_raw_handle().cast(),
+                    JobObjectExtendedLimitInformation,
+                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if configured == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { handle })
+        }
+
+        pub(super) fn assign(&self, child: &Child) -> io::Result<()> {
+            let assigned = unsafe {
+                AssignProcessToJobObject(
+                    self.handle.as_raw_handle().cast(),
+                    child.as_raw_handle().cast(),
+                )
+            };
+            if assigned == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+
+        pub(super) fn terminate(&self) -> io::Result<()> {
+            let terminated = unsafe { TerminateJobObject(self.handle.as_raw_handle().cast(), 1) };
+            if terminated == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         }
     }
 }

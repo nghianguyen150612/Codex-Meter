@@ -112,10 +112,12 @@ be verified safely fails closed.
 
 Prompt and streamed output are transient in-memory task state. They never enter the telemetry
 database, recovery journal, diagnostics, or automatic exports. The journal persists only private
-execution IDs, known thread/turn IDs, mutation intent, state, and timestamps. Its Unix storage uses
-private files, atomic replacement, durability barriers, locking, and revision checks. Startup
-reconciliation is explicit and read-only; a known thread with unknown turn, or an unknown thread,
-remains outcome-unknown. Windows execution fails closed until private ACL-backed storage exists.
+execution IDs, known thread/turn IDs, mutation intent, state, and timestamps. Linux and macOS use
+private files, atomic replacement, durability barriers, locking, and revision checks. Windows uses
+a current-user SID protected DACL, same-directory replacement, `LockFileEx`, and revision checks.
+Startup reconciliation is explicit and read-only; a known thread with unknown turn, or an unknown
+thread, remains outcome-unknown. Windows runtime qualification and the Arch reference-device gate
+are tracked separately from implementation status.
 See [task execution](V02_TASK_EXECUTION.md), [execution recovery](V02_EXECUTION_RECOVERY.md), and
 [Codex compatibility](V02_CODEX_COMPATIBILITY_MATRIX.md) for protocol, security, platform, and
 failure semantics.

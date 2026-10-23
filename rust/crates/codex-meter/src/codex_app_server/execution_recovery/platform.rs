@@ -26,12 +26,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, DeleteFileW, FileAttributeTagInfo, FileStandardInfo,
     FlushFileBuffers, GetDriveTypeW, GetFileInformationByHandleEx, GetFileSizeEx, GetFileType,
     LockFileEx, MoveFileExW, ReplaceFileW, SetEndOfFile, SetFilePointerEx, UnlockFileEx,
-    FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_BEGIN, FILE_DELETE_CHILD,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TYPE_DISK,
-    FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, LOCKFILE_EXCLUSIVE_LOCK,
-    LOCKFILE_FAIL_IMMEDIATELY, MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING,
+    FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_BEGIN, FILE_DELETE_CHILD, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TYPE_DISK, FILE_WRITE_ATTRIBUTES,
+    FILE_WRITE_DATA, FILE_WRITE_EA, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -519,9 +519,12 @@ impl SecurityContext {
                             EqualSid(sid, trusted_sid.as_ptr().cast_mut().cast()) != 0
                         })
                 };
-                let unsafe_write_access = FILE_WRITE_DATA
-                    | FILE_APPEND_DATA
-                    | FILE_WRITE_EA
+                // `safe_ancestor_dacl` is called only for directories.
+                // FILE_WRITE_DATA and FILE_APPEND_DATA mean add-file and
+                // add-subdirectory there. Those rights cannot mutate an
+                // existing protected child; DELETE_CHILD and ACL-changing
+                // rights below are the replacement boundary.
+                let unsafe_write_access = FILE_WRITE_EA
                     | FILE_WRITE_ATTRIBUTES
                     | FILE_DELETE_CHILD
                     | windows_sys::Win32::Storage::FileSystem::DELETE
@@ -1094,6 +1097,39 @@ mod tests {
         let broad_handle = open_directory(&broad_directory).unwrap();
         assert!(!security.safe_ancestor_dacl(broad_handle.as_raw_handle().cast()));
         drop(broad_handle);
+
+        let append_descriptor_text = format!("O:{sid_text}D:P(A;;FA;;;{sid_text})(A;;0x4;;;WD)");
+        let append_descriptor_text = append_descriptor_text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut append_descriptor = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    append_descriptor_text.as_ptr(),
+                    PRIVATE_SECURITY_DESCRIPTOR_REVISION,
+                    &mut append_descriptor,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let append_attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: append_descriptor,
+            bInheritHandle: 0,
+        };
+        let append_directory = path.join("append-only");
+        let append_path = wide_path(&append_directory).unwrap();
+        assert_ne!(
+            unsafe { CreateDirectoryW(append_path.as_ptr(), &append_attributes) },
+            0
+        );
+        unsafe { LocalFree(append_descriptor.cast()) };
+        let append_handle = open_directory(&append_directory).unwrap();
+        assert!(security.safe_ancestor_dacl(append_handle.as_raw_handle().cast()));
+        drop(append_handle);
 
         assert!(matches!(
             RecoveryJournal::open_at(&path.join("codex-meter/recovery")),

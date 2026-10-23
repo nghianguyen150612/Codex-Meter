@@ -987,15 +987,24 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_writers_keep_all_records() {
+    fn concurrent_process_updates_keep_all_records() {
         let path = temp_path("concurrent");
         let journal = RecoveryJournal::open_at(&path).unwrap();
         let executable = std::env::current_exe().unwrap();
+        let execution_ids = (0..4)
+            .map(|_| {
+                let mut record = journal.create(ExecutionOrigin::NewThread, None).unwrap();
+                record.execution_phase = RecoveryPhase::Running;
+                record.mutation_intent = MutationIntent::TurnStart;
+                journal.update(&record).unwrap().execution_id
+            })
+            .collect::<Vec<_>>();
         let barrier = Arc::new(Barrier::new(5));
         let mut workers = Vec::new();
-        for _ in 0..4 {
+        for execution_id in &execution_ids {
             let executable = executable.clone();
             let path = path.clone();
+            let execution_id = execution_id.clone();
             let barrier = Arc::clone(&barrier);
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
@@ -1003,7 +1012,8 @@ mod tests {
                     .arg("--exact")
                     .arg("codex_app_server::execution_recovery::platform::tests::journal_writer_subprocess_helper")
                     .env("CODEX_METER_TEST_JOURNAL_PATH", path)
-                    .env("CODEX_METER_TEST_JOURNAL_MODE", "write")
+                    .env("CODEX_METER_TEST_JOURNAL_MODE", "complete")
+                    .env("CODEX_METER_TEST_JOURNAL_EXECUTION_ID", execution_id)
                     .output()
                     .unwrap()
             }));
@@ -1017,7 +1027,13 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        assert_eq!(journal.snapshot().unwrap().len(), 4);
+        let completed_records = journal.snapshot().unwrap();
+        assert_eq!(completed_records.len(), 4);
+        assert!(completed_records.iter().all(|record| {
+            execution_ids.contains(&record.execution_id)
+                && record.execution_phase == RecoveryPhase::Completed
+                && record.revision() == 2
+        }));
 
         let crash = Command::new(executable)
             .arg("--exact")
@@ -1049,7 +1065,11 @@ mod tests {
                 journal.store.with_lock(|| std::process::abort());
             unreachable!("the child process must abort inside the lock");
         }
-        journal.create(ExecutionOrigin::NewThread, None).unwrap();
+        let execution_id = std::env::var("CODEX_METER_TEST_JOURNAL_EXECUTION_ID").unwrap();
+        let mut record = journal.get(&execution_id).unwrap();
+        record.execution_phase = RecoveryPhase::Completed;
+        record.last_authoritative_status = Some(AuthoritativeStatus::Completed);
+        journal.update(&record).unwrap();
     }
 
     #[test]

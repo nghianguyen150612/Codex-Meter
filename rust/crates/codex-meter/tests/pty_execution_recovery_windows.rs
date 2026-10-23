@@ -30,7 +30,10 @@ impl TestPaths {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |value| value.as_nanos());
-        let root = std::env::temp_dir().join(format!(
+        let local_data = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .expect("the Windows test runner provides a per-user local data directory");
+        let root = local_data.join(format!(
             "codex-meter-conpty-{}-{timestamp}-{}",
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)

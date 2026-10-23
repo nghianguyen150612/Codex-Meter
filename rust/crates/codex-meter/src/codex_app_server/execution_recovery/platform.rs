@@ -33,9 +33,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, LOCKFILE_EXCLUSIVE_LOCK,
     LOCKFILE_FAIL_IMMEDIATELY, MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::SystemServices::{
-    ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
-};
+use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
@@ -68,7 +66,10 @@ impl Store {
 
     #[cfg(test)]
     pub fn open_for_tests() -> Result<Self, RecoveryJournalError> {
-        let path = std::env::temp_dir().join(format!(
+        let local_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or(RecoveryJournalError::DirectoryUnavailable)?;
+        let path = local_data.join(format!(
             "codex-meter-windows-unit-{}-{}",
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
@@ -462,12 +463,6 @@ impl SecurityContext {
                 }
                 let header = unsafe { &*(ace_pointer.cast::<ACE_HEADER>()) };
                 if header.AceType == ACCESS_DENIED_ACE_TYPE as u8 {
-                    continue;
-                }
-                // Mandatory integrity labels only add restrictions; they do not
-                // grant access to another principal. Windows puts them on
-                // ordinary user directories, so they are safe ancestry ACEs.
-                if header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8 {
                     continue;
                 }
                 if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
@@ -883,7 +878,10 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     fn temp_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        let local_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .expect("the Windows test runner provides a per-user local data directory");
+        local_data.join(format!(
             "codex-meter-windows-{label}-{}-{}",
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)

@@ -1041,7 +1041,13 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     fn temp_path(label: &str) -> PathBuf {
-        std::env::temp_dir().canonicalize().unwrap().join(format!(
+        #[cfg(windows)]
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .expect("the Windows test runner provides a per-user local data directory");
+        #[cfg(not(windows))]
+        let base = std::env::temp_dir().canonicalize().unwrap();
+        base.join(format!(
             "codex-meter-recovery-{label}-{}-{}",
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)

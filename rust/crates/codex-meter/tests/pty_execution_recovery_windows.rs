@@ -12,6 +12,40 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const PROMPT: &str = "P038_λ_SYNTHETIC_PROMPT";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
+fn visible_terminal_text(bytes: &[u8]) -> String {
+    let input = String::from_utf8_lossy(bytes);
+    let mut characters = input.chars();
+    let mut visible = String::with_capacity(input.len());
+    while let Some(character) = characters.next() {
+        if character == '\x1b' {
+            match characters.next() {
+                Some('[') => {
+                    for character in characters.by_ref() {
+                        if ('@'..='~').contains(&character) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let mut previous_escape = false;
+                    for character in characters.by_ref() {
+                        if character == '\x07' || (previous_escape && character == '\\') {
+                            break;
+                        }
+                        previous_escape = character == '\x1b';
+                    }
+                }
+                Some(_) | None => {}
+            }
+        } else if character.is_control() {
+            visible.push(' ');
+        } else {
+            visible.push(character);
+        }
+    }
+    visible
+}
+
 struct TestPaths {
     root: std::path::PathBuf,
     bin: std::path::PathBuf,
@@ -286,7 +320,7 @@ impl ConPtyHarness {
                 .output
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if String::from_utf8_lossy(&output).contains(text) {
+            if visible_terminal_text(&output).contains(text) {
                 return true;
             }
             drop(output);

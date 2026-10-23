@@ -255,7 +255,9 @@ fn conpty_text_matching_tracks_cursor_position_and_erasure() {
     assert!(!screen.contents().contains("old prompt"));
 
     screen.process(b"\x1b[38;7HPlease wait | no duplicate submission");
-    assert!(screen.contents().contains("Please wait | no duplicate submission"));
+    assert!(screen
+        .contents()
+        .contains("Please wait | no duplicate submission"));
     assert!(!screen.contents().contains("Enter confirm and submit once"));
 }
 

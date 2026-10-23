@@ -17,6 +17,11 @@ The upstream tags endpoint showed `rust-v0.162.1` as the closest prior stable ta
 
 The P036 runtime gate remains the exact 0.163.0 allowlist. It is not a numerical minimum and is not broadened based on static schema comparison.
 
+This matrix governs Codex protocol versions. OS execution and persistence qualification is recorded
+separately in the [P038 execution recovery platform matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md);
+the Codex 0.163.0 allowlist does not by itself certify Windows, macOS, Linux filesystems, or a live
+reference device.
+
 ## Protocol review scope
 
 The stable P036 baseline was audited against upstream Codex tag `rust-v0.163.0`. P037 reviewed the

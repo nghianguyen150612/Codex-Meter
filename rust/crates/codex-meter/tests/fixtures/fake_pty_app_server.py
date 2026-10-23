@@ -1,4 +1,4 @@
-"""Stateful synthetic App Server used by Unix PTY subprocess tests only."""
+"""Stateful synthetic App Server used by Unix PTY and Windows ConPTY tests."""
 
 import json
 import os
@@ -8,10 +8,16 @@ import time
 
 mode = sys.argv[1]
 workspace = sys.argv[2]
+pid_path = os.environ.get("CODEX_METER_TEST_SERVER_PID_FILE")
+if pid_path:
+    with open(pid_path, "w", encoding="ascii") as output:
+        output.write(str(os.getpid()))
 state_path = os.environ["CODEX_METER_TEST_STATE"]
 request_log = os.environ["CODEX_METER_TEST_REQUEST_LOG"]
 continue_path = os.environ["CODEX_METER_TEST_CONTINUE"]
 expected_prompt = os.environ.get("CODEX_METER_TEST_PROMPT", "P037_λ_SYNTHETIC_PROMPT")
+platform_family = os.environ.get("CODEX_METER_TEST_PLATFORM_FAMILY", "unix")
+platform_os = os.environ.get("CODEX_METER_TEST_PLATFORM_OS", "linux")
 
 
 def read_message():
@@ -99,8 +105,8 @@ while True:
         send({"id": message["id"], "result": {
             "userAgent": "codex_cli_rs/0.163.0",
             "codexHome": "/test-only/not-retained",
-            "platformFamily": "unix",
-            "platformOs": "linux",
+            "platformFamily": platform_family,
+            "platformOs": platform_os,
         }})
     elif method == "initialized":
         continue

@@ -1197,10 +1197,7 @@ mod tests {
         drop(journal_file);
         unsafe { LocalFree(descriptor.cast()) };
 
-        assert_eq!(
-            journal.snapshot(),
-            Err(RecoveryJournalError::UnsafeStorage)
-        );
+        assert_eq!(journal.snapshot(), Err(RecoveryJournalError::UnsafeStorage));
         drop(journal);
         std::fs::remove_dir_all(path).unwrap();
     }

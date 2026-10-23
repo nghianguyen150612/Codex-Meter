@@ -13,22 +13,23 @@ allowlist remains `codex_cli_rs/0.163.0`; this document does not broaden that ve
 | Atomic persistence | Same-directory rename, file and directory `fsync` | Same-directory rename, file and directory `fsync` | `FlushFileBuffers`, `ReplaceFileW` for replacement, `MoveFileExW` with write-through for initial creation |
 | Interprocess locking | `flock` plus process mutex | `flock` plus process mutex | `LockFileEx` byte-range lock plus process mutex; five-second acquisition bound; kernel releases the lock when handles close |
 | Revision compare-and-swap | Shared journal CAS under lock | Shared journal CAS under lock | Shared journal CAS under lock |
-| Approval and interruption | P037 synthetic Unix PTY scenarios passed | P037 native CI scenarios passed | Native ConPTY scenarios added; CI result pending |
-| Parent termination and restart | SIGKILL/restart tests passed on Unix CI | SIGKILL/restart tests passed on native macOS CI | Job Object cleanup and ConPTY restart/no-replay scenarios added; CI result pending |
-| No automatic replay | Write-ahead phases; uncertain outcomes remain unresolved | Same shared controller contract | Same shared controller contract; native restart test pending |
-| Reference device | Arch live-device gate **UNVERIFIED** | Not a release reference device | Native Windows CI is pending; no live installed-Codex qualification is recorded |
+| Approval and interruption | P037 synthetic Unix PTY scenarios passed | P037 native CI scenarios passed | Native ConPTY synthetic-server scenarios passed in Windows CI |
+| Parent termination and restart | SIGKILL/restart tests passed on Unix CI | SIGKILL/restart tests passed on native macOS CI | Job Object cleanup and ConPTY restart/no-replay scenarios passed in Windows CI |
+| No automatic replay | Write-ahead phases; uncertain outcomes remain unresolved | Same shared controller contract | Same shared controller contract; Windows parent-crash/restart tests passed with a synthetic server in native CI |
+| Reference device | Arch live-device gate **UNVERIFIED / RELEASE BLOCKER** | Not a release reference device | Native Windows CI passed; no live installed-Codex qualification is recorded |
 
 ## Qualification snapshot
 
 | Platform/configuration | Implementation | Runtime evidence | Release status |
 | --- | --- | --- | --- |
-| Linux x86_64, audited Codex 0.163.0 | Existing Unix journal and PTY controller; P038 deterministic persistence failpoints added | P037 Linux CI passed. P038 local Rust workspace, Clippy, and all 9 Unix PTY scenarios passed on Debian Linux | Implementation available; Arch reference-device release gate remains unverified |
-| macOS x86_64 and ARM64, audited Codex 0.163.0 | Existing Unix journal and PTY controller | P037 native macOS CI passed. P038 regression CI must pass before qualification is refreshed | Implementation available; no additional macOS reference-device claim |
-| Windows x86_64, audited Codex 0.163.0 | ACL-backed journal, `LockFileEx`, Job Object process cleanup, and ConPTY tests implemented | Windows-only journal, transport, and ConPTY test sources pass a reduced GNU-target Clippy check. Native Windows test run is pending; no live Codex runtime test is recorded | **Not yet release-qualified** |
+| Linux x86_64, audited Codex 0.163.0 | Existing Unix journal and PTY controller; P038 deterministic persistence failpoints added | P037 Linux CI passed. P038 CI run [39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) passed workspace and all 9 Unix PTY scenarios; local host evidence is Debian Linux | Implementation available; Arch reference-device release gate remains unverified |
+| macOS x86_64 and ARM64, audited Codex 0.163.0 | Existing Unix journal and PTY controller | P037 native macOS CI passed. P038 native regression suites passed on both architectures in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) | Implementation available; no additional macOS reference-device claim |
+| Windows x86_64, audited Codex 0.163.0 | ACL-backed journal, `LockFileEx`, Job Object process cleanup, and ConPTY tests implemented | Native Windows workspace build and all tests passed in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627), including synthetic-server ConPTY lifecycle and recovery. No live installed Codex execution is recorded | **Not yet release-qualified** |
 | Other operating systems, filesystems, removable media, and network drives | No support claim | Not validated; Windows journal rejects non-fixed and non-local volumes | Unsupported |
 
-The P037 CI history is recorded in [PROMPT037_MANIFEST.md](PROMPT037_MANIFEST.md). P038 native
-workflow links and results will be recorded in the P038 manifest when available.
+The P037 CI history is recorded in [PROMPT037_MANIFEST.md](PROMPT037_MANIFEST.md). P038 CI is linked
+in [PROMPT038_MANIFEST.md](PROMPT038_MANIFEST.md); release candidate validation ran as [workflow
+39885771794](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771794).
 
 ## Windows journal boundaries
 

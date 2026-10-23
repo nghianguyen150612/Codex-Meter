@@ -2,8 +2,9 @@
 
 ## Status
 
-- Status: **PARTIAL** until Windows native runtime tests pass and the required Arch reference-device
-  qualification is recorded.
+- Status: **PARTIAL**. Native Windows CI now passes the journal and synthetic ConPTY lifecycle
+  suites. Arch live-device qualification remains a release blocker, and no live installed Codex
+  Windows execution qualification is recorded.
 - Evidence snapshot: 2026-10-23.
 - Implementation branch: `feat/p038-windows-execution-reliability`.
 - Baseline: `352f4e0c499872f31205d75680172b8c1c8341a0`, the existing `origin/main` merge commit for
@@ -21,6 +22,10 @@
   Merge-head CI [39785737834](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39785737834)
   and release validation [39785737845](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39785737845)
   passed. These results did not satisfy the live Arch device gate.
+- P038 exact-head CI for `4bcd9a2d27b32df5d3ad484c7d22c7853fde6382` passed in [run
+  39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627), including
+  native Windows, Linux, macOS x86_64, and macOS ARM64 jobs. Release candidate validation is recorded
+  in [run 39885771794](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771794).
 
 ## Implementation plan
 
@@ -67,11 +72,11 @@ power-loss scenario.
 | P037 preflight and baseline | **PASS WITH BLOCKERS** | PR #32 already merged at baseline `352f4e0`; P037 CI passed, Arch gate remained pending, and Windows ACL/ConPTY work was absent |
 | Linux Rust journal unit suite | **PASS** | Included in 463 passing Rust library tests; deterministic write-boundary failures passed |
 | Linux Unix PTY suite | **PASS** | All 9 existing P037 lifecycle, approval, interruption, crash, restart, and no-replay scenarios passed |
-| macOS x86_64 and ARM64 | **PENDING P038 CI** | P037 native CI passed; P038 cross-platform regression results not yet available |
-| Windows ACL, replacement, CAS, and concurrency tests | **PENDING NATIVE CI** | Tests cover owner-only ACL, unsafe permissions, hard links, stale replacement files, revision conflicts, concurrent child processes, and lock release after abort |
-| Windows ConPTY approval, interruption, parent crash, restart, and no-replay tests | **PENDING NATIVE CI** | Native ConPTY integration tests added with a synthetic local App Server |
+| macOS x86_64 and ARM64 | **PASS** | P038 native regression suites passed on macOS 15 Intel and ARM64 in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) |
+| Windows ACL, replacement, CAS, and concurrency tests | **PASS** | Native `windows-latest` CI passed ACL ownership/permissions, hard-link rejection, replacement, revision conflict, concurrent process, and interrupted lock cases in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) |
+| Windows ConPTY approval, interruption, parent crash, restart, and no-replay tests | **PASS** | Four native ConPTY integration tests passed with a synthetic local App Server in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627); no live installed Codex execution is recorded |
 | Windows-only source and test type-check | **PASS** | Reduced target harness passed `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`; includes Windows journal, transport Job Object, and ConPTY test sources |
-| Full Windows target build | **BLOCKED LOCALLY** | The Linux environment lacks the Windows C toolchain needed by bundled `libsqlite3-sys`; native Windows workflow is required |
+| Full Windows target build | **PASS IN NATIVE CI** | Native `windows-latest` workspace build and all-target tests passed in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627). Linux cross-build attempts remain blocked by missing Windows C toolchains for bundled SQLite |
 | Arch Linux reference-device gate | **UNVERIFIED / RELEASE BLOCKER** | This environment is Debian Linux; no live Arch reference device was available |
 | Filesystem power-loss durability | **UNVERIFIED** | Process crash and injected boundary tests are not hardware power-loss testing |
 | Codex runtime version allowlist | **UNCHANGED** | Only audited `codex_cli_rs/0.163.0` remains allowlisted |
@@ -85,13 +90,14 @@ qualification is claimed. Local validation commands and their results:
 - `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings` — **PASS**.
 - `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets` — **PASS**: 463 library, 4 analytics CLI, 19 sync CLI, 5 TUI CLI, and 9 Unix PTY tests.
 - `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --all-features` — **PASS**: 461 library, 2 analytics CLI, 19 sync CLI, 5 TUI CLI, and 9 Unix PTY tests.
-- Windows reduced target harness `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings` — **PASS** for Windows recovery, transport, and ConPTY test sources; this is compile evidence, not Windows runtime evidence.
+- Windows reduced target harness `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings` — **PASS** for Windows recovery, transport, and ConPTY test sources. Native Windows build and runtime test evidence is in CI run 39885771627.
 - `cargo check --manifest-path rust/Cargo.toml -p codex-meter --target x86_64-pc-windows-msvc` — **BLOCKED** before the project crate because the Linux environment has no `lib.exe` for bundled SQLite.
 - `cargo check --manifest-path rust/Cargo.toml -p codex-meter --target x86_64-pc-windows-gnu` — **BLOCKED** before the project crate because `x86_64-w64-mingw32-gcc` is unavailable for bundled SQLite.
 
 The host reports Debian GNU/Linux x86_64 with kernel `6.18.55`; the workspace filesystem is an
-overlay. The available Rust toolchain is stable `1.99.1`. Native Windows CI and the Arch live-device
-gate remain outstanding.
+overlay. The available Rust toolchain is stable `1.99.1`. Native Windows CI is recorded above, but
+there is no live installed Codex Windows execution evidence. The Arch live-device gate remains
+outstanding.
 
 ## Platform matrix
 
@@ -101,5 +107,8 @@ process-crash evidence.
 
 ## Commit, pull request, and merge
 
-No P038 commit or PR exists yet. The branch is not merged. P038 remains **PARTIAL** while required
-native Windows CI and the Arch reference-device release gate are outstanding.
+P038 implementation head before this evidence update: `4bcd9a2d27b32df5d3ad484c7d22c7853fde6382`.
+The documentation update is being committed on the existing `feat/p038-windows-execution-reliability`
+branch. PR [#33](https://github.com/nghianguyen150612/Codex-Meter/pull/33) is open as a draft and is
+not merged. P038 remains **PARTIAL** because Arch live-device qualification is a release blocker and
+live installed Codex Windows execution has not been qualified.

@@ -14,7 +14,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Foundation::{LocalFree, GENERIC_ALL, GENERIC_WRITE};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    ConvertStringSidToSidW, GetSecurityInfo, SE_FILE_OBJECT,
+    ConvertStringSidToSidW, GetSecurityInfo, SetSecurityInfo, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorControl,
@@ -1119,6 +1119,90 @@ mod tests {
         record.execution_phase = RecoveryPhase::Completed;
         record.last_authoritative_status = Some(AuthoritativeStatus::Completed);
         journal.update(&record).unwrap();
+    }
+
+    #[test]
+    fn journal_fails_closed_when_current_user_access_is_denied() {
+        let path = temp_path("inaccessible-acl");
+        let journal = RecoveryJournal::open_at(&path).unwrap();
+        journal.create(ExecutionOrigin::NewThread, None).unwrap();
+
+        let security = SecurityContext::current().unwrap();
+        let mut sid_string = std::ptr::null_mut();
+        let token_sid = security.user_sid.as_ptr().cast_mut().cast();
+        assert_ne!(
+            unsafe { ConvertSidToStringSidW(token_sid, &mut sid_string) },
+            0
+        );
+        let sid_text = unsafe { bounded_wide_string(sid_string, 256) }.unwrap();
+        unsafe { LocalFree(sid_string.cast()) };
+
+        let descriptor_text = format!("O:{sid_text}D:P(D;;FA;;;{sid_text})");
+        let descriptor_text = descriptor_text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut descriptor = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    descriptor_text.as_ptr(),
+                    PRIVATE_SECURITY_DESCRIPTOR_REVISION,
+                    &mut descriptor,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut denied_dacl = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                GetSecurityDescriptorDacl(
+                    descriptor,
+                    &mut present,
+                    &mut denied_dacl,
+                    &mut defaulted,
+                )
+            },
+            0
+        );
+        assert_ne!(present, 0);
+        assert_eq!(defaulted, 0);
+
+        let journal_file = open_existing_file(
+            &path.join("journal.json"),
+            FILE_READ_ATTRIBUTES
+                | windows_sys::Win32::Storage::FileSystem::READ_CONTROL
+                | windows_sys::Win32::Storage::FileSystem::WRITE_DAC,
+            &security,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                SetSecurityInfo(
+                    journal_file.as_raw_handle().cast(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    denied_dacl,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        drop(journal_file);
+        unsafe { LocalFree(descriptor.cast()) };
+
+        assert_eq!(
+            journal.snapshot(),
+            Err(RecoveryJournalError::UnsafeStorage)
+        );
+        drop(journal);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

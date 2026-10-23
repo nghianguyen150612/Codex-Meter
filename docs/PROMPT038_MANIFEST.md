@@ -22,10 +22,13 @@
   Merge-head CI [39785737834](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39785737834)
   and release validation [39785737845](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39785737845)
   passed. These results did not satisfy the live Arch device gate.
-- P038 exact-head CI for `4bcd9a2d27b32df5d3ad484c7d22c7853fde6382` passed in [run
-  39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627), including
-  native Windows, Linux, macOS x86_64, and macOS ARM64 jobs. Release candidate validation is recorded
-  in [run 39885771794](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771794).
+- P038 implementation-head run [39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698)
+  passed Rust quality, Linux, native Windows, macOS x86_64/ARM64, contract, Python quality, and the
+  other installed-runtime jobs. The overall run is still in progress because its macOS 3.13
+  installed-runtime smoke job is queued; that same smoke passed in the immediately prior P038 run
+  [39886904765](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39886904765), which
+  only failed Rust formatting on the assertion layout corrected in `899447a`. Release candidate
+  validation passed in [run 39887178747](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178747).
 
 ## Implementation plan
 
@@ -72,11 +75,13 @@ power-loss scenario.
 | P037 preflight and baseline | **PASS WITH BLOCKERS** | PR #32 already merged at baseline `352f4e0`; P037 CI passed, Arch gate remained pending, and Windows ACL/ConPTY work was absent |
 | Linux Rust journal unit suite | **PASS** | Included in 463 passing Rust library tests; deterministic write-boundary failures passed |
 | Linux Unix PTY suite | **PASS** | All 9 existing P037 lifecycle, approval, interruption, crash, restart, and no-replay scenarios passed |
-| macOS x86_64 and ARM64 | **PASS** | P038 native regression suites passed on macOS 15 Intel and ARM64 in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) |
-| Windows ACL, replacement, CAS, and concurrency tests | **PASS** | Native `windows-latest` CI passed ACL ownership/permissions, hard-link rejection, replacement, revision conflict, concurrent process, and interrupted lock cases in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) |
-| Windows ConPTY approval, interruption, parent crash, restart, and no-replay tests | **PASS** | Four native ConPTY integration tests passed with a synthetic local App Server in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627); no live installed Codex execution is recorded |
+| macOS x86_64 and ARM64 | **PASS** | P038 native regression suites passed on macOS 15 Intel and ARM64 in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698) |
+| Windows ACL, replacement, CAS, and concurrency tests | **PASS** | 461 native Windows library tests passed, including owner ACL checks, explicit denial of current-user access, hard-link rejection, replacement, revision conflicts, concurrent processes, and interrupted-lock recovery in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698) |
+| Windows ConPTY approval, interruption, parent crash, restart, and no-replay tests | **PASS** | Four native ConPTY integration tests passed with a synthetic local App Server in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698); no live installed Codex execution is recorded |
+| Deterministic persistence fault injection | **PASS** | Failures injected before/during write, before/after flush, before/after replacement, during lock acquisition, revision CAS, cleanup, and recovery; malformed/truncated/corrupt, stale temporary, conflicting revision, inaccessible ACL, and unsafe journal records fail closed |
+| Overall CI workflow | **BLOCKED ON QUEUED JOB** | All required Rust platform, quality, contract, and Python jobs passed in [run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698); its macOS 3.13 installed-runtime smoke remains queued, with the same smoke passed in prior run 39886904765 |
 | Windows-only source and test type-check | **PASS** | Reduced target harness passed `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`; includes Windows journal, transport Job Object, and ConPTY test sources |
-| Full Windows target build | **PASS IN NATIVE CI** | Native `windows-latest` workspace build and all-target tests passed in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627). Linux cross-build attempts remain blocked by missing Windows C toolchains for bundled SQLite |
+| Full Windows target build | **PASS IN NATIVE CI** | Native `windows-latest` workspace build and all-target tests passed in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698). Linux cross-build attempts remain blocked by missing Windows C toolchains for bundled SQLite |
 | Arch Linux reference-device gate | **UNVERIFIED / RELEASE BLOCKER** | This environment is Debian Linux; no live Arch reference device was available |
 | Filesystem power-loss durability | **UNVERIFIED** | Process crash and injected boundary tests are not hardware power-loss testing |
 | Codex runtime version allowlist | **UNCHANGED** | Only audited `codex_cli_rs/0.163.0` remains allowlisted |
@@ -90,7 +95,7 @@ qualification is claimed. Local validation commands and their results:
 - `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings` — **PASS**.
 - `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets` — **PASS**: 463 library, 4 analytics CLI, 19 sync CLI, 5 TUI CLI, and 9 Unix PTY tests.
 - `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --all-features` — **PASS**: 461 library, 2 analytics CLI, 19 sync CLI, 5 TUI CLI, and 9 Unix PTY tests.
-- Windows reduced target harness `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings` — **PASS** for Windows recovery, transport, and ConPTY test sources. Native Windows build and runtime test evidence is in CI run 39885771627.
+- Windows reduced target harness `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings` — **PASS** for Windows recovery, transport, and ConPTY test sources. Native Windows build and runtime test evidence is in CI run 39887178698.
 - `cargo check --manifest-path rust/Cargo.toml -p codex-meter --target x86_64-pc-windows-msvc` — **BLOCKED** before the project crate because the Linux environment has no `lib.exe` for bundled SQLite.
 - `cargo check --manifest-path rust/Cargo.toml -p codex-meter --target x86_64-pc-windows-gnu` — **BLOCKED** before the project crate because `x86_64-w64-mingw32-gcc` is unavailable for bundled SQLite.
 
@@ -107,8 +112,8 @@ process-crash evidence.
 
 ## Commit, pull request, and merge
 
-P038 implementation head before this evidence update: `4bcd9a2d27b32df5d3ad484c7d22c7853fde6382`.
-The documentation update is being committed on the existing `feat/p038-windows-execution-reliability`
-branch. PR [#33](https://github.com/nghianguyen150612/Codex-Meter/pull/33) is open as a draft and is
-not merged. P038 remains **PARTIAL** because Arch live-device qualification is a release blocker and
-live installed Codex Windows execution has not been qualified.
+P038 implementation head for this evidence snapshot: `899447a9584efed259358a3c7a870083e640b338`.
+The evidence update is on the existing `feat/p038-windows-execution-reliability` branch. PR
+[#33](https://github.com/nghianguyen150612/Codex-Meter/pull/33) is open as a draft and is not merged.
+P038 remains **PARTIAL** because Arch live-device qualification is a release blocker and live
+installed Codex Windows execution has not been qualified.

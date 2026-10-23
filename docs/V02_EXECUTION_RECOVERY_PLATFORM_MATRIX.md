@@ -22,14 +22,14 @@ allowlist remains `codex_cli_rs/0.163.0`; this document does not broaden that ve
 
 | Platform/configuration | Implementation | Runtime evidence | Release status |
 | --- | --- | --- | --- |
-| Linux x86_64, audited Codex 0.163.0 | Existing Unix journal and PTY controller; P038 deterministic persistence failpoints added | P037 Linux CI passed. P038 CI run [39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) passed workspace and all 9 Unix PTY scenarios; local host evidence is Debian Linux | Implementation available; Arch reference-device release gate remains unverified |
-| macOS x86_64 and ARM64, audited Codex 0.163.0 | Existing Unix journal and PTY controller | P037 native macOS CI passed. P038 native regression suites passed on both architectures in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627) | Implementation available; no additional macOS reference-device claim |
-| Windows x86_64, audited Codex 0.163.0 | ACL-backed journal, `LockFileEx`, Job Object process cleanup, and ConPTY tests implemented | Native Windows workspace build and all tests passed in [CI run 39885771627](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771627), including synthetic-server ConPTY lifecycle and recovery. No live installed Codex execution is recorded | **Not yet release-qualified** |
+| Linux x86_64, audited Codex 0.163.0 | Existing Unix journal and PTY controller; P038 deterministic persistence failpoints added | P037 Linux CI passed. P038 CI run [39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698) passed workspace and all 9 Unix PTY scenarios; local host evidence is Debian Linux | Implementation available; Arch reference-device release gate remains unverified |
+| macOS x86_64 and ARM64, audited Codex 0.163.0 | Existing Unix journal and PTY controller | P037 native macOS CI passed. P038 native regression suites passed on both architectures in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698) | Implementation available; no additional macOS reference-device claim |
+| Windows x86_64, audited Codex 0.163.0 | ACL-backed journal, `LockFileEx`, Job Object process cleanup, and ConPTY tests implemented | 461 Windows library tests and four synthetic-server ConPTY tests passed in [CI run 39887178698](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178698), including current-user access denial and restart/no-replay. No live installed Codex execution is recorded | **Not yet release-qualified** |
 | Other operating systems, filesystems, removable media, and network drives | No support claim | Not validated; Windows journal rejects non-fixed and non-local volumes | Unsupported |
 
 The P037 CI history is recorded in [PROMPT037_MANIFEST.md](PROMPT037_MANIFEST.md). P038 CI is linked
-in [PROMPT038_MANIFEST.md](PROMPT038_MANIFEST.md); release candidate validation ran as [workflow
-39885771794](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39885771794).
+in [PROMPT038_MANIFEST.md](PROMPT038_MANIFEST.md); release candidate validation passed as [workflow
+39887178747](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/39887178747).
 
 ## Windows journal boundaries
 

@@ -148,9 +148,19 @@ saved drafts. No task token attribution, quota delta, model cost, or account-wid
 derived from its records. `turn/completed` without matching token evidence is not a token-ledger
 entry; no journal record is not proof that Codex had no activity.
 
-Windows flushes journal data and requests write-through replacement, but this is not a guarantee
-against every storage-controller cache, filesystem, or hardware power-loss scenario. Process-crash
-tests do not establish power-loss durability. See the
-[cross-platform execution matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md) for current runtime
-evidence and open release gates. The Arch reference gate remains outstanding; this journal must not
-be used to infer task-token attribution or forecast quota.
+The durability evidence has four distinct boundaries:
+
+| Property | Current evidence |
+| --- | --- |
+| Process-crash recovery | Exercised by process termination/restart and deterministic persistence-failure tests. |
+| Filesystem write ordering | Unix file and directory syncs; Windows FlushFileBuffers and write-through replacement. |
+| Atomic namespace replacement | Same-directory rename on Unix; ReplaceFileW or write-through MoveFileExW on Windows. Tested, but not a claim about every storage layer. |
+| OS crash and hardware power loss | **UNVERIFIED**. No kernel-crash or physical power-loss experiment was performed. |
+
+Flush and write-through operations do not guarantee survival of every storage-controller cache,
+filesystem, operating-system crash, or hardware power-loss scenario. Power-loss testing is not an
+additional release prerequisite under this P038 task. See the
+[cross-platform execution matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md) and
+[P038A qualification record](PROMPT038A_MANIFEST.md) for current runtime evidence and open gates.
+The Arch reference gate remains outstanding; this journal must not be used to infer task-token
+attribution or forecast quota.

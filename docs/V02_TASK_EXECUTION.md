@@ -156,8 +156,8 @@ behavior remain unverified. No paid task was submitted for validation. Controlle
 PTY tests do not replace live-device evidence. See the [Codex compatibility matrix](V02_CODEX_COMPATIBILITY_MATRIX.md),
 [execution platform matrix](V02_EXECUTION_RECOVERY_PLATFORM_MATRIX.md), and [P037 manifest](PROMPT037_MANIFEST.md) for gate records.
 
-P038 implements Windows ACL-backed journal storage and adds native ConPTY subprocess tests. The
-implementation is not considered release-qualified until the native Windows CI test results are
-recorded. Linux and macOS regression results are tracked alongside it. The Arch live reference
-gate remains unverified and is a release blocker where required. Do not infer task-token attribution
-or quota forecasting from execution records.
+P038 implements Windows ACL-backed journal storage and adds native ConPTY subprocess tests.
+Native Windows security and synthetic lifecycle CI passed in run 39888358799. That result does not
+qualify the actual installed Codex App Server on Windows. The live Windows runtime gate and the
+native Arch reference-device gate remain unverified release blockers. Do not infer task-token
+attribution or quota forecasting from execution records.

@@ -148,7 +148,7 @@ impl Drop for TestPaths {
 struct ConPtyHarness {
     paths: TestPaths,
     master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     child: Option<Box<dyn Child + Send + Sync>>,
     output: Arc<Mutex<Vec<u8>>>,
     reader: Option<JoinHandle<()>>,
@@ -180,6 +180,8 @@ impl ConPtyHarness {
                 pixel_height: 0,
             })
             .expect("Windows ConPTY must initialize");
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
+        let response_writer = Arc::clone(&writer);
         let mut builder = portable_pty::CommandBuilder::new(env!("CARGO_BIN_EXE_codex-meter"));
         builder.arg(command);
         builder.cwd(&self.paths.workspace);
@@ -212,23 +214,52 @@ impl ConPtyHarness {
         self.reader = Some(thread::spawn(move || {
             let mut reader = reader;
             let mut buffer = [0_u8; 4096];
+            let mut terminal_queries = Vec::new();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
-                    Ok(count) => output
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .extend_from_slice(&buffer[..count]),
+                    Ok(count) => {
+                        let query_count = {
+                            let mut output = output
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            output.extend_from_slice(&buffer[..count]);
+                            terminal_queries.extend_from_slice(&buffer[..count]);
+                            let mut query_count = 0;
+                            while let Some(position) = terminal_queries
+                                .windows(4)
+                                .position(|query| query == b"\x1b[6n")
+                            {
+                                terminal_queries.drain(..position + 4);
+                                query_count += 1;
+                            }
+                            let trailing_bytes = terminal_queries.len().saturating_sub(3);
+                            terminal_queries.drain(..trailing_bytes);
+                            query_count
+                        };
+                        for _ in 0..query_count {
+                            let mut writer = response_writer
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let _ = writer.write_all(b"\x1b[1;1R");
+                            let _ = writer.flush();
+                        }
+                    }
                 }
             }
         }));
-        self.writer = Some(pair.master.take_writer().unwrap());
+        self.writer = Some(writer);
         self.master = Some(pair.master);
         self.child = Some(child);
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        let writer = self.writer.as_mut().expect("ConPTY writer is open");
+        let mut writer = self
+            .writer
+            .as_ref()
+            .expect("ConPTY writer is open")
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         writer.write_all(bytes).unwrap();
         writer.flush().unwrap();
     }

@@ -393,6 +393,8 @@ impl SecurityContext {
             )
         };
         if status != 0 || descriptor.is_null() {
+            #[cfg(test)]
+            eprintln!("P038_TEST private ACL query failed: status={status}");
             return false;
         }
         let mut control = 0_u16;
@@ -411,6 +413,13 @@ impl SecurityContext {
                 && EqualSid(owner, self.user_sid.as_ptr().cast_mut().cast()) != 0
                 && self.exact_user_dacl(dacl)
         };
+        #[cfg(test)]
+        if !valid {
+            eprintln!(
+                "P038_TEST private ACL validation failed: control={control:#x} present={present} defaulted={defaulted} owner_null={}",
+                owner.is_null()
+            );
+        }
         unsafe {
             LocalFree(descriptor.cast::<std::ffi::c_void>());
         }
@@ -432,6 +441,8 @@ impl SecurityContext {
             )
         };
         if status != 0 || descriptor.is_null() {
+            #[cfg(test)]
+            eprintln!("P038_TEST ancestor ACL query failed: status={status}");
             return false;
         }
         let mut present = 0;
@@ -452,12 +463,18 @@ impl SecurityContext {
                 ) != 0
         };
         let mut safe = valid;
+        #[cfg(test)]
+        if !valid {
+            eprintln!("P038_TEST ancestor ACL descriptor invalid");
+        }
         if safe {
             for index in 0..information.AceCount {
                 let mut ace_pointer = std::ptr::null_mut();
                 if unsafe { GetAce(actual_dacl, index, &mut ace_pointer) } == 0
                     || ace_pointer.is_null()
                 {
+                    #[cfg(test)]
+                    eprintln!("P038_TEST ancestor GetAce failed at index {index}");
                     safe = false;
                     break;
                 }
@@ -466,6 +483,8 @@ impl SecurityContext {
                     continue;
                 }
                 if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+                    #[cfg(test)]
+                    eprintln!("P038_TEST ancestor rejected ACE type {}", header.AceType);
                     safe = false;
                     break;
                 }
@@ -475,6 +494,11 @@ impl SecurityContext {
                 if (header.AceSize as usize)
                     < std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart) + 8
                 {
+                    #[cfg(test)]
+                    eprintln!(
+                        "P038_TEST ancestor rejected short ACE type {}",
+                        header.AceType
+                    );
                     safe = false;
                     break;
                 }
@@ -484,6 +508,8 @@ impl SecurityContext {
                 let sid_end =
                     std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart).saturating_add(sid_length);
                 if sid_length == 0 || sid_end > header.AceSize as usize {
+                    #[cfg(test)]
+                    eprintln!("P038_TEST ancestor rejected invalid SID size {sid_length}");
                     safe = false;
                     break;
                 }
@@ -504,6 +530,8 @@ impl SecurityContext {
                     | GENERIC_WRITE
                     | GENERIC_ALL;
                 if !trusted && ace.Mask & unsafe_write_access != 0 {
+                    #[cfg(test)]
+                    eprintln!("P038_TEST ancestor rejected non-owner mask {:#x}", ace.Mask);
                     safe = false;
                     break;
                 }
@@ -598,11 +626,16 @@ fn ensure_private_directory(
     root.push(disk);
     root.push("\\");
     let root_wide = wide_path(&root)?;
-    if unsafe { GetDriveTypeW(root_wide.as_ptr()) } != DRIVE_FIXED_TYPE {
+    let drive_type = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
+    if drive_type != DRIVE_FIXED_TYPE {
+        #[cfg(test)]
+        eprintln!("P038_TEST journal root drive type {drive_type}");
         return Err(RecoveryJournalError::UnsafeStorage);
     }
     let root_handle = open_directory(&root)?;
     if !security.safe_ancestor_dacl(root_handle.as_raw_handle().cast()) {
+        #[cfg(test)]
+        eprintln!("P038_TEST journal root ACL unsafe");
         return Err(RecoveryJournalError::UnsafeStorage);
     }
     let mut current = root;
@@ -640,9 +673,13 @@ fn ensure_private_directory(
             index + 1 == remaining.len() || name_text.eq_ignore_ascii_case("codex-meter");
         if is_private_component {
             if !security.validate(directory.as_raw_handle().cast()) {
+                #[cfg(test)]
+                eprintln!("P038_TEST private directory component {index} ACL unsafe");
                 return Err(RecoveryJournalError::UnsafeStorage);
             }
         } else if !security.safe_ancestor_dacl(directory.as_raw_handle().cast()) {
+            #[cfg(test)]
+            eprintln!("P038_TEST ancestor directory component {index} ACL unsafe");
             return Err(RecoveryJournalError::UnsafeStorage);
         }
         if index + 1 == remaining.len() {

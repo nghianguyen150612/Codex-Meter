@@ -296,23 +296,27 @@ impl ConPtyHarness {
     }
 
     fn assert_text(&self, text: &str) {
-        assert!(
-            self.wait_for(text, Duration::from_secs(20)),
-            "expected ConPTY output to contain {text:?}; recent output: {}; fixture requests: {:?}; wrapper PID: {:?}; server PID: {:?}",
-            String::from_utf8_lossy(
-                &self
-                    .output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            )
-            .chars()
-            .rev()
-            .take(3000)
-            .collect::<String>(),
-            fs::read_to_string(&self.paths.request_log).unwrap_or_default(),
-            fs::read_to_string(&self.paths.wrapper_pid).unwrap_or_default(),
-            fs::read_to_string(&self.paths.server_pid).unwrap_or_default(),
-        );
+        if !self.wait_for(text, Duration::from_secs(20)) {
+            eprintln!(
+                "ConPTY fixture diagnostics: requests={:?}, wrapper_pid={:?}, server_pid={:?}",
+                fs::read_to_string(&self.paths.request_log).unwrap_or_default(),
+                fs::read_to_string(&self.paths.wrapper_pid).unwrap_or_default(),
+                fs::read_to_string(&self.paths.server_pid).unwrap_or_default(),
+            );
+            panic!(
+                "expected ConPTY output to contain {text:?}; recent output: {}",
+                String::from_utf8_lossy(
+                    &self
+                        .output
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                )
+                .chars()
+                .rev()
+                .take(3000)
+                .collect::<String>()
+            );
+        }
     }
 
     fn begin_task(&mut self) {

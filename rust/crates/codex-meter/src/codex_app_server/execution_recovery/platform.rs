@@ -1045,11 +1045,44 @@ mod tests {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut ready = [0_u8; 1];
-        crash.stdout.take().unwrap().read_exact(&mut ready).unwrap();
-        assert_eq!(ready, [b'L']);
+        let mut child_stdout = crash.stdout.take().unwrap();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let ready_reader = std::thread::spawn(move || {
+            const LOCK_READY_MARKER: &[u8] = b"P038_LOCK_READY";
+            let mut pending = Vec::new();
+            let mut buffer = [0_u8; 256];
+            loop {
+                let count = match child_stdout.read(&mut buffer) {
+                    Ok(0) | Err(_) => {
+                        let _ = ready_sender.send(false);
+                        return;
+                    }
+                    Ok(count) => count,
+                };
+                pending.extend_from_slice(&buffer[..count]);
+                if pending
+                    .windows(LOCK_READY_MARKER.len())
+                    .any(|window| window == LOCK_READY_MARKER)
+                {
+                    let _ = ready_sender.send(true);
+                    return;
+                }
+                let trailing_bytes = pending.len().saturating_sub(LOCK_READY_MARKER.len() - 1);
+                pending.drain(..trailing_bytes);
+            }
+        });
+        let ready = ready_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(false);
+        if !ready {
+            let _ = crash.kill();
+            let _ = crash.wait();
+            let _ = ready_reader.join();
+            panic!("the child must acquire the journal lock before the timeout");
+        }
         crash.kill().unwrap();
         let crash_status = crash.wait().unwrap();
+        ready_reader.join().unwrap();
         assert!(
             !crash_status.success(),
             "the child must be forcibly terminated while holding the lock"
@@ -1072,7 +1105,7 @@ mod tests {
             let _: Result<(), RecoveryJournalError> = journal.store.with_lock(|| {
                 let mut stdout = std::io::stdout().lock();
                 stdout
-                    .write_all(b"L")
+                    .write_all(b"P038_LOCK_READY")
                     .map_err(|_| RecoveryJournalError::Io)?;
                 stdout.flush().map_err(|_| RecoveryJournalError::Io)?;
                 loop {

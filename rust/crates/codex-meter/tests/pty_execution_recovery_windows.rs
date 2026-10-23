@@ -197,6 +197,11 @@ impl ConPtyHarness {
         builder.env("HOME", &self.paths.root);
         builder.env("LOCALAPPDATA", &self.paths.local_app_data);
         builder.env("CODEX_METER_TEST_MODE", mode);
+        builder.env(
+            "CODEX_METER_TEST_FIXTURE",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/fake_pty_app_server.py"),
+        );
         builder.env("CODEX_METER_TEST_WORKSPACE", &self.paths.workspace);
         builder.env("CODEX_METER_TEST_STATE", &self.paths.state);
         builder.env("CODEX_METER_TEST_REQUEST_LOG", &self.paths.request_log);

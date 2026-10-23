@@ -914,7 +914,7 @@ unsafe fn bounded_wide_string(value: *const u16, maximum: usize) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::sync::{Arc, Barrier};
 
     fn temp_path(label: &str) -> PathBuf {
@@ -1011,6 +1011,7 @@ mod tests {
                 Command::new(executable)
                     .arg("--exact")
                     .arg("codex_app_server::execution_recovery::platform::tests::journal_writer_subprocess_helper")
+                    .arg("--nocapture")
                     .env("CODEX_METER_TEST_JOURNAL_PATH", path)
                     .env("CODEX_METER_TEST_JOURNAL_MODE", "complete")
                     .env("CODEX_METER_TEST_JOURNAL_EXECUTION_ID", execution_id)
@@ -1035,16 +1036,23 @@ mod tests {
                 && record.revision() == 2
         }));
 
-        let crash = Command::new(executable)
+        let mut crash = Command::new(executable)
             .arg("--exact")
             .arg("codex_app_server::execution_recovery::platform::tests::journal_writer_subprocess_helper")
+            .arg("--nocapture")
             .env("CODEX_METER_TEST_JOURNAL_PATH", &path)
-            .env("CODEX_METER_TEST_JOURNAL_MODE", "abort-while-locked")
-            .output()
+            .env("CODEX_METER_TEST_JOURNAL_MODE", "hold-lock")
+            .stdout(Stdio::piped())
+            .spawn()
             .unwrap();
+        let mut ready = [0_u8; 1];
+        crash.stdout.take().unwrap().read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [b'L']);
+        crash.kill().unwrap();
+        let crash_status = crash.wait().unwrap();
         assert!(
-            !crash.status.success(),
-            "the child must terminate while holding the lock"
+            !crash_status.success(),
+            "the child must be forcibly terminated while holding the lock"
         );
         assert_eq!(journal.snapshot().unwrap().len(), 4);
         drop(journal);
@@ -1060,10 +1068,18 @@ mod tests {
             return;
         };
         let journal = RecoveryJournal::open_at(Path::new(&path)).unwrap();
-        if mode.to_string_lossy() == "abort-while-locked" {
-            let _: Result<(), RecoveryJournalError> =
-                journal.store.with_lock(|| std::process::abort());
-            unreachable!("the child process must abort inside the lock");
+        if mode.to_string_lossy() == "hold-lock" {
+            let _: Result<(), RecoveryJournalError> = journal.store.with_lock(|| {
+                let mut stdout = std::io::stdout().lock();
+                stdout
+                    .write_all(b"L")
+                    .map_err(|_| RecoveryJournalError::Io)?;
+                stdout.flush().map_err(|_| RecoveryJournalError::Io)?;
+                loop {
+                    std::thread::park();
+                }
+            });
+            unreachable!("the child process must be terminated inside the lock");
         }
         let execution_id = std::env::var("CODEX_METER_TEST_JOURNAL_EXECUTION_ID").unwrap();
         let mut record = journal.get(&execution_id).unwrap();

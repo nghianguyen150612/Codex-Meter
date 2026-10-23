@@ -14,11 +14,20 @@ const TERMINAL_ROWS: usize = 40;
 const TERMINAL_COLUMNS: usize = 120;
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
+enum ParserState {
+    Ground,
+    Escape,
+    Csi(String),
+    Osc(bool),
+}
+
 struct TerminalScreen {
     cells: Vec<Vec<char>>,
     row: usize,
     column: usize,
     saved_cursor: Option<(usize, usize)>,
+    pending_input: Vec<u8>,
+    parser_state: ParserState,
 }
 
 impl TerminalScreen {
@@ -28,51 +37,59 @@ impl TerminalScreen {
             row: 0,
             column: 0,
             saved_cursor: None,
+            pending_input: Vec::new(),
+            parser_state: ParserState::Ground,
         }
     }
 
     fn process(&mut self, bytes: &[u8]) {
-        let input = String::from_utf8_lossy(bytes);
-        let mut characters = input.chars().peekable();
-        while let Some(character) = characters.next() {
-            match character {
-                '\x1b' => match characters.next() {
-                    Some('[') => {
-                        let mut parameters = String::new();
-                        let mut final_character = None;
-                        for character in characters.by_ref() {
-                            if ('@'..='~').contains(&character) {
-                                final_character = Some(character);
-                                break;
-                            }
-                            parameters.push(character);
-                        }
-                        if let Some(final_character) = final_character {
-                            self.process_csi(&parameters, final_character);
-                        }
-                    }
-                    Some(']') => {
-                        let mut previous_escape = false;
-                        for character in characters.by_ref() {
-                            if character == '\x07' || (previous_escape && character == '\\') {
-                                break;
-                            }
-                            previous_escape = character == '\x1b';
-                        }
-                    }
-                    Some('7') => self.saved_cursor = Some((self.row, self.column)),
-                    Some('8') => self.restore_cursor(),
-                    Some('D') => self.line_feed(),
-                    Some('M') => self.scroll_down(1),
-                    Some('c') => *self = Self::new(),
-                    Some(_) | None => {}
+        let mut input = std::mem::take(&mut self.pending_input);
+        input.extend_from_slice(bytes);
+        let valid_length = match std::str::from_utf8(&input) {
+            Ok(_) => input.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => input.len(),
+        };
+        self.pending_input.extend_from_slice(&input[valid_length..]);
+        let input = String::from_utf8_lossy(&input[..valid_length]);
+        for character in input.chars() {
+            let state = std::mem::replace(&mut self.parser_state, ParserState::Ground);
+            match state {
+                ParserState::Ground => match character {
+                    '\x1b' => self.parser_state = ParserState::Escape,
+                    '\r' => self.column = 0,
+                    '\n' => self.line_feed(),
+                    '\x08' => self.column = self.column.saturating_sub(1),
+                    '\t' => self.column = ((self.column / 8) + 1) * 8,
+                    character if character.is_control() => {}
+                    character => self.put(character),
                 },
-                '\r' => self.column = 0,
-                '\n' => self.line_feed(),
-                '\x08' => self.column = self.column.saturating_sub(1),
-                '\t' => self.column = ((self.column / 8) + 1) * 8,
-                character if character.is_control() => {}
-                character => self.put(character),
+                ParserState::Escape => match character {
+                    '[' => self.parser_state = ParserState::Csi(String::new()),
+                    ']' => self.parser_state = ParserState::Osc(false),
+                    '7' => self.saved_cursor = Some((self.row, self.column)),
+                    '8' => self.restore_cursor(),
+                    'D' => self.line_feed(),
+                    'M' => self.scroll_down(1),
+                    'c' => *self = Self::new(),
+                    '\x1b' => self.parser_state = ParserState::Escape,
+                    _ => {}
+                },
+                ParserState::Csi(mut parameters) => {
+                    if ('@'..='~').contains(&character) {
+                        self.process_csi(&parameters, character);
+                    } else {
+                        parameters.push(character);
+                        self.parser_state = ParserState::Csi(parameters);
+                    }
+                }
+                ParserState::Osc(previous_escape) => {
+                    if character == '\x07' || (previous_escape && character == '\\') {
+                        self.parser_state = ParserState::Ground;
+                    } else {
+                        self.parser_state = ParserState::Osc(character == '\x1b');
+                    }
+                }
             }
         }
     }
@@ -241,16 +258,11 @@ impl TerminalScreen {
     }
 }
 
-fn visible_terminal_text(bytes: &[u8]) -> String {
-    let mut screen = TerminalScreen::new();
-    screen.process(bytes);
-    screen.contents()
-}
-
 #[test]
-fn conpty_text_matching_tracks_cursor_position_and_erasure() {
+fn conpty_text_matching_tracks_cursor_position_erasure_and_chunk_boundaries() {
     let mut screen = TerminalScreen::new();
-    screen.process(b"old prompt\x1b[2J\x1b[38;7HEnter\x1b[1Cconfirm and submit once");
+    screen.process(b"old prompt\x1b[2J\x1b[38;");
+    screen.process(b"7HEnter\x1b[1Cconfirm and submit once");
     assert!(screen.contents().contains("Enter confirm and submit once"));
     assert!(!screen.contents().contains("old prompt"));
 
@@ -399,7 +411,7 @@ struct ConPtyHarness {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     child: Option<Box<dyn Child + Send + Sync>>,
-    output: Arc<Mutex<Vec<u8>>>,
+    screen: Arc<Mutex<TerminalScreen>>,
     reader: Option<JoinHandle<()>>,
 }
 
@@ -410,17 +422,17 @@ impl ConPtyHarness {
             master: None,
             writer: None,
             child: None,
-            output: Arc::new(Mutex::new(Vec::new())),
+            screen: Arc::new(Mutex::new(TerminalScreen::new())),
             reader: None,
         }
     }
 
     fn spawn(&mut self, command: &str, mode: &str) {
         self.stop_instance();
-        self.output
+        *self
+            .screen
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = TerminalScreen::new();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: TERMINAL_ROWS as u16,
@@ -464,7 +476,7 @@ impl ConPtyHarness {
         let child = pair.slave.spawn_command(builder).unwrap();
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().unwrap();
-        let output = Arc::clone(&self.output);
+        let screen = Arc::clone(&self.screen);
         self.reader = Some(thread::spawn(move || {
             let mut reader = reader;
             let mut buffer = [0_u8; 4096];
@@ -474,10 +486,6 @@ impl ConPtyHarness {
                     Ok(0) | Err(_) => break,
                     Ok(count) => {
                         let query_count = {
-                            let mut output = output
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            output.extend_from_slice(&buffer[..count]);
                             terminal_queries.extend_from_slice(&buffer[..count]);
                             let mut query_count = 0;
                             while let Some(position) = terminal_queries
@@ -491,6 +499,10 @@ impl ConPtyHarness {
                             terminal_queries.drain(..trailing_bytes);
                             query_count
                         };
+                        screen
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .process(&buffer[..count]);
                         for _ in 0..query_count {
                             let mut writer = response_writer
                                 .lock()
@@ -531,14 +543,14 @@ impl ConPtyHarness {
     fn wait_for(&self, text: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let output = self
-                .output
+            let screen = self
+                .screen
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if visible_terminal_text(&output).contains(text) {
+            if screen.contents().contains(text) {
                 return true;
             }
-            drop(output);
+            drop(screen);
             thread::sleep(Duration::from_millis(30));
         }
         false
@@ -546,8 +558,8 @@ impl ConPtyHarness {
 
     fn assert_text(&self, text: &str) {
         if !self.wait_for(text, Duration::from_secs(20)) {
-            let output = self
-                .output
+            let screen = self
+                .screen
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             eprintln!(
@@ -558,7 +570,7 @@ impl ConPtyHarness {
             );
             panic!(
                 "expected ConPTY screen to contain {text:?}; current screen:\n{}",
-                visible_terminal_text(&output)
+                screen.contents()
             );
         }
     }
@@ -703,15 +715,11 @@ fn windows_parent_crash_recovery_never_replays_a_turn() {
     assert!(journal.contains("\"recovery_required\":true"));
     assert!(!journal.contains(PROMPT));
 
-    pty.output
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clear();
     pty.spawn("tui", "recovery");
     pty.assert_text("EXECUTION RECOVERY");
     assert_eq!(pty.paths.request_count("turn/start"), 1);
     pty.key(b'r');
-    pty.assert_text("Codex reports the known turn is still running");
+    pty.assert_text("Still running");
     assert_eq!(pty.paths.request_count("turn/start"), 1);
     assert_eq!(pty.paths.request_count("turn/interrupt"), 0);
     pty.key(b'\x1b');

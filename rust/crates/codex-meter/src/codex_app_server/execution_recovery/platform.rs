@@ -33,7 +33,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, LOCKFILE_EXCLUSIVE_LOCK,
     LOCKFILE_FAIL_IMMEDIATELY, MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
+use windows_sys::Win32::System::SystemServices::{
+    ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
@@ -462,6 +464,12 @@ impl SecurityContext {
                 if header.AceType == ACCESS_DENIED_ACE_TYPE as u8 {
                     continue;
                 }
+                // Mandatory integrity labels only add restrictions; they do not
+                // grant access to another principal. Windows puts them on
+                // ordinary user directories, so they are safe ancestry ACEs.
+                if header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8 {
+                    continue;
+                }
                 if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
                     safe = false;
                     break;
@@ -580,14 +588,19 @@ fn ensure_private_directory(
     let Some(Component::Prefix(prefix)) = components.next() else {
         return Err(RecoveryJournalError::DirectoryUnavailable);
     };
-    if !matches!(prefix.kind(), Prefix::Disk(_)) {
-        return Err(RecoveryJournalError::DirectoryUnavailable);
-    }
+    let disk = match prefix.kind() {
+        Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+            std::ffi::OsString::from(format!("{}:", drive as char))
+        }
+        _ => return Err(RecoveryJournalError::DirectoryUnavailable),
+    };
     if components.next() != Some(Component::RootDir) {
         return Err(RecoveryJournalError::DirectoryUnavailable);
     }
     let mut root = PathBuf::new();
-    root.push(prefix.as_os_str());
+    // `canonicalize()` returns `\\?\C:\...` on Windows. Normalize that
+    // local drive prefix before passing paths to APIs that expect `C:\...`.
+    root.push(disk);
     root.push("\\");
     let root_wide = wide_path(&root)?;
     if unsafe { GetDriveTypeW(root_wide.as_ptr()) } != DRIVE_FIXED_TYPE {

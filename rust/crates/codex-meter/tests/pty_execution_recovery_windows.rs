@@ -298,7 +298,7 @@ impl ConPtyHarness {
     fn assert_text(&self, text: &str) {
         assert!(
             self.wait_for(text, Duration::from_secs(20)),
-            "expected ConPTY output to contain {text:?}; recent output: {}",
+            "expected ConPTY output to contain {text:?}; recent output: {}; fixture requests: {:?}; wrapper PID: {:?}; server PID: {:?}",
             String::from_utf8_lossy(
                 &self
                     .output
@@ -308,7 +308,10 @@ impl ConPtyHarness {
             .chars()
             .rev()
             .take(3000)
-            .collect::<String>()
+            .collect::<String>(),
+            fs::read_to_string(&self.paths.request_log).unwrap_or_default(),
+            fs::read_to_string(&self.paths.wrapper_pid).unwrap_or_default(),
+            fs::read_to_string(&self.paths.server_pid).unwrap_or_default(),
         );
     }
 

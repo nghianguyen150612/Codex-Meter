@@ -10,40 +10,253 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PROMPT: &str = "P038_λ_SYNTHETIC_PROMPT";
+const TERMINAL_ROWS: usize = 40;
+const TERMINAL_COLUMNS: usize = 120;
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
-fn visible_terminal_text(bytes: &[u8]) -> String {
-    let input = String::from_utf8_lossy(bytes);
-    let mut characters = input.chars();
-    let mut visible = String::with_capacity(input.len());
-    while let Some(character) = characters.next() {
-        if character == '\x1b' {
-            match characters.next() {
-                Some('[') => {
-                    for character in characters.by_ref() {
-                        if ('@'..='~').contains(&character) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    let mut previous_escape = false;
-                    for character in characters.by_ref() {
-                        if character == '\x07' || (previous_escape && character == '\\') {
-                            break;
-                        }
-                        previous_escape = character == '\x1b';
-                    }
-                }
-                Some(_) | None => {}
-            }
-        } else if character.is_control() {
-            visible.push(' ');
-        } else {
-            visible.push(character);
+struct TerminalScreen {
+    cells: Vec<Vec<char>>,
+    row: usize,
+    column: usize,
+    saved_cursor: Option<(usize, usize)>,
+}
+
+impl TerminalScreen {
+    fn new() -> Self {
+        Self {
+            cells: vec![vec![' '; TERMINAL_COLUMNS]; TERMINAL_ROWS],
+            row: 0,
+            column: 0,
+            saved_cursor: None,
         }
     }
-    visible
+
+    fn process(&mut self, bytes: &[u8]) {
+        let input = String::from_utf8_lossy(bytes);
+        let mut characters = input.chars().peekable();
+        while let Some(character) = characters.next() {
+            match character {
+                '\x1b' => match characters.next() {
+                    Some('[') => {
+                        let mut parameters = String::new();
+                        let mut final_character = None;
+                        for character in characters.by_ref() {
+                            if ('@'..='~').contains(&character) {
+                                final_character = Some(character);
+                                break;
+                            }
+                            parameters.push(character);
+                        }
+                        if let Some(final_character) = final_character {
+                            self.process_csi(&parameters, final_character);
+                        }
+                    }
+                    Some(']') => {
+                        let mut previous_escape = false;
+                        for character in characters.by_ref() {
+                            if character == '\x07' || (previous_escape && character == '\\') {
+                                break;
+                            }
+                            previous_escape = character == '\x1b';
+                        }
+                    }
+                    Some('7') => self.saved_cursor = Some((self.row, self.column)),
+                    Some('8') => self.restore_cursor(),
+                    Some('D') => self.line_feed(),
+                    Some('M') => self.scroll_down(1),
+                    Some('c') => *self = Self::new(),
+                    Some(_) | None => {}
+                },
+                '\r' => self.column = 0,
+                '\n' => self.line_feed(),
+                '\x08' => self.column = self.column.saturating_sub(1),
+                '\t' => self.column = ((self.column / 8) + 1) * 8,
+                character if character.is_control() => {}
+                character => self.put(character),
+            }
+        }
+    }
+
+    fn process_csi(&mut self, parameters: &str, final_character: char) {
+        let parameter = |index: usize, default: usize| {
+            parameters
+                .trim_start_matches(|character| matches!(character, '?' | '>' | '!'))
+                .split(';')
+                .nth(index)
+                .and_then(|value| value.split(':').next())
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value != 0)
+                .unwrap_or(default)
+        };
+        let count = parameter(0, 1);
+        match final_character {
+            'A' => self.row = self.row.saturating_sub(count),
+            'B' => self.row = (self.row + count).min(TERMINAL_ROWS - 1),
+            'C' => self.column = (self.column + count).min(TERMINAL_COLUMNS - 1),
+            'D' => self.column = self.column.saturating_sub(count),
+            'E' => {
+                self.row = (self.row + count).min(TERMINAL_ROWS - 1);
+                self.column = 0;
+            }
+            'F' => {
+                self.row = self.row.saturating_sub(count);
+                self.column = 0;
+            }
+            'G' => self.column = parameter(0, 1).saturating_sub(1).min(TERMINAL_COLUMNS - 1),
+            'H' | 'f' => {
+                self.row = parameter(0, 1).saturating_sub(1).min(TERMINAL_ROWS - 1);
+                self.column = parameter(1, 1).saturating_sub(1).min(TERMINAL_COLUMNS - 1);
+            }
+            'd' => self.row = parameter(0, 1).saturating_sub(1).min(TERMINAL_ROWS - 1),
+            'J' => self.erase_display(parameter(0, 0)),
+            'K' => self.erase_line(parameter(0, 0)),
+            'X' => self.erase_characters(count),
+            'P' => self.delete_characters(count),
+            '@' => self.insert_characters(count),
+            'L' => self.insert_lines(count),
+            'M' => self.delete_lines(count),
+            'S' => self.scroll_up(count),
+            'T' => self.scroll_down(count),
+            's' => self.saved_cursor = Some((self.row, self.column)),
+            'u' => self.restore_cursor(),
+            _ => {}
+        }
+    }
+
+    fn put(&mut self, character: char) {
+        if self.column >= TERMINAL_COLUMNS {
+            self.column = 0;
+            self.line_feed();
+        }
+        self.cells[self.row][self.column] = character;
+        self.column += 1;
+    }
+
+    fn line_feed(&mut self) {
+        if self.row + 1 == TERMINAL_ROWS {
+            self.scroll_up(1);
+        } else {
+            self.row += 1;
+        }
+    }
+
+    fn restore_cursor(&mut self) {
+        if let Some((row, column)) = self.saved_cursor {
+            self.row = row;
+            self.column = column;
+        }
+    }
+
+    fn erase_display(&mut self, mode: usize) {
+        match mode {
+            0 => {
+                self.cells[self.row][self.column..].fill(' ');
+                for row in self.row + 1..TERMINAL_ROWS {
+                    self.cells[row].fill(' ');
+                }
+            }
+            1 => {
+                for row in 0..self.row {
+                    self.cells[row].fill(' ');
+                }
+                let column = self.column.min(TERMINAL_COLUMNS - 1);
+                self.cells[self.row][..=column].fill(' ');
+            }
+            2 | 3 => {
+                for row in &mut self.cells {
+                    row.fill(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn erase_line(&mut self, mode: usize) {
+        match mode {
+            0 => self.cells[self.row][self.column..].fill(' '),
+            1 => {
+                let column = self.column.min(TERMINAL_COLUMNS - 1);
+                self.cells[self.row][..=column].fill(' ')
+            }
+            2 => self.cells[self.row].fill(' '),
+            _ => {}
+        }
+    }
+
+    fn erase_characters(&mut self, count: usize) {
+        let end = self.column.saturating_add(count).min(TERMINAL_COLUMNS);
+        self.cells[self.row][self.column..end].fill(' ');
+    }
+
+    fn delete_characters(&mut self, count: usize) {
+        let row = &mut self.cells[self.row];
+        self.column = self.column.min(TERMINAL_COLUMNS - 1);
+        let count = count.min(TERMINAL_COLUMNS - self.column);
+        row.copy_within(self.column + count.., self.column);
+        row[TERMINAL_COLUMNS - count..].fill(' ');
+    }
+
+    fn insert_characters(&mut self, count: usize) {
+        let row = &mut self.cells[self.row];
+        self.column = self.column.min(TERMINAL_COLUMNS - 1);
+        let count = count.min(TERMINAL_COLUMNS - self.column);
+        row.copy_within(self.column..TERMINAL_COLUMNS - count, self.column + count);
+        row[self.column..self.column + count].fill(' ');
+    }
+
+    fn insert_lines(&mut self, count: usize) {
+        for _ in 0..count.min(TERMINAL_ROWS - self.row) {
+            self.cells.insert(self.row, vec![' '; TERMINAL_COLUMNS]);
+            self.cells.pop();
+        }
+    }
+
+    fn delete_lines(&mut self, count: usize) {
+        for _ in 0..count.min(TERMINAL_ROWS - self.row) {
+            self.cells.remove(self.row);
+            self.cells.push(vec![' '; TERMINAL_COLUMNS]);
+        }
+    }
+
+    fn scroll_up(&mut self, count: usize) {
+        for _ in 0..count.min(TERMINAL_ROWS) {
+            self.cells.remove(0);
+            self.cells.push(vec![' '; TERMINAL_COLUMNS]);
+        }
+    }
+
+    fn scroll_down(&mut self, count: usize) {
+        for _ in 0..count.min(TERMINAL_ROWS) {
+            self.cells.pop();
+            self.cells.insert(0, vec![' '; TERMINAL_COLUMNS]);
+        }
+    }
+
+    fn contents(&self) -> String {
+        self.cells
+            .iter()
+            .map(|row| row.iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn visible_terminal_text(bytes: &[u8]) -> String {
+    let mut screen = TerminalScreen::new();
+    screen.process(bytes);
+    screen.contents()
+}
+
+#[test]
+fn conpty_text_matching_tracks_cursor_position_and_erasure() {
+    let mut screen = TerminalScreen::new();
+    screen.process(b"old prompt\x1b[2J\x1b[38;7HEnter\x1b[1Cconfirm and submit once");
+    assert!(screen.contents().contains("Enter confirm and submit once"));
+    assert!(!screen.contents().contains("old prompt"));
+
+    screen.process(b"\x1b[38;7HPlease wait | no duplicate submission");
+    assert!(screen.contents().contains("Please wait | no duplicate submission"));
+    assert!(!screen.contents().contains("Enter confirm and submit once"));
 }
 
 struct TestPaths {
@@ -208,8 +421,8 @@ impl ConPtyHarness {
             .clear();
         let pair = native_pty_system()
             .openpty(PtySize {
-                rows: 40,
-                cols: 120,
+                rows: TERMINAL_ROWS as u16,
+                cols: TERMINAL_COLUMNS as u16,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -331,6 +544,10 @@ impl ConPtyHarness {
 
     fn assert_text(&self, text: &str) {
         if !self.wait_for(text, Duration::from_secs(20)) {
+            let output = self
+                .output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             eprintln!(
                 "ConPTY fixture diagnostics: requests={:?}, wrapper_pid={:?}, server_pid={:?}",
                 fs::read_to_string(&self.paths.request_log).unwrap_or_default(),
@@ -338,17 +555,8 @@ impl ConPtyHarness {
                 fs::read_to_string(&self.paths.server_pid).unwrap_or_default(),
             );
             panic!(
-                "expected ConPTY output to contain {text:?}; recent output: {}",
-                String::from_utf8_lossy(
-                    &self
-                        .output
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                )
-                .chars()
-                .rev()
-                .take(3000)
-                .collect::<String>()
+                "expected ConPTY screen to contain {text:?}; current screen:\n{}",
+                visible_terminal_text(&output)
             );
         }
     }

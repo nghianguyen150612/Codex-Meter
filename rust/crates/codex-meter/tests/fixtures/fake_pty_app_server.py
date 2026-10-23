@@ -79,6 +79,21 @@ def model():
     }
 
 
+def same_workspace(candidate):
+    if not isinstance(candidate, str):
+        return False
+    if os.name != "nt":
+        return candidate == workspace
+    try:
+        return os.path.samefile(candidate, workspace)
+    except OSError:
+        def normalized(path):
+            value = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+            return value[4:] if value.startswith("\\\\?\\") else value
+
+        return normalized(candidate) == normalized(workspace)
+
+
 def thread_status(state):
     return "active" if state.get("status") == "inProgress" else "idle"
 
@@ -113,7 +128,12 @@ while True:
     elif method == "model/list":
         send({"id": message["id"], "result": {"data": [model()], "nextCursor": None}})
     elif method == "config/read":
-        if message.get("params") != {"cwd": workspace, "includeLayers": False}:
+        params = message.get("params", {})
+        if (
+            set(params) != {"cwd", "includeLayers"}
+            or params.get("includeLayers") is not False
+            or not same_workspace(params.get("cwd"))
+        ):
             raise SystemExit(23)
         send({"id": message["id"], "result": {"config": {
             "model": "fixture-model",
@@ -128,13 +148,17 @@ while True:
         send({"id": message["id"], "result": {"data": [], "nextCursor": None}})
     elif method == "thread/start":
         params = message.get("params", {})
-        if params != {
-            "cwd": workspace,
+        expected = {
             "sandbox": "workspace-write",
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
             "config": {"sandbox_workspace_write": {"network_access": False}},
-        }:
+        }
+        if (
+            set(params) != {"cwd", *expected}
+            or not same_workspace(params.get("cwd"))
+            or {key: value for key, value in params.items() if key != "cwd"} != expected
+        ):
             raise SystemExit(24)
         state = {"threadId": "thread-pty", "turnId": None, "status": "idle"}
         save_state(state)

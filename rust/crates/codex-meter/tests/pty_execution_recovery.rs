@@ -110,9 +110,11 @@ impl Drop for TestPaths {
 struct PtyHarness {
     master: fs::File,
     slave: fs::File,
+    slave_path: std::path::PathBuf,
     terminal_probe: fs::File,
     baseline: libc::termios,
     output: Arc<Mutex<Vec<u8>>>,
+    resizes: Mutex<Vec<(usize, u16, u16)>>,
     reader_stop: Arc<std::sync::atomic::AtomicBool>,
     reader: Option<JoinHandle<()>>,
     child: Option<Child>,
@@ -139,8 +141,24 @@ impl PtyHarness {
             )
         };
         assert_eq!(opened, 0);
+        for fd in [master_fd, slave_fd] {
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
         let master = unsafe { fs::File::from_raw_fd(master_fd) };
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        let mut name = [0_i8; 1024];
+        assert_eq!(
+            unsafe { libc::ttyname_r(slave_fd, name.as_mut_ptr(), name.len()) },
+            0
+        );
+        let slave_path = std::path::PathBuf::from(
+            unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+                .to_str()
+                .unwrap(),
+        );
         let terminal_probe = slave.try_clone().unwrap();
         let mut baseline = unsafe { std::mem::zeroed::<libc::termios>() };
         assert_eq!(
@@ -191,9 +209,11 @@ impl PtyHarness {
         Self {
             master,
             slave,
+            slave_path,
             terminal_probe,
             baseline,
             output,
+            resizes: Mutex::new(Vec::new()),
             reader_stop,
             reader: Some(reader),
             child: None,
@@ -203,13 +223,26 @@ impl PtyHarness {
 
     fn spawn(&mut self, command: &str, mode: &str) {
         assert!(self.child.is_none());
+        self.slave = self.open_slave();
         let original_path = std::env::var_os("PATH").unwrap_or_default();
         let mut search_path = self.paths.bin.as_os_str().to_os_string();
         search_path.push(":");
         search_path.push(original_path);
-        let mut child_command = Command::new(env!("CARGO_BIN_EXE_codex-meter"));
+        let exit_file = self.paths.root.join("application-exit");
+        let release_file = self.paths.root.join("release-terminal");
+        let _ = fs::remove_file(&exit_file);
+        let _ = fs::remove_file(&release_file);
+        // Keep a shell as session leader until restoration has been inspected.
+        // Darwin revokes/resets the terminal when the session leader exits.
+        let mut child_command = Command::new("/bin/sh");
         child_command
+            .arg("-c")
+            .arg("\"$1\" \"$2\"; result=$?; printf '%s' \"$result\" > \"$3\"; while [ ! -f \"$4\" ]; do sleep 0.02; done; exit \"$result\"")
+            .arg("pty-supervisor")
+            .arg(env!("CARGO_BIN_EXE_codex-meter"))
             .arg(command)
+            .arg(exit_file)
+            .arg(release_file)
             .current_dir(&self.paths.workspace)
             .env("PATH", search_path)
             .env("TERM", "xterm-256color")
@@ -229,7 +262,23 @@ impl PtyHarness {
             .stdin(Stdio::from(self.slave.try_clone().unwrap()))
             .stdout(Stdio::from(self.slave.try_clone().unwrap()))
             .stderr(Stdio::from(self.slave.try_clone().unwrap()));
-        child_command.process_group(0);
+        // A process group alone inherits the caller's controlling terminal.
+        // Crossterm queries /dev/tty before stdout for window dimensions.
+        // Only async-signal-safe syscalls may run between fork and exec.
+        unsafe {
+            child_command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::tcgetpgrp(0) != libc::getpid() {
+                    return Err(std::io::Error::other("child PTY foreground group mismatch"));
+                }
+                Ok(())
+            });
+        }
         let child = child_command.spawn().unwrap();
         self.child = Some(child);
     }
@@ -252,12 +301,7 @@ impl PtyHarness {
     fn wait_for(&self, text: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let output = self
-                .output
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let found = visible_screen(&output).contains(text);
+            let found = self.output_text().contains(text);
             if found {
                 return true;
             }
@@ -268,26 +312,29 @@ impl PtyHarness {
 
     fn assert_text(&self, text: &str) {
         if !self.wait_for(text, Duration::from_secs(15)) {
-            let visible = self.output_text();
-            let raw = self.raw_output_text();
-            let raw_tail = raw
-                .chars()
-                .rev()
-                .take(4_000)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<String>();
-            let request_log = fs::read_to_string(&self.paths.request_log).unwrap_or_default();
-            let state = fs::read_to_string(&self.paths.state).unwrap_or_default();
+            let output = self.output.lock().unwrap();
+            let raw_contains = String::from_utf8_lossy(&output).contains(text);
+            let screen = self.screen(&output);
+            let application_exit = fs::read_to_string(self.paths.root.join("application-exit"))
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok());
+            let status = self.child.as_ref().map(|child| {
+                // kill(pid, 0) checks existence without changing the process.
+                unsafe { libc::kill(child.id() as i32, 0) == 0 }
+            });
+            eprintln!("PTY_DIAG bytes={} raw_contains={raw_contains} running={} narrow_fallback={} approval={} app_exited={} tty_columns={} tty_rows={}",
+                output.len(), screen.contains("Running"), screen.contains("Resize terminal"),
+                screen.contains("APPROVAL REQUIRED"), application_exit.is_some(), self.dimensions().0, self.dimensions().1);
             panic!(
-                "expected PTY output to contain {text:?}; visible screen: {visible}; recent raw PTY output: {raw_tail}; fake requests: {request_log:?}; fake state: {state:?}"
+                "PTY assertion failed: expected={text:?} bytes={} raw_contains={raw_contains} screen_contains=false tty_size={:?} supervisor_exists={status:?} application_exit={application_exit:?} thread_starts={} turn_starts={}",
+                output.len(), self.dimensions(), self.paths.request_count("thread/start"),
+                self.paths.request_count("turn/start")
             );
         }
     }
 
     fn output_text(&self) -> String {
-        visible_screen(
+        self.screen(
             &self
                 .output
                 .lock()
@@ -325,7 +372,45 @@ impl PtyHarness {
         self.key(b'\r');
     }
 
+    fn open_slave(&self) -> fs::File {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.slave_path)
+            .unwrap()
+    }
+
+    fn dimensions(&self) -> (u16, u16) {
+        let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+        assert_eq!(
+            unsafe { libc::ioctl(self.terminal_probe.as_raw_fd(), libc::TIOCGWINSZ, &mut size) },
+            0
+        );
+        (size.ws_col, size.ws_row)
+    }
+
+    fn screen(&self, bytes: &[u8]) -> String {
+        self.parsed_screen(bytes).contents()
+    }
+
+    fn parsed_screen(&self, bytes: &[u8]) -> vt100::Screen {
+        let mut parser = vt100::Parser::new(40, 120, 0);
+        let mut offset = 0;
+        for &(end, rows, columns) in self.resizes.lock().unwrap().iter() {
+            parser.process(&bytes[offset..end]);
+            parser.set_size(rows, columns);
+            offset = end;
+        }
+        parser.process(&bytes[offset..]);
+        parser.screen().clone()
+    }
+
     fn resize(&self, columns: u16, rows: u16) {
+        let output = self.output.lock().unwrap();
+        self.resizes
+            .lock()
+            .unwrap()
+            .push((output.len(), rows, columns));
         let window = libc::winsize {
             ws_row: rows,
             ws_col: columns,
@@ -342,12 +427,16 @@ impl PtyHarness {
             },
             0
         );
-        if let Some(child) = self.child.as_ref() {
-            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGWINCH) }, 0);
-        }
+        assert_eq!(self.dimensions(), (columns, rows));
+        // TIOCSWINSZ signals the slave foreground process group naturally.
+        drop(output);
     }
 
-    fn restore_terminal_after_forceful_kill(&self) {
+    fn restore_terminal_after_forceful_kill(&mut self) {
+        // Darwin revokes slave descriptors when the controlling session leader dies.
+        // Reopen the same PTY; this does not reset its termios.
+        self.terminal_probe = self.open_slave();
+        self.resize(120, 40);
         assert_eq!(
             unsafe {
                 libc::tcsetattr(
@@ -379,8 +468,21 @@ impl PtyHarness {
     }
 
     fn wait_for_exit(&mut self) -> ExitStatus {
+        let exit_file = self.paths.root.join("application-exit");
+        let mut released = false;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
+            if !released
+                && exit_file.exists()
+                && self.raw_output_text().contains("?1049l")
+                && self.raw_output_text().contains("?25h")
+            {
+                // Inspect modes while the original terminal still exists, before
+                // Darwin revokes it at the supervising session leader's exit.
+                self.assert_terminal_restored();
+                fs::write(self.paths.root.join("release-terminal"), b"release").unwrap();
+                released = true;
+            }
             let child = self.child.as_mut().expect("child is running");
             if let Some(status) = child.try_wait().unwrap() {
                 self.child = None;
@@ -392,13 +494,23 @@ impl PtyHarness {
     }
 
     fn assert_terminal_restored(&self) {
+        // Do not query a descriptor revoked by Darwin at session-leader exit.
+        let probe = self.open_slave();
         let mut after = unsafe { std::mem::zeroed::<libc::termios>() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(self.terminal_probe.as_raw_fd(), &mut after) },
-            0
-        );
+        assert_eq!(unsafe { libc::tcgetattr(probe.as_raw_fd(), &mut after) }, 0);
         assert_eq!(after.c_lflag, self.baseline.c_lflag);
         assert_eq!(after.c_iflag, self.baseline.c_iflag);
+        assert_eq!(after.c_oflag, self.baseline.c_oflag);
+        assert_eq!(after.c_cflag, self.baseline.c_cflag);
+        assert_eq!(after.c_cc, self.baseline.c_cc);
+        let bytes = self.output.lock().unwrap();
+        let screen = self.parsed_screen(&bytes);
+        assert!(
+            !screen.alternate_screen(),
+            "alternate screen remains active"
+        );
+        assert!(!screen.hide_cursor(), "cursor remains hidden");
+        drop(bytes);
         let output = self.raw_output_text();
         assert!(
             output.contains("?1049h"),
@@ -417,125 +529,17 @@ impl PtyHarness {
     }
 }
 
-fn visible_screen(bytes: &[u8]) -> String {
-    const ROWS: usize = 64;
-    const COLUMNS: usize = 180;
-    let mut screen = vec![vec![' '; COLUMNS]; ROWS];
-    let (mut row, mut column) = (0_usize, 0_usize);
-    let visible = String::from_utf8_lossy(bytes);
-    let mut chars = visible.chars().peekable();
-    while let Some(character) = chars.next() {
-        match character {
-            '\x1b' => match chars.next() {
-                Some('[') => {
-                    let mut sequence = String::new();
-                    for value in chars.by_ref() {
-                        if ('@'..='~').contains(&value) {
-                            let parameters = sequence
-                                .trim_start_matches('?')
-                                .split(';')
-                                .filter_map(|part| part.parse::<usize>().ok())
-                                .collect::<Vec<_>>();
-                            match value {
-                                'H' | 'f' => {
-                                    row = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(ROWS - 1);
-                                    column = parameters
-                                        .get(1)
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(COLUMNS - 1);
-                                }
-                                'A' => {
-                                    row =
-                                        row.saturating_sub(parameters.first().copied().unwrap_or(1))
-                                }
-                                'B' => {
-                                    row = row
-                                        .saturating_add(parameters.first().copied().unwrap_or(1))
-                                        .min(ROWS - 1)
-                                }
-                                'C' => {
-                                    column = column
-                                        .saturating_add(parameters.first().copied().unwrap_or(1))
-                                        .min(COLUMNS - 1)
-                                }
-                                'D' => {
-                                    column = column
-                                        .saturating_sub(parameters.first().copied().unwrap_or(1))
-                                }
-                                'G' => {
-                                    column = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(COLUMNS - 1)
-                                }
-                                'd' => {
-                                    row = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(ROWS - 1)
-                                }
-                                'J' if parameters.first() == Some(&2)
-                                    || parameters.first() == Some(&3) =>
-                                {
-                                    for line in &mut screen {
-                                        line.fill(' ');
-                                    }
-                                }
-                                'K' => screen[row][column..].fill(' '),
-                                _ => {}
-                            }
-                            break;
-                        }
-                        sequence.push(value);
-                    }
-                }
-                Some(']') => {
-                    while let Some(value) = chars.next() {
-                        if value == '\x07' {
-                            break;
-                        }
-                        if value == '\x1b' && chars.peek() == Some(&'\\') {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                Some(_) | None => {}
-            },
-            '\r' => column = 0,
-            '\n' => row = row.saturating_add(1).min(ROWS - 1),
-            '\x08' => column = column.saturating_sub(1),
-            '\t' => column = ((column / 8) + 1) * 8,
-            value if !value.is_control() => {
-                if column < COLUMNS {
-                    screen[row][column] = value;
-                }
-                column = column.saturating_add(1).min(COLUMNS - 1);
-            }
-            _ => {}
-        }
-    }
-    screen
-        .into_iter()
-        .map(|line| line.into_iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 impl Drop for PtyHarness {
     fn drop(&mut self) {
-        self.kill_process_group();
+        // Cleanup must not panic if the failed assertion raced with child exit.
+        // Explicit crash tests still require kill_process_group to succeed.
+        if let Some(child) = self.child.as_mut() {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            let _ = child.wait();
+        }
+        self.child = None;
         self.reader_stop.store(true, Ordering::Release);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
@@ -552,12 +556,15 @@ fn compiled_tui_executes_unicode_prompt_and_restores_the_terminal() {
     let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
+    assert_eq!(pty.dimensions(), (120, 40));
     pty.spawn("compose", "success");
     pty.begin_task();
     pty.assert_text("Running");
     pty.resize(16, 8);
     pty.assert_text("Resize terminal");
+    pty.assert_text("to view Codex");
     pty.resize(120, 40);
+    pty.assert_text("Running");
     temp_file(&pty.paths.continue_file);
     pty.assert_text("Completed");
     pty.key(b'\r');
@@ -714,10 +721,7 @@ fn pty_crash_after_possible_thread_start_preserves_unknown_identity_without_repl
     assert!(
         pty.paths
             .wait_for_request_count("thread/start", 1, Duration::from_secs(10)),
-        "thread/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
-        pty.output_text(),
-        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
-        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+        "thread/start was not observed before bounded timeout"
     );
     pty.kill_process_group();
 
@@ -753,10 +757,7 @@ fn pty_crash_after_possible_turn_start_keeps_thread_known_and_never_replays() {
     assert!(
         pty.paths
             .wait_for_request_count("turn/start", 1, Duration::from_secs(10)),
-        "turn/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
-        pty.output_text(),
-        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
-        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+        "turn/start was not observed before bounded timeout"
     );
     pty.kill_process_group();
 
@@ -798,4 +799,45 @@ fn pty_dirty_composer_exit_restores_terminal_settings() {
     pty.key(b'y');
     assert!(pty.wait_for_exit().success());
     pty.assert_terminal_restored();
+}
+
+#[test]
+fn vt_screen_tracks_unicode_diff_clear_and_resize() {
+    let mut parser = vt100::Parser::new(40, 120, 0);
+    parser.process(b"\x1b[?1049h\x1b[2J\x1b[HRunning");
+    parser.set_size(8, 16);
+    parser.process(b"\x1b[2J\x1b[HResize terminal\x1b[2;1Hto view Codex");
+    assert!(parser.screen().contents().contains("Resize terminal"));
+    assert!(!parser.screen().contents().contains("Running"));
+    parser.set_size(40, 120);
+    parser.process(b"\x1b[2J\x1b[HRunning ");
+    for byte in "λ".as_bytes() {
+        parser.process(&[*byte]);
+    }
+    assert_eq!(parser.screen().contents(), "Running λ");
+    parser.process(b"\x1b[1;1HCompleted\x1b[K");
+    assert_eq!(parser.screen().contents(), "Completed");
+    parser.process(b"\x1b[?1049l\x1b[?25h");
+    assert!(!parser.screen().alternate_screen());
+    assert!(!parser.screen().hide_cursor());
+}
+
+#[test]
+fn reopening_slave_preserves_terminal_modes() {
+    let _serial = serialize_pty_test();
+    let pty = PtyHarness::new(TestPaths::new());
+    let mut raw = pty.baseline;
+    unsafe { libc::cfmakeraw(&mut raw) };
+    assert_eq!(
+        unsafe { libc::tcsetattr(pty.slave.as_raw_fd(), libc::TCSANOW, &raw) },
+        0
+    );
+    let probe = pty.open_slave();
+    let mut actual = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(probe.as_raw_fd(), &mut actual) },
+        0
+    );
+    assert_eq!(actual.c_lflag, raw.c_lflag);
+    assert_ne!(actual.c_lflag, pty.baseline.c_lflag);
 }

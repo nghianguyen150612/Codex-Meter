@@ -3367,6 +3367,40 @@ mod tests {
     }
 
     #[test]
+    fn execution_view_fallback_wraps_at_sixteen_columns_and_recovers() {
+        let mut state = AppState::default();
+        state.overlay = Some(Overlay::ExecutionView);
+        state.execution.phase = crate::codex_app_server::ExecutionPhase::Running;
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let rows = (0..8)
+            .map(|y| {
+                (0..16)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows[0].trim_end(), "Resize terminal");
+        assert_eq!(rows[1].trim_end(), "to view Codex");
+        assert_eq!(rows[2].trim_end(), "task execution");
+        terminal.backend_mut().resize(120, 40);
+        terminal
+            .draw(|frame| draw(frame, &state, Theme::detect()))
+            .unwrap();
+        let content = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(content.contains("Running"));
+        assert!(!content.contains("Resize terminal"));
+    }
+
+    #[test]
     fn execution_view_streams_output_shows_approval_and_summarizes_authoritative_failure() {
         let mut state = AppState::default();
         state.overlay = Some(Overlay::ExecutionView);

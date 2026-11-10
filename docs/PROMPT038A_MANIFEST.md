@@ -4,7 +4,9 @@
 
 The physical Arch baseline 492e114 failed the resize scenario (8/9 PTY).
 The harness controlling-terminal defect and independent probe validation defect
-are corrected; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
+are corrected. Local checks and final-source native Windows/macOS default and
+all-features tests PASS; overall CI and bundle qualification remain PARTIAL because
+remaining jobs are queued. Engineering is PARTIAL pending those checks; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
 Historical PASS tables below retain their original SHA scope. Corrected physical
 Arch qualification (G5) and Windows live Codex qualification (G4) remain
 **UNVERIFIED**; release/merge (G8) remains **BLOCKED**. No allowlist was broadened.
@@ -169,7 +171,8 @@ is reduced to command names, exit codes, test counts, and failed test names.
 
 The probe reads the actual App Server initialize response fields used by Codex Meter:
 userAgent, platformFamily, and platformOs. It validates but discards codexHome. The audited identity
-must be exactly codex_cli_rs/0.163.0. A CLI package version string alone cannot pass this check.
+must match codex_cli_rs/0.163.0 under the existing execution.rs suffix predicate
+(space, slash, or plus suffix only). The full suffix is withheld from reports. A CLI package version string alone cannot pass this check.
 The runner does not inspect authentication. Verify the existing account session locally in Codex;
 do not capture or share account details, auth files, tokens, or credentials. If the exact runtime is
 missing, do not broaden the allowlist. The repository installation guides install Codex Meter, not
@@ -202,7 +205,7 @@ Record the following live scenarios individually, with PASS/FAIL/UNVERIFIED and 
 | Scenario | Acceptance evidence |
 | --- | --- |
 | App Server startup and JSON-RPC initialization | Initialize probe succeeds and emits initialized; only safe userAgent/platform metadata is recorded. |
-| Runtime compatibility | App Server userAgent is exactly codex_cli_rs/0.163.0; a different value fails closed. |
+| Runtime compatibility | App Server userAgent matches the existing audited codex_cli_rs/0.163.0 predicate; other runtime identities fail closed. |
 | Normal execution lifecycle | One explicitly authorized bounded request reaches a terminal Codex status. |
 | Approval and cancellation | A disposable fixture request is shown with default-deny behavior; allow-once and cancellation behave as selected. |
 | User interruption | Explicit interrupt acknowledgement remains nonterminal until authoritative interrupted status arrives. |

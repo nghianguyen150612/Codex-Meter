@@ -4,7 +4,9 @@
 
 The physical Arch baseline 492e114 failed the resize scenario (8/9 PTY).
 The harness controlling-terminal defect and independent probe validation defect
-are corrected; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
+are corrected. Local checks and final-source native Windows/macOS default and
+all-features tests PASS; overall CI and bundle qualification remain PARTIAL because
+remaining jobs are queued. Engineering is PARTIAL pending those checks; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
 Historical PASS tables below retain their original SHA scope. Corrected physical
 Arch qualification (G5) and Windows live Codex qualification (G4) remain
 **UNVERIFIED**; release/merge (G8) remains **BLOCKED**. No allowlist was broadened.

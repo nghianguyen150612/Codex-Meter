@@ -2,7 +2,8 @@
 
 ## Status and environment
 
-Local engineering validation is **PASS**; final cross-platform CI is pending. P038 release remains **BLOCKED** by G4 and G5.
+Engineering status: **PARTIAL**. Local validation and native Windows/macOS regressions
+are **PASS**; remaining implementation-head CI jobs are queued. P038 release remains **BLOCKED** by G4 and G5.
 Baseline: `492e114c8968aa7a77973312ce337277f9052403`; base/main:
 `352f4e0c499872f31205d75680172b8c1c8341a0`. PR #33 remains Draft.
 No P039 work, runtime allowlist changes, journal security changes, or live tasks are included.
@@ -128,7 +129,7 @@ $env:P038A_EXPECTED_COMMIT = "<reviewed-full-SHA>"
 Do not share raw transcripts, prompts, Codex home paths, credentials, SIDs, or journals.
 PR #33 must remain Draft and unmerged while G4 or G5 is unverified.
 
-## Local validation — 2026-11-10
+## Initial fix local validation — superseded by the final source table
 
 | Check | Result |
 | --- | --- |
@@ -158,9 +159,9 @@ completed, but tcgetattr on the retained slave failed after exit; crash-reset
 checks likewise used revoked descriptors. The harness now reopens the same named
 slave for post-exit mode inspection, explicit crash reset and restart stdio.
 It never resets modes before a normal-exit assertion. A focused test verifies
-that reopening preserves an intentionally raw mode, rather than concealing it.
-Restoration assertions remain unchanged in strength. Native CI must verify this
-correction on both macOS architectures; the earlier failed run is not PASS evidence.
+that reopening an active PTY preserves an intentionally raw mode. Post-session
+revocation can reset terminal state, so the final supervisor checks modes before release.
+Restoration assertions remain unchanged in strength. The final source passed on both macOS architectures; the earlier failed run is not PASS evidence.
 
 ### Darwin lifecycle follow-up
 
@@ -185,3 +186,52 @@ Final harness checks also compare output/control flags and control characters,
 and assert the reconstructed terminal has left the alternate screen with a visible
 cursor. Existing raw lifecycle-sequence assertions are retained. Sanitized failures
 distinguish the supervisor's existence from the application's recorded exit code.
+
+## P038A-FIX implementation qualification
+
+Implementation source: `522193a59ac8aab133dbd44d5dc23ba1a9ee4051`.
+The evidence-only documentation commit follows that source without changing code.
+
+| Validation | Result / count |
+| --- | --- |
+| Rust formatting | PASS |
+| Workspace/all-targets/all-features Clippy, warnings denied | PASS |
+| Focused recovery journal | PASS: 10 |
+| Focused Unix PTY | PASS: 11 (9 lifecycle, parser state, reopen preserves raw mode) |
+| Entire Unix PTY suite under interactive parent | PASS: 11 |
+| Default Linux workspace | PASS: 464 library, 4 analytics CLI, 19 sync CLI, 5 TUI CLI, 11 PTY |
+| All-features Linux workspace | PASS: 462 library, 2 analytics CLI, 19 sync CLI, 5 TUI CLI, 11 PTY |
+| Python / Ruff / contracts | PASS: 666 tests, including 28 probe tests; 6 schemas, 16 positive and 5 negative fixtures |
+| Native Windows security, ConPTY, no replay | PASS at source SHA: 462/460 library, 4/2 analytics CLI, 17 sync CLI, 5 TUI CLI, 4 ConPTY in default/all-features |
+| Native macOS Intel and ARM64 | PASS at source SHA on each architecture: 464/462 library, 4/2 analytics CLI, 18 sync CLI, 5 TUI CLI, 11 PTY in default/all-features |
+| Release candidate bundles | PARTIAL: shared wheel and ARM64 bundle PASS; Intel bundle running; Linux/Windows queued |
+| Physical Arch corrected-commit retest | UNVERIFIED: unavailable in this cloud session |
+| Windows live Codex | UNVERIFIED: native audited runtime and authorized live requests unavailable |
+
+The current implementation CI runs are [push](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42753207195)
+and [PR](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42753212961).
+Candidate bundles: [release validation](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42753213053).
+These links refer to the exact source SHA above. The PR's required checks must
+also pass at its final documentation HEAD before a future merge decision.
+
+| Gate | Status | Evidence boundary |
+| --- | --- | --- |
+| G1 — Baseline | PASS | Clean 492e114 baseline, main/base 352f4e0, original branch ancestry preserved |
+| G2 — Cross-platform CI | UNVERIFIED overall | Source-SHA runs linked above; final PR HEAD checked separately |
+| G3 — Windows native security | PASS | Native journal/DACL, replacement, LockFileEx/CAS and synthetic ConPTY; no security source changes |
+| G4 — Windows live installed Codex | UNVERIFIED | No native live audited runtime qualification; initialize/synthetic evidence is insufficient |
+| G5 — Physical Arch reference device | UNVERIFIED | Original baseline FAIL; corrected source must be rerun on the designated device |
+| G6 — No replay | PASS | Existing crash/restart/reconciliation and exact mutation-count assertions retained |
+| G7 — Evidence | PASS | Manifests, platform matrix, recovery procedure, defect record and PR updated |
+| G8 — Merge readiness | BLOCKED | G4/G5 remain unverified; PR #33 remains Draft and unmerged |
+
+No live task was submitted. Unsupported 0.164.0 remains a runtime compatibility
+failure independently of Rust synthetic test PASS. No allowlist, Windows DACL,
+locking, atomic replacement, recovery CAS, Job Object, approval or replay policy
+was weakened. OS crash / hardware power-loss durability remains UNVERIFIED and is
+not newly claimed by these results.
+
+Snapshot: 2026-11-10 04:23 UTC. Source push CI has not completed: Linux platform,
+Python/contracts and remaining smoke jobs are queued. PR CI Rust quality passed.
+The final documentation HEAD also requires its own current checks; no queued job
+is treated as PASS. Engineering remains PARTIAL until this external CI work finishes.

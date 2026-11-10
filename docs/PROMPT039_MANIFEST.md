@@ -2,10 +2,12 @@
 
 ## Status and dependency
 
-- P039 engineering status: **COMPLETE** at verified final source head
-  `062f5b5d719e0bcf340267db618f575bfaa9df52`. Final-head cross-platform CI and
-  release-bundle validation passed. Integration status remains **BLOCKED** by
-  inherited P038 dependency gates; this does not mark those gates passed.
+- P039 engineering status: **PARTIAL** until required CI passes on the current
+  branch head. The implementation head
+  `062f5b5d719e0bcf340267db618f575bfaa9df52` passed cross-platform CI and
+  release-bundle validation; later manifest-only updates require current-head
+  checks. Integration status remains **BLOCKED** by inherited P038 dependency
+  gates; this does not mark those gates passed.
 - Starting SHA: `58accdc8ac1e3226c555c04c0957415e2466386b`.
 - Starting branch: `feat/p038-windows-execution-reliability`; this was the
   verified P038 head and current head of PR #33 at preflight.
@@ -118,7 +120,8 @@ other unobserved clients may not be represented.
 - JSON configurations are explicitly marked truncated after 64 distinct tuples
   for one task.
 
-P039 engineering is complete for the verified source head above. Re-run and
-record CI if source changes. Integration remains blocked while PR #33's required
-dependency gates remain unresolved; do not merge either stacked PR while those
-gates are blocked.
+The implementation is complete at the verified source head above. P039 branch
+engineering remains partial until the required checks pass for its current
+head. Re-run and record CI if source or documentation changes. Integration
+remains blocked while PR #33's required dependency gates remain unresolved; do
+not merge either stacked PR while those gates are blocked.

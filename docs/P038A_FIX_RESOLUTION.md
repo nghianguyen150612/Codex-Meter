@@ -2,7 +2,7 @@
 
 ## Status and environment
 
-Engineering validation is in progress. P038 release remains **BLOCKED** by G4 and G5.
+Local engineering validation is **PASS**; final cross-platform CI is pending. P038 release remains **BLOCKED** by G4 and G5.
 Baseline: `492e114c8968aa7a77973312ce337277f9052403`; base/main:
 `352f4e0c499872f31205d75680172b8c1c8341a0`. PR #33 remains Draft.
 No P039 work, runtime allowlist changes, journal security changes, or live tasks are included.
@@ -127,3 +127,25 @@ $env:P038A_EXPECTED_COMMIT = "<reviewed-full-SHA>"
 
 Do not share raw transcripts, prompts, Codex home paths, credentials, SIDs, or journals.
 PR #33 must remain Draft and unmerged while G4 or G5 is unverified.
+
+## Local validation — 2026-11-10
+
+| Check | Result |
+| --- | --- |
+| Rust fmt / all-targets all-features Clippy -D warnings | PASS |
+| Focused journal tests | PASS: 10 |
+| Focused Unix PTY | PASS: 10 (9 lifecycle + 1 parser) |
+| Outer interactive PTY, full suite | PASS: 10; baseline resize alone FAIL before the fix |
+| Render fallback 16x8 and recovery | PASS |
+| Default workspace | PASS: 464 library, 4 analytics CLI, 19 sync CLI, 5 TUI CLI, 10 PTY |
+| All-features workspace | PASS: 462 library, 2 analytics CLI, 19 sync CLI, 5 TUI CLI, 10 PTY |
+| Python / Ruff lint and format / contracts | PASS: 666 tests, including 28 probe tests; 6 schemas, 16 positive and 5 negative fixtures |
+| PowerShell 7.5.4 on cloud Linux | PASS: corrected runner returns UNVERIFIED/2 at native host guard; baseline automatic variable assignment reproduces VariableNotWritable |
+| 0.164.0 isolated initialize only | FAIL: unsupported_runtime (expected fail-closed result), all metadata fields valid |
+| Corrected physical Arch qualification | UNVERIFIED: designated device unavailable |
+| Native Windows live Codex | UNVERIFIED: no authorized native environment or bounded live requests |
+
+The existing Windows ACL/ownership, journal replacement/locking/CAS, Job Object,
+approval and no-replay implementation is unchanged. Native CI and release-bundle
+results are recorded separately once Actions completes; the local Linux results
+above cannot establish those platform results.

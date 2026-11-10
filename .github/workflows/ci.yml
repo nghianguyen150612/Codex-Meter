@@ -36,6 +36,14 @@ jobs:
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Qualification runner rejects an unspecified commit on native Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $env:P038A_EXPECTED_COMMIT = ""
+          & ./scripts/p038a-qualify-windows.ps1
+          if ($LASTEXITCODE -ne 2) { throw "Expected qualification guard exit 2" }
+          exit 0
       - name: Verify native macOS architecture
         if: startsWith(matrix.os, 'macos')
         run: test "$(uname -m)" = "${{ matrix.expected_arch }}"

@@ -22,10 +22,52 @@ async def drain(stream: asyncio.StreamReader) -> None:
         pass
 
 
-def safe_field(value: Any) -> str | None:
-    if not isinstance(value, str) or not FIELD_RE.fullmatch(value):
-        return None
-    return value
+AUDITED_RUNTIME = "codex_cli_rs/0.163.0"
+
+
+def classify_initialize(response: Any) -> tuple[str, dict[str, str]]:
+    """Validate metadata without returning paths or the full user-agent suffix."""
+    if not isinstance(response, dict) or "error" in response:
+        return "invalid_initialize_response", {}
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return "invalid_initialize_response", {}
+    limits = {
+        "codexHome": None,
+        "userAgent": 1024,
+        "platformFamily": 128,
+        "platformOs": 128,
+    }
+    for field, limit in limits.items():
+        if field not in result:
+            return "missing_required_metadata_" + field, {}
+        value = result[field]
+        if (
+            not isinstance(value, str)
+            or not value
+            or "\0" in value
+            or (limit is not None and len(value.encode()) > limit)
+        ):
+            return "invalid_required_metadata_" + field, {}
+    agent = result["userAgent"]
+    # Match execution.rs exactly; do not broaden the audited runtime policy.
+    suffix = agent.removeprefix(AUDITED_RUNTIME)
+    supported = agent.startswith(AUDITED_RUNTIME) and (not suffix or suffix[0] in " /+")
+    identity = re.match(r"[A-Za-z0-9._-]+/[A-Za-z0-9._+-]+", agent)
+    metadata = {
+        "app_server_user_agent": identity.group(0) if identity else "withheld",
+        "app_server_user_agent_suffix": "withheld" if " " in agent else "none",
+        "codex_home_path": "validated_and_discarded",
+    }
+    for field, key in (
+        ("platformFamily", "app_server_platform_family"),
+        ("platformOs", "app_server_platform_os"),
+    ):
+        value = result[field]
+        metadata[key] = value if FIELD_RE.fullmatch(value) else "withheld"
+    return (
+        "supported_audited_runtime" if supported else "unsupported_runtime"
+    ), metadata
 
 
 async def probe(program: str, client_version: str) -> int:
@@ -40,7 +82,7 @@ async def probe(program: str, client_version: str) -> int:
         )
     except (OSError, ValueError):
         print("app_server_probe=UNVERIFIED")
-        print("diagnostic=Codex App Server could not be started")
+        print("diagnostic=app_server_start_failed")
         return 2
 
     assert process.stdin is not None
@@ -80,43 +122,29 @@ async def probe(program: str, client_version: str) -> int:
                 message = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if isinstance(message, dict) and message.get("id") == INITIALIZE_ID:
+            if (
+                isinstance(message, dict)
+                and type(message.get("id")) is int
+                and message["id"] == INITIALIZE_ID
+            ):
                 response = message
                 break
 
-        if response is None or "result" not in response:
+        if response is None:
             print("app_server_probe=FAIL")
-            print("diagnostic=No valid initialize response")
+            print("diagnostic=initialization_transport_failed")
             return 1
-
-        result = response["result"]
-        if (
-            not isinstance(result, dict)
-            or not isinstance(result.get("codexHome"), str)
-            or not result["codexHome"]
-        ):
-            print("app_server_probe=FAIL")
-            print(
-                "diagnostic=Initialize response did not satisfy Codex Meter requirements"
-            )
-            return 1
-
-        user_agent = safe_field(result.get("userAgent"))
-        platform_family = safe_field(result.get("platformFamily"))
-        platform_os = safe_field(result.get("platformOs"))
-        if not all((user_agent, platform_family, platform_os)):
-            print("app_server_probe=FAIL")
-            print("diagnostic=Initialize response metadata was missing or malformed")
-            return 1
-
-        process.stdin.write(b'{"method":"initialized"}\n')
-        await asyncio.wait_for(process.stdin.drain(), timeout=5)
-        print("app_server_probe=PASS")
-        print(f"app_server_user_agent={user_agent}")
-        print(f"app_server_platform_family={platform_family}")
-        print(f"app_server_platform_os={platform_os}")
-        print("codex_home_path=validated_and_discarded")
-        return 0
+        classification, metadata = classify_initialize(response)
+        supported = classification == "supported_audited_runtime"
+        if metadata:
+            process.stdin.write(b'{"method":"initialized","params":{}}\n')
+            await asyncio.wait_for(process.stdin.drain(), timeout=5)
+        print("app_server_probe=" + ("PASS" if supported else "FAIL"))
+        print("diagnostic=" + classification)
+        for key, value in metadata.items():
+            print(f"{key}={value}")
+        print("audited_runtime_compatibility=" + ("PASS" if supported else "FAIL"))
+        return 0 if supported else 1
     except (asyncio.TimeoutError, BrokenPipeError, OSError):
         print("app_server_probe=FAIL")
         print("diagnostic=Initialize exchange ended before a validated response")
@@ -145,7 +173,7 @@ def main() -> int:
     program = args.program or shutil.which("codex")
     if not program:
         print("app_server_probe=UNVERIFIED")
-        print("diagnostic=Codex executable was not found")
+        print("diagnostic=app_server_executable_missing")
         return 2
     manifest = (
         Path(__file__).resolve().parents[1] / "rust/crates/codex-meter/Cargo.toml"

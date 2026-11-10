@@ -41,6 +41,10 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.expected_arch }}"
       - run: cargo build --manifest-path rust/Cargo.toml --workspace
       - run: cargo test --manifest-path rust/Cargo.toml --workspace --all-targets
+      - run: cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
+      - name: PTY resize with an inherited interactive controlling terminal
+        if: matrix.os == 'ubuntu-latest'
+        run: script -q -e -c 'stty cols 120 rows 40; cargo test --manifest-path rust/Cargo.toml -p codex-meter --test pty_execution_recovery compiled_tui_executes_unicode -- --test-threads=1' /dev/null
 
   python-quality:
     runs-on: ubuntu-latest

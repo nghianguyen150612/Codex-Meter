@@ -105,8 +105,13 @@ if ! python3 -c 'import pty, os; master, slave = pty.openpty(); print("pty_openp
   exit 2
 fi
 
-commit="$(git rev-parse HEAD)"
-if [[ -n "$(git status --porcelain)" ]]; then
+commit="$(git rev-parse HEAD)" || exit 2
+if [[ ! "${P038A_EXPECTED_COMMIT:-}" =~ ^[0-9a-f]{40}$ || "$commit" != "$P038A_EXPECTED_COMMIT" ]]; then
+  printf '%s\n' 'arch_reference_tests=UNVERIFIED' 'diagnostic=Set P038A_EXPECTED_COMMIT to the exact reviewed PR head SHA'
+  exit 2
+fi
+git_status="$(git status --porcelain)" || exit 2
+if [[ -n "$git_status" ]]; then
   printf 'commit=%s\n' "$commit"
   printf '%s\n' 'working_tree=dirty' 'arch_reference_tests=UNVERIFIED' \
     'diagnostic=Use a clean checkout so evidence identifies the tested source'
@@ -129,17 +134,23 @@ printf 'rust_targets=%s\n' "$installed_targets"
 if command -v codex >/dev/null 2>&1; then
   printf 'codex_cli_version=%s\n' "$(codex --version 2>/dev/null | head -n 1)"
   python3 scripts/p038a_probe_app_server.py --program "$(command -v codex)"
+  probe_status=$?
+  printf 'app_server_probe_exit_code=%s\n' "$probe_status"
 else
   printf '%s\n' 'codex_cli=unavailable' 'app_server_probe=UNVERIFIED'
+  probe_status=2
 fi
 
 overall_status=0
+capture=""
+trap '[[ -z "$capture" ]] || rm -f -- "$capture"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 run_command() {
   local command_label="$1"
   shift
-  local capture
   local exit_code
-  capture="$(mktemp)"
+  capture="$(mktemp)" || { overall_status=1; printf 'diagnostic=capture_creation_failed\n'; return; }
   printf 'command=%s\n' "$command_label"
   if "$@" >"$capture" 2>&1; then
     exit_code=0
@@ -153,9 +164,11 @@ run_command() {
   fi
   if [[ "$exit_code" -ne 0 ]]; then
     sed -nE 's/^test (.+) \.\.\. FAILED$/failed_test=\1/p' "$capture"
+    sed -nE 's/^PTY_DIAG ([a-z_]+=[0-9a-z]+ ?)+$/pty_diagnostic=&/p' "$capture"
     printf '%s\n' 'failure_details=raw test output withheld from sanitized evidence'
   fi
   rm -f -- "$capture"
+  capture=""
 }
 
 if [[ "$machine" != x86_64 || "$(rustc -Vv | awk -F': ' '$1 == "host" { print $2 }')" != x86_64-unknown-linux-gnu ]]; then
@@ -179,7 +192,12 @@ run_command 'cargo test --manifest-path rust/Cargo.toml --workspace --all-target
 
 if [[ "$overall_status" -eq 0 ]]; then
   printf '%s\n' 'arch_reference_tests=PASS'
-  exit 0
+  if [[ "$probe_status" -ne 0 ]]; then
+    printf '%s\n' 'arch_reference_qualification=BLOCKED' 'diagnostic=Runtime probe did not pass; Rust tests are separate evidence'
+    exit "$probe_status"
+  fi
+  printf '%s\n' 'arch_reference_qualification=UNVERIFIED' 'diagnostic=Live reference-device scenarios still require qualification'
+  exit 2
 fi
-printf '%s\n' 'arch_reference_tests=FAIL'
+printf '%s\n' 'arch_reference_tests=FAIL' 'arch_reference_qualification=BLOCKED'
 exit 1

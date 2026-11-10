@@ -68,6 +68,11 @@ if ($LASTEXITCODE -ne 0 -or -not $commit) {
     exit 2
 }
 Write-Output ("commit=" + $commit)
+if ($env:P038A_EXPECTED_COMMIT -notmatch "^[0-9a-f]{40}$" -or $commit -ne $env:P038A_EXPECTED_COMMIT) {
+    Write-Output "windows_native_tests=UNVERIFIED"
+    Write-Output "diagnostic=Set P038A_EXPECTED_COMMIT to the exact reviewed PR head SHA"
+    exit 2
+}
 $gitStatus = @(& git -C $repoRoot status --porcelain 2>$null)
 if ($LASTEXITCODE -ne 0 -or $gitStatus.Count -ne 0) {
     Write-Output "working_tree=dirty_or_unavailable"
@@ -126,21 +131,17 @@ if ($null -ne $codexCommand) {
         $probeLines = @(& $pythonCommand.Source @probeArguments 2>$null)
         $probeCode = $LASTEXITCODE
         foreach ($line in $probeLines) {
-            if ($line -match "^(app_server_probe|app_server_user_agent|app_server_platform_family|app_server_platform_os|codex_home_path|diagnostic)=") {
+            if ($line -match "^(app_server_probe|app_server_user_agent|app_server_user_agent_suffix|app_server_platform_family|app_server_platform_os|codex_home_path|audited_runtime_compatibility|diagnostic)=") {
                 Write-Output $line
             }
         }
+        Write-Output ("app_server_probe_exit_code=" + $probeCode)
         if ($probeCode -eq 0) {
-            $agentLine = $probeLines | Where-Object { $_ -match "^app_server_user_agent=" } |
-                Select-Object -First 1
-            if ($agentLine -eq "app_server_user_agent=codex_cli_rs/0.163.0") {
-                $script:RuntimeProbeStatus = "PASS"
-                Write-Output "audited_runtime_compatibility=PASS"
-            } else {
-                $script:RuntimeProbeStatus = "FAIL"
-                Write-Output "audited_runtime_compatibility=FAIL"
-            }
+            $script:RuntimeProbeStatus = "PASS"
+        } elseif ($probeCode -eq 1) {
+            $script:RuntimeProbeStatus = "FAIL"
         }
+
     } else {
         Write-Output "app_server_probe=UNVERIFIED"
         Write-Output "diagnostic=Python is unavailable for the read-only runtime probe"
@@ -225,6 +226,7 @@ if ($script:TestFailures -eq 0) {
     Write-Output "windows_native_security=FAIL"
     Write-Output "windows_conpty_synthetic_tests=FAIL"
 }
+Write-Output ("windows_runtime_probe=" + $script:RuntimeProbeStatus)
 Write-Output "windows_live_runtime=UNVERIFIED"
 Write-Output "live_request_authorized=false"
 Write-Output "diagnostic=The probe initializes the installed runtime only; live task scenarios require separate bounded authorization"

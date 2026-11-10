@@ -1,5 +1,16 @@
 # PROMPT038A qualification record
 
+## P038A-FIX update — 2026-11-10
+
+The physical Arch baseline 492e114 failed the resize scenario (8/9 PTY).
+The harness controlling-terminal defect and independent probe validation defect
+are corrected; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
+Historical PASS tables below retain their original SHA scope. Corrected physical
+Arch qualification (G5) and Windows live Codex qualification (G4) remain
+**UNVERIFIED**; release/merge (G8) remains **BLOCKED**. No allowlist was broadened.
+Runners now require `P038A_EXPECTED_COMMIT=<reviewed full PR head SHA>`.
+
+
 ## Status
 
 - Qualification status: **PARTIAL**.
@@ -105,7 +116,7 @@ git clone https://github.com/nghianguyen150612/Codex-Meter.git Codex-Meter-p038a
 cd Codex-Meter-p038a
 git fetch origin pull/33/head:refs/remotes/origin/pr/33
 git checkout --detach refs/remotes/origin/pr/33
-bash scripts/p038a-qualify-arch.sh --confirm-reference-device
+P038A_EXPECTED_COMMIT=<reviewed-full-SHA> bash scripts/p038a-qualify-arch.sh --confirm-reference-device
 ~~~
 
 The script refuses to qualify a non-Arch or non-x86_64 host, an identified container or virtual
@@ -144,6 +155,7 @@ git clone https://github.com/nghianguyen150612/Codex-Meter.git Codex-Meter-p038a
 Set-Location Codex-Meter-p038a
 git fetch origin pull/33/head:refs/remotes/origin/pr/33
 git checkout --detach refs/remotes/origin/pr/33
+$env:P038A_EXPECTED_COMMIT = "<reviewed-full-SHA>"
 .\scripts\p038a-qualify-windows.ps1
 ~~~
 

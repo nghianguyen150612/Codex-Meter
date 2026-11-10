@@ -1,5 +1,16 @@
 # Execution recovery platform matrix (P038)
 
+## P038A-FIX update — 2026-11-10
+
+The physical Arch baseline 492e114 failed the resize scenario (8/9 PTY).
+The harness controlling-terminal defect and independent probe validation defect
+are corrected; see [defect resolution and current evidence](P038A_FIX_RESOLUTION.md).
+Historical PASS tables below retain their original SHA scope. Corrected physical
+Arch qualification (G5) and Windows live Codex qualification (G4) remain
+**UNVERIFIED**; release/merge (G8) remains **BLOCKED**. No allowlist was broadened.
+Runners now require `P038A_EXPECTED_COMMIT=<reviewed full PR head SHA>`.
+
+
 This matrix separates implementation, synthetic runtime evidence, native CI, and live-device
 qualification. The Codex App Server allowlist remains exactly codex_cli_rs/0.163.0. This matrix
 does not broaden it.

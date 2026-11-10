@@ -44,3 +44,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "codex-meter"
 path = "src/main.rs"
+
+[target.'cfg(unix)'.dev-dependencies]
+vt100 = "0.15.2"

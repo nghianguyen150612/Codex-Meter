@@ -113,6 +113,7 @@ struct PtyHarness {
     terminal_probe: fs::File,
     baseline: libc::termios,
     output: Arc<Mutex<Vec<u8>>>,
+    resizes: Mutex<Vec<(usize, u16, u16)>>,
     reader_stop: Arc<std::sync::atomic::AtomicBool>,
     reader: Option<JoinHandle<()>>,
     child: Option<Child>,
@@ -139,6 +140,12 @@ impl PtyHarness {
             )
         };
         assert_eq!(opened, 0);
+        for fd in [master_fd, slave_fd] {
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
         let master = unsafe { fs::File::from_raw_fd(master_fd) };
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
         let terminal_probe = slave.try_clone().unwrap();
@@ -194,6 +201,7 @@ impl PtyHarness {
             terminal_probe,
             baseline,
             output,
+            resizes: Mutex::new(Vec::new()),
             reader_stop,
             reader: Some(reader),
             child: None,
@@ -229,7 +237,23 @@ impl PtyHarness {
             .stdin(Stdio::from(self.slave.try_clone().unwrap()))
             .stdout(Stdio::from(self.slave.try_clone().unwrap()))
             .stderr(Stdio::from(self.slave.try_clone().unwrap()));
-        child_command.process_group(0);
+        // A process group alone inherits the caller's controlling terminal.
+        // Crossterm queries /dev/tty before stdout for window dimensions.
+        // Only async-signal-safe syscalls may run between fork and exec.
+        unsafe {
+            child_command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::tcgetpgrp(0) != libc::getpid() {
+                    return Err(std::io::Error::other("child PTY foreground group mismatch"));
+                }
+                Ok(())
+            });
+        }
         let child = child_command.spawn().unwrap();
         self.child = Some(child);
     }
@@ -252,12 +276,7 @@ impl PtyHarness {
     fn wait_for(&self, text: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            let output = self
-                .output
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let found = visible_screen(&output).contains(text);
+            let found = self.output_text().contains(text);
             if found {
                 return true;
             }
@@ -268,26 +287,26 @@ impl PtyHarness {
 
     fn assert_text(&self, text: &str) {
         if !self.wait_for(text, Duration::from_secs(15)) {
-            let visible = self.output_text();
-            let raw = self.raw_output_text();
-            let raw_tail = raw
-                .chars()
-                .rev()
-                .take(4_000)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<String>();
-            let request_log = fs::read_to_string(&self.paths.request_log).unwrap_or_default();
-            let state = fs::read_to_string(&self.paths.state).unwrap_or_default();
+            let output = self.output.lock().unwrap();
+            let raw_contains = String::from_utf8_lossy(&output).contains(text);
+            let screen = self.screen(&output);
+            let status = self.child.as_ref().map(|child| {
+                // kill(pid, 0) checks existence without changing the process.
+                unsafe { libc::kill(child.id() as i32, 0) == 0 }
+            });
+            eprintln!("PTY_DIAG bytes={} raw_contains={raw_contains} running={} narrow_fallback={} approval={} tty_columns={} tty_rows={}",
+                output.len(), screen.contains("Running"), screen.contains("Resize terminal"),
+                screen.contains("APPROVAL REQUIRED"), self.dimensions().0, self.dimensions().1);
             panic!(
-                "expected PTY output to contain {text:?}; visible screen: {visible}; recent raw PTY output: {raw_tail}; fake requests: {request_log:?}; fake state: {state:?}"
+                "PTY assertion failed: expected={text:?} bytes={} raw_contains={raw_contains} screen_contains=false tty_size={:?} child_exists={status:?} thread_starts={} turn_starts={}",
+                output.len(), self.dimensions(), self.paths.request_count("thread/start"),
+                self.paths.request_count("turn/start")
             );
         }
     }
 
     fn output_text(&self) -> String {
-        visible_screen(
+        self.screen(
             &self
                 .output
                 .lock()
@@ -325,7 +344,33 @@ impl PtyHarness {
         self.key(b'\r');
     }
 
+    fn dimensions(&self) -> (u16, u16) {
+        let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+        assert_eq!(
+            unsafe { libc::ioctl(self.terminal_probe.as_raw_fd(), libc::TIOCGWINSZ, &mut size) },
+            0
+        );
+        (size.ws_col, size.ws_row)
+    }
+
+    fn screen(&self, bytes: &[u8]) -> String {
+        let mut parser = vt100::Parser::new(40, 120, 0);
+        let mut offset = 0;
+        for &(end, rows, columns) in self.resizes.lock().unwrap().iter() {
+            parser.process(&bytes[offset..end]);
+            parser.set_size(rows, columns);
+            offset = end;
+        }
+        parser.process(&bytes[offset..]);
+        parser.screen().contents()
+    }
+
     fn resize(&self, columns: u16, rows: u16) {
+        let output = self.output.lock().unwrap();
+        self.resizes
+            .lock()
+            .unwrap()
+            .push((output.len(), rows, columns));
         let window = libc::winsize {
             ws_row: rows,
             ws_col: columns,
@@ -342,9 +387,9 @@ impl PtyHarness {
             },
             0
         );
-        if let Some(child) = self.child.as_ref() {
-            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGWINCH) }, 0);
-        }
+        assert_eq!(self.dimensions(), (columns, rows));
+        // TIOCSWINSZ signals the slave foreground process group naturally.
+        drop(output);
     }
 
     fn restore_terminal_after_forceful_kill(&self) {
@@ -417,122 +462,6 @@ impl PtyHarness {
     }
 }
 
-fn visible_screen(bytes: &[u8]) -> String {
-    const ROWS: usize = 64;
-    const COLUMNS: usize = 180;
-    let mut screen = vec![vec![' '; COLUMNS]; ROWS];
-    let (mut row, mut column) = (0_usize, 0_usize);
-    let visible = String::from_utf8_lossy(bytes);
-    let mut chars = visible.chars().peekable();
-    while let Some(character) = chars.next() {
-        match character {
-            '\x1b' => match chars.next() {
-                Some('[') => {
-                    let mut sequence = String::new();
-                    for value in chars.by_ref() {
-                        if ('@'..='~').contains(&value) {
-                            let parameters = sequence
-                                .trim_start_matches('?')
-                                .split(';')
-                                .filter_map(|part| part.parse::<usize>().ok())
-                                .collect::<Vec<_>>();
-                            match value {
-                                'H' | 'f' => {
-                                    row = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(ROWS - 1);
-                                    column = parameters
-                                        .get(1)
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(COLUMNS - 1);
-                                }
-                                'A' => {
-                                    row =
-                                        row.saturating_sub(parameters.first().copied().unwrap_or(1))
-                                }
-                                'B' => {
-                                    row = row
-                                        .saturating_add(parameters.first().copied().unwrap_or(1))
-                                        .min(ROWS - 1)
-                                }
-                                'C' => {
-                                    column = column
-                                        .saturating_add(parameters.first().copied().unwrap_or(1))
-                                        .min(COLUMNS - 1)
-                                }
-                                'D' => {
-                                    column = column
-                                        .saturating_sub(parameters.first().copied().unwrap_or(1))
-                                }
-                                'G' => {
-                                    column = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(COLUMNS - 1)
-                                }
-                                'd' => {
-                                    row = parameters
-                                        .first()
-                                        .copied()
-                                        .unwrap_or(1)
-                                        .saturating_sub(1)
-                                        .min(ROWS - 1)
-                                }
-                                'J' if parameters.first() == Some(&2)
-                                    || parameters.first() == Some(&3) =>
-                                {
-                                    for line in &mut screen {
-                                        line.fill(' ');
-                                    }
-                                }
-                                'K' => screen[row][column..].fill(' '),
-                                _ => {}
-                            }
-                            break;
-                        }
-                        sequence.push(value);
-                    }
-                }
-                Some(']') => {
-                    while let Some(value) = chars.next() {
-                        if value == '\x07' {
-                            break;
-                        }
-                        if value == '\x1b' && chars.peek() == Some(&'\\') {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                Some(_) | None => {}
-            },
-            '\r' => column = 0,
-            '\n' => row = row.saturating_add(1).min(ROWS - 1),
-            '\x08' => column = column.saturating_sub(1),
-            '\t' => column = ((column / 8) + 1) * 8,
-            value if !value.is_control() => {
-                if column < COLUMNS {
-                    screen[row][column] = value;
-                }
-                column = column.saturating_add(1).min(COLUMNS - 1);
-            }
-            _ => {}
-        }
-    }
-    screen
-        .into_iter()
-        .map(|line| line.into_iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 impl Drop for PtyHarness {
     fn drop(&mut self) {
         self.kill_process_group();
@@ -552,12 +481,15 @@ fn compiled_tui_executes_unicode_prompt_and_restores_the_terminal() {
     let _serial = serialize_pty_test();
     let paths = TestPaths::new();
     let mut pty = PtyHarness::new(paths);
+    assert_eq!(pty.dimensions(), (120, 40));
     pty.spawn("compose", "success");
     pty.begin_task();
     pty.assert_text("Running");
     pty.resize(16, 8);
     pty.assert_text("Resize terminal");
+    pty.assert_text("to view Codex");
     pty.resize(120, 40);
+    pty.assert_text("Running");
     temp_file(&pty.paths.continue_file);
     pty.assert_text("Completed");
     pty.key(b'\r');
@@ -798,4 +730,24 @@ fn pty_dirty_composer_exit_restores_terminal_settings() {
     pty.key(b'y');
     assert!(pty.wait_for_exit().success());
     pty.assert_terminal_restored();
+}
+
+#[test]
+fn vt_screen_tracks_unicode_diff_clear_and_resize() {
+    let mut parser = vt100::Parser::new(40, 120, 0);
+    parser.process(b"\x1b[?1049h\x1b[2J\x1b[HRunning");
+    parser.set_size(8, 16);
+    parser.process(b"\x1b[2J\x1b[HResize terminal\x1b[2;1Hto view Codex");
+    assert!(parser.screen().contents().contains("Resize terminal"));
+    assert!(!parser.screen().contents().contains("Running"));
+    parser.set_size(40, 120);
+    parser.process(b"\x1b[2J\x1b[HRunning ");
+    for byte in "λ".as_bytes() {
+        parser.process(&[*byte]);
+    }
+    parser.process(b"\x1b[1;1HCompleted\x1b[K");
+    assert_eq!(parser.screen().contents(), "Completed");
+    parser.process(b"\x1b[?1049l\x1b[?25h");
+    assert!(!parser.screen().alternate_screen());
+    assert!(!parser.screen().hide_cursor());
 }

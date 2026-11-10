@@ -164,3 +164,11 @@ additional release prerequisite under this P038 task. See the
 [P038A qualification record](PROMPT038A_MANIFEST.md) for current runtime evidence and open gates.
 The Arch reference gate remains outstanding; this journal must not be used to infer task-token
 attribution or forecast quota.
+
+## P038A-FIX qualification
+
+The Unix PTY harness now owns its controlling terminal, so interactive-parent
+window-size queries reach the resized slave. See [the defect record](P038A_FIX_RESOLUTION.md)
+for reproduction and validation. Qualification runners require the exact reviewed
+`P038A_EXPECTED_COMMIT`; Rust test PASS and runtime initialization remain separate
+from G4/G5 live device evidence. An unsupported runtime stays fail-closed.

@@ -7,12 +7,19 @@
 - Starting SHA: `58accdc8ac1e3226c555c04c0957415e2466386b`.
 - Starting branch: `feat/p038-windows-execution-reliability`; this was the
   verified P038 head and current head of PR #33 at preflight.
-- P038 PR #33 is open and Draft, targeting `main`. Its overall final-head CI
-  and mandatory Windows live-runtime (G4) and physical Arch (G5) gates remain
+- P038 PR #33 is open and Draft, targeting `main`, with verified head
+  `58accdc8ac1e3226c555c04c0957415e2466386b`. Final-head CI passed in
+  [PR run 42755734318](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42755734318)
+  and release-candidate validation passed in
+  [run 42755734292](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42755734292).
+  Mandatory Windows live-runtime (G4) and physical Arch (G5) gates remain
   unverified. Neither physical gate is treated as passed.
 - P039 branch: `feat/p039-task-token-attribution`.
 - Required stacked PR base: `feat/p038-windows-execution-reliability` (PR #33).
-- PR URL and final P039 commit: pending implementation completion.
+- P039 PR #34: https://github.com/nghianguyen150612/Codex-Meter/pull/34
+  (open, Draft; targets the P038 feature branch).
+- P039 source head: `a4b5873b7b1508333ee366b68a3f5c283ec546e7`; final-head CI
+  is running and remains pending.
 - No migration is introduced. P039 reads existing P031 evidence using P032's
   `SqliteReadStore` and leaves P038 and P031–P038 history intact.
 

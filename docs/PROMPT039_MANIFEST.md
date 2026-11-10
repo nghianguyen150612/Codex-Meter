@@ -2,8 +2,10 @@
 
 ## Status and dependency
 
-- P039 engineering status: **IN PROGRESS** until final-head cross-platform CI
-  and release-bundle CI pass.
+- P039 engineering status: **COMPLETE** at verified final source head
+  `062f5b5d719e0bcf340267db618f575bfaa9df52`. Final-head cross-platform CI and
+  release-bundle validation passed. Integration status remains **BLOCKED** by
+  inherited P038 dependency gates; this does not mark those gates passed.
 - Starting SHA: `58accdc8ac1e3226c555c04c0957415e2466386b`.
 - Starting branch: `feat/p038-windows-execution-reliability`; this was the
   verified P038 head and current head of PR #33 at preflight.
@@ -101,6 +103,14 @@ other unobserved clients may not be represented.
   `6292ea016f3a1f1741b7506db1a15f43c9a0b656` (local candidate, not published).
 - Final-head GitHub Actions and release-bundle results are tracked by the live
   PR checks and branch Actions links above.
+- Final-head CI passed on `062f5b5d719e0bcf340267db618f575bfaa9df52` in
+  [run 42789408748](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42789408748):
+  Rust quality, workspace tests on Linux, Windows, macOS Intel, and macOS ARM64,
+  Python quality, contracts, and installed-runtime matrix all passed.
+- Final-head release-candidate validation passed on the same SHA in
+  [run 42789491421](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/42789491421),
+  including reproducible candidate bundles for Linux x86_64, Windows x86_64,
+  macOS Intel, and macOS ARM64.
 - P038 G4/G5 remain unverified and are deferred to physical-device testing.
 - The 0.157.1 rollout parser compatibility boundary remains unchanged.
 - Task ranking can be limited by missing source raw totals; component counters
@@ -108,6 +118,7 @@ other unobserved clients may not be represented.
 - JSON configurations are explicitly marked truncated after 64 distinct tuples
   for one task.
 
-Do not mark P039 engineering complete while a required check or final-head CI
-is pending or failing. Integration remains blocked while PR #33's required
-dependency gates remain unresolved.
+P039 engineering is complete for the verified source head above. Re-run and
+record CI if source changes. Integration remains blocked while PR #33's required
+dependency gates remain unresolved; do not merge either stacked PR while those
+gates are blocked.

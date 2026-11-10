@@ -80,6 +80,10 @@ async def probe(program: str, client_version: str) -> int:
             stderr=asyncio.subprocess.PIPE,
             limit=MAX_LINE_BYTES,
         )
+    except FileNotFoundError:
+        print("app_server_probe=UNVERIFIED")
+        print("diagnostic=app_server_executable_missing")
+        return 2
     except (OSError, ValueError):
         print("app_server_probe=UNVERIFIED")
         print("diagnostic=app_server_start_failed")

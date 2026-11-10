@@ -745,6 +745,7 @@ fn vt_screen_tracks_unicode_diff_clear_and_resize() {
     for byte in "λ".as_bytes() {
         parser.process(&[*byte]);
     }
+    assert_eq!(parser.screen().contents(), "Running λ");
     parser.process(b"\x1b[1;1HCompleted\x1b[K");
     assert_eq!(parser.screen().contents(), "Completed");
     parser.process(b"\x1b[?1049l\x1b[?25h");

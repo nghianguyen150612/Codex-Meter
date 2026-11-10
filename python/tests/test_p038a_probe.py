@@ -116,4 +116,4 @@ def test_missing_executable(capsys):
     import asyncio
 
     assert asyncio.run(probe.probe("/nonexistent-p038a-executable", "0.1.0")) == 2
-    assert "app_server_start_failed" in capsys.readouterr().out
+    assert "app_server_executable_missing" in capsys.readouterr().out

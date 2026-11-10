@@ -97,7 +97,8 @@ reject dirty trees, and retain filesystem, toolchain, command exits and test cou
 Arch now retains the probe exit separately; passing Rust tests cannot erase a
 failed or unavailable probe. Temporary captures are removed on normal exit and
 interrupt. Windows records the probe exit and compatibility result directly,
-without a second divergent user-agent predicate. Both procedures keep live
+without a second divergent user-agent predicate. The Windows runner also stops assigning
+to PowerShell 7's read-only automatic IsWindows variable; it uses nativeWindowsHost. Both procedures keep live
 qualification UNVERIFIED even when synthetic tests and initialize pass.
 
 ## Remaining device actions

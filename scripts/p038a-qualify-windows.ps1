@@ -44,7 +44,7 @@ function Restore-EnvironmentValue {
     }
 }
 
-$isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+$nativeWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
     [System.Runtime.InteropServices.OSPlatform]::Windows
 )
 $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
@@ -53,7 +53,7 @@ Write-Output ("windows_build=" + [Environment]::OSVersion.Version.ToString())
 Write-Output ("architecture=" + $architecture)
 Write-Output ("powershell=" + $PSVersionTable.PSVersion.ToString())
 
-if (-not $isWindows -or $architecture -ne "X64") {
+if (-not $nativeWindowsHost -or $architecture -ne "X64") {
     Write-Output "windows_native_tests=UNVERIFIED"
     Write-Output "windows_live_runtime=UNVERIFIED"
     Write-Output "diagnostic=Run this procedure in native Windows x64 PowerShell"

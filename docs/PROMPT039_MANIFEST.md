@@ -73,9 +73,11 @@ other unobserved clients may not be represented.
   ordering, time/model/session filters, bounded top-task results, incomplete
   source coverage, checksum rejection, integer overflow, read-only byte
   preservation, migration-5 compatibility, and CLI JSON/human privacy checks.
-- Local Rust format, all-target/all-feature Clippy, default workspace tests,
-  and all-feature workspace tests: pass on the P039 source before final
-  documentation closeout.
+- Local Rust format and all-target/all-feature Clippy: pass.
+- Default workspace tests: pass (466 library, 4 analytics CLI, 19 sync CLI,
+  5 TUI CLI, and 11 PTY recovery tests).
+- All-feature workspace tests: pass (464 library, 2 analytics CLI, 19 sync
+  CLI, 5 TUI CLI, and 11 PTY recovery tests).
 - Python Ruff check and format: pass. Python tests: 666 passed. Contract
   validation: 6 schemas, 16 positive fixtures, and 5 negative fixtures passed.
 - Product version policy: pass. P029 installed-runtime smoke: pass after
@@ -83,8 +85,10 @@ other unobserved clients may not be represented.
 - Linux local execution: passed for the Rust and Python suites.
 - Windows, macOS Intel, and macOS ARM64: pending native CI for final P039
   source; not claimed from Linux-only local runs.
-- Linux release-bundle candidate validation and final-head GitHub Actions:
-  pending; Windows and macOS native tests/bundles require CI.
+- Linux x86_64 release-artifact build, candidate packaging, and extracted
+  candidate smoke: pass at implementation commit
+  `6292ea016f3a1f1741b7506db1a15f43c9a0b656` (local candidate, not published).
+- Final-head GitHub Actions and Windows/macOS native tests/bundles: pending.
 - P038 G4/G5 remain unverified and are deferred to physical-device testing.
 - The 0.157.1 rollout parser compatibility boundary remains unchanged.
 - Task ranking can be limited by missing source raw totals; component counters

@@ -149,3 +149,15 @@ The existing Windows ACL/ownership, journal replacement/locking/CAS, Job Object,
 approval and no-replay implementation is unchanged. Native CI and release-bundle
 results are recorded separately once Actions completes; the local Linux results
 above cannot establish those platform results.
+
+## Native CI correction — Darwin descriptor revocation
+
+The first fix iteration (7f11f67, CI 42751694853) exposed Darwin's slave-descriptor
+revocation when a controlling session leader exits. All application interactions
+completed, but tcgetattr on the retained slave failed after exit; crash-reset
+checks likewise used revoked descriptors. The harness now reopens the same named
+slave for post-exit mode inspection, explicit crash reset and restart stdio.
+It never resets modes before a normal-exit assertion. A focused test verifies
+that reopening preserves an intentionally raw mode, rather than concealing it.
+Restoration assertions remain unchanged in strength. Native CI must verify this
+correction on both macOS architectures; the earlier failed run is not PASS evidence.

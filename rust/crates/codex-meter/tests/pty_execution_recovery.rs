@@ -110,6 +110,7 @@ impl Drop for TestPaths {
 struct PtyHarness {
     master: fs::File,
     slave: fs::File,
+    slave_path: std::path::PathBuf,
     terminal_probe: fs::File,
     baseline: libc::termios,
     output: Arc<Mutex<Vec<u8>>>,
@@ -148,6 +149,16 @@ impl PtyHarness {
         }
         let master = unsafe { fs::File::from_raw_fd(master_fd) };
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        let mut name = [0_i8; 1024];
+        assert_eq!(
+            unsafe { libc::ttyname_r(slave_fd, name.as_mut_ptr(), name.len()) },
+            0
+        );
+        let slave_path = std::path::PathBuf::from(
+            unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+                .to_str()
+                .unwrap(),
+        );
         let terminal_probe = slave.try_clone().unwrap();
         let mut baseline = unsafe { std::mem::zeroed::<libc::termios>() };
         assert_eq!(
@@ -198,6 +209,7 @@ impl PtyHarness {
         Self {
             master,
             slave,
+            slave_path,
             terminal_probe,
             baseline,
             output,
@@ -211,6 +223,7 @@ impl PtyHarness {
 
     fn spawn(&mut self, command: &str, mode: &str) {
         assert!(self.child.is_none());
+        self.slave = self.open_slave();
         let original_path = std::env::var_os("PATH").unwrap_or_default();
         let mut search_path = self.paths.bin.as_os_str().to_os_string();
         search_path.push(":");
@@ -344,6 +357,14 @@ impl PtyHarness {
         self.key(b'\r');
     }
 
+    fn open_slave(&self) -> fs::File {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.slave_path)
+            .unwrap()
+    }
+
     fn dimensions(&self) -> (u16, u16) {
         let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
         assert_eq!(
@@ -392,7 +413,10 @@ impl PtyHarness {
         drop(output);
     }
 
-    fn restore_terminal_after_forceful_kill(&self) {
+    fn restore_terminal_after_forceful_kill(&mut self) {
+        // Darwin revokes slave descriptors when the controlling session leader dies.
+        // Reopen the same PTY; this does not reset its termios.
+        self.terminal_probe = self.open_slave();
         assert_eq!(
             unsafe {
                 libc::tcsetattr(
@@ -437,11 +461,10 @@ impl PtyHarness {
     }
 
     fn assert_terminal_restored(&self) {
+        // Do not query a descriptor revoked by Darwin at session-leader exit.
+        let probe = self.open_slave();
         let mut after = unsafe { std::mem::zeroed::<libc::termios>() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(self.terminal_probe.as_raw_fd(), &mut after) },
-            0
-        );
+        assert_eq!(unsafe { libc::tcgetattr(probe.as_raw_fd(), &mut after) }, 0);
         assert_eq!(after.c_lflag, self.baseline.c_lflag);
         assert_eq!(after.c_iflag, self.baseline.c_iflag);
         let output = self.raw_output_text();
@@ -751,4 +774,24 @@ fn vt_screen_tracks_unicode_diff_clear_and_resize() {
     parser.process(b"\x1b[?1049l\x1b[?25h");
     assert!(!parser.screen().alternate_screen());
     assert!(!parser.screen().hide_cursor());
+}
+
+#[test]
+fn reopening_slave_preserves_terminal_modes() {
+    let _serial = serialize_pty_test();
+    let pty = PtyHarness::new(TestPaths::new());
+    let mut raw = pty.baseline;
+    unsafe { libc::cfmakeraw(&mut raw) };
+    assert_eq!(
+        unsafe { libc::tcsetattr(pty.slave.as_raw_fd(), libc::TCSANOW, &raw) },
+        0
+    );
+    let probe = pty.open_slave();
+    let mut actual = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(probe.as_raw_fd(), &mut actual) },
+        0
+    );
+    assert_eq!(actual.c_lflag, raw.c_lflag);
+    assert_ne!(actual.c_lflag, pty.baseline.c_lflag);
 }

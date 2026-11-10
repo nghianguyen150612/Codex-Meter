@@ -18,8 +18,11 @@
 - Required stacked PR base: `feat/p038-windows-execution-reliability` (PR #33).
 - P039 PR #34: https://github.com/nghianguyen150612/Codex-Meter/pull/34
   (open, Draft; targets the P038 feature branch).
-- P039 source head: `a4b5873b7b1508333ee366b68a3f5c283ec546e7`; final-head CI
-  is running and remains pending.
+- P039 implementation commit: `6292ea016f3a1f1741b7506db1a15f43c9a0b656`.
+  Later commits record validation and dependency evidence. The current review
+  head and its check results are tracked in the
+  [P039 PR checks](https://github.com/nghianguyen150612/Codex-Meter/pull/34/checks)
+  and [branch Actions history](https://github.com/nghianguyen150612/Codex-Meter/actions?query=branch%3Afeat%2Fp039-task-token-attribution).
 - No migration is introduced. P039 reads existing P031 evidence using P032's
   `SqliteReadStore` and leaves P038 and P031–P038 history intact.
 
@@ -90,12 +93,14 @@ other unobserved clients may not be represented.
 - Product version policy: pass. P029 installed-runtime smoke: pass after
   building the local `codex-meter` executable.
 - Linux local execution: passed for the Rust and Python suites.
-- Windows, macOS Intel, and macOS ARM64: pending native CI for final P039
-  source; not claimed from Linux-only local runs.
+- Local execution above was on Linux. Windows, macOS Intel, and macOS ARM64
+  qualification must come from the current-head checks linked above; it is not
+  inferred from Linux-only local runs.
 - Linux x86_64 release-artifact build, candidate packaging, and extracted
   candidate smoke: pass at implementation commit
   `6292ea016f3a1f1741b7506db1a15f43c9a0b656` (local candidate, not published).
-- Final-head GitHub Actions and Windows/macOS native tests/bundles: pending.
+- Final-head GitHub Actions and release-bundle results are tracked by the live
+  PR checks and branch Actions links above.
 - P038 G4/G5 remain unverified and are deferred to physical-device testing.
 - The 0.157.1 rollout parser compatibility boundary remains unchanged.
 - Task ranking can be limited by missing source raw totals; component counters

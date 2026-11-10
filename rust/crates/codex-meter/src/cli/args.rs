@@ -41,6 +41,16 @@ pub struct TokensArguments {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TasksArguments {
+    pub database: Option<PathBuf>,
+    pub scope: TokenScope,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
+    pub limit: u32,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct HistoryArguments {
     pub database: Option<PathBuf>,
     pub today: bool,
@@ -118,6 +128,7 @@ pub enum CliAction {
     SyncHelp,
     EstimateHelp,
     TokensHelp,
+    TasksHelp,
     HistoryHelp,
     InspectHelp,
     QuotaHelp,
@@ -127,6 +138,7 @@ pub enum CliAction {
     Sync(SyncArguments),
     Estimate(EstimateArguments),
     Tokens(TokensArguments),
+    Tasks(TasksArguments),
     History(HistoryArguments),
     Inspect(InspectArguments),
     Quota(QuotaArguments),
@@ -177,6 +189,9 @@ where
     }
     if arguments[0] == OsStr::new("tokens") {
         return parse_tokens_args(&arguments[1..]);
+    }
+    if arguments[0] == OsStr::new("tasks") {
+        return parse_tasks_args(&arguments[1..]);
     }
     if arguments[0] == OsStr::new("history") {
         return parse_history_args(&arguments[1..]);
@@ -449,6 +464,71 @@ fn parse_tokens_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
         database,
         scope: scope.unwrap_or(TokenScope::Today),
         model,
+        json,
+    }))
+}
+
+fn parse_tasks_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if has_help(arguments) {
+        return Ok(CliAction::TasksHelp);
+    }
+    let mut seen = HashSet::new();
+    let mut database = None;
+    let mut model = None;
+    let mut session_id = None;
+    let mut json = false;
+    let mut limit = 20;
+    let mut scope = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = utf8_value(&arguments[index], "argument")?;
+        if matches!(flag.as_str(), "--today" | "--week" | "--all") {
+            if !seen.insert(flag.clone()) {
+                return Err(error("invalid_argument", "duplicate time-scope option"));
+            }
+            if scope.is_some() {
+                return Err(error(
+                    "conflicting_options",
+                    "choose only one of --today, --week, or --all",
+                ));
+            }
+            scope = Some(match flag.as_str() {
+                "--today" => TokenScope::Today,
+                "--week" => TokenScope::Week,
+                _ => TokenScope::All,
+            });
+            index += 1;
+            continue;
+        }
+        if flag == "--json" {
+            set_once(&mut seen, &flag)?;
+            json = true;
+            index += 1;
+            continue;
+        }
+        let value = next_option_value(
+            arguments,
+            &mut index,
+            &flag,
+            &["--database", "--model", "--session", "--limit"],
+        )?;
+        if !seen.insert(flag.clone()) {
+            return Err(error("invalid_argument", "duplicate tasks option"));
+        }
+        match flag.as_str() {
+            "--database" => database = Some(PathBuf::from(value)),
+            "--model" => model = Some(checked_text(value, "model", 256)?),
+            "--session" => session_id = Some(checked_identifier(&value, "session")?),
+            "--limit" => limit = parse_limit(&value)?,
+            _ => unreachable!(),
+        }
+    }
+    Ok(CliAction::Tasks(TasksArguments {
+        database,
+        scope: scope.unwrap_or(TokenScope::Today),
+        model,
+        session_id,
+        limit,
         json,
     }))
 }
@@ -947,7 +1027,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {
@@ -988,6 +1068,10 @@ pub fn estimate_help_text() -> &'static str {
 
 pub fn tokens_help_text() -> &'static str {
     "Codex Meter — token usage statistics\n\nUSAGE:\n    codex-meter tokens [--today | --week | --all] [--model MODEL] [--database PATH] [--json]\n\nOPTIONS:\n    --today          Use the current UTC calendar day (default)\n    --week           Use the trailing seven days in UTC\n    --all             Include all persisted per-response events\n    --model MODEL     Match one exact model value\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nOnly per_response records count as consumed usage. Snapshot records are excluded. Component counters preserve source labels; cached input may be included in source input, reasoning output is not added to output, and raw totals are never reconstructed.\n"
+}
+
+pub fn tasks_help_text() -> &'static str {
+    "Codex Meter — task-level observed token usage\n\nUSAGE:\n    codex-meter tasks [--today | --week | --all] [--model MODEL] [--session SESSION_ID] [--limit N] [--database PATH] [--json]\n\nOPTIONS:\n    --today          Use the current UTC calendar day (default)\n    --week           Use the trailing seven days in UTC\n    --all             Include all persisted per-response events\n    --model MODEL     Match one exact model value\n    --session ID      Match one exact opaque persisted session ID\n    --limit N         Maximum tasks to return (default 20, range 1–1000)\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nOnly checksummed per_response evidence with both persisted session and task IDs is attributed. Cumulative snapshots are excluded. Incomplete identities are reported as unattributed. No prompt or conversation content is displayed.\n"
 }
 
 pub fn history_help_text() -> &'static str {
@@ -1314,6 +1398,40 @@ mod tests {
             CliAction::InspectHelp
         );
         assert_eq!(parse(&["quota", "--help"]).unwrap(), CliAction::QuotaHelp);
+        assert_eq!(parse(&["tasks", "--help"]).unwrap(), CliAction::TasksHelp);
+        assert_eq!(
+            parse(&["tasks"]).unwrap(),
+            CliAction::Tasks(TasksArguments {
+                database: None,
+                scope: TokenScope::Today,
+                model: None,
+                session_id: None,
+                limit: 20,
+                json: false,
+            })
+        );
+        let CliAction::Tasks(tasks) = parse(&[
+            "tasks",
+            "--week",
+            "--model",
+            "gpt-x",
+            "--session",
+            "session:opaque",
+            "--limit",
+            "25",
+            "--database",
+            "local db.sqlite",
+            "--json",
+        ])
+        .unwrap() else {
+            panic!("expected task usage arguments")
+        };
+        assert_eq!(tasks.scope, TokenScope::Week);
+        assert_eq!(tasks.model.as_deref(), Some("gpt-x"));
+        assert_eq!(tasks.session_id.as_deref(), Some("session:opaque"));
+        assert_eq!(tasks.limit, 25);
+        assert_eq!(tasks.database, Some(PathBuf::from("local db.sqlite")));
+        assert!(tasks.json);
     }
 
     #[test]
@@ -1321,6 +1439,26 @@ mod tests {
         assert_eq!(
             parse(&["tokens", "--today", "--week"]).unwrap_err().code,
             "conflicting_options"
+        );
+        assert_eq!(
+            parse(&["tasks", "--all", "--today"]).unwrap_err().code,
+            "conflicting_options"
+        );
+        assert_eq!(
+            parse(&["tasks", "--limit", "0"]).unwrap_err().code,
+            "invalid_limit"
+        );
+        assert_eq!(
+            parse(&["tasks", "--session", "bad\nidentifier"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            parse(&["tasks", "--model", "gpt-x", "--model", "gpt-y"])
+                .unwrap_err()
+                .code,
+            "invalid_argument"
         );
         assert_eq!(
             parse(&["tokens", "--json", "--json"]).unwrap_err().code,

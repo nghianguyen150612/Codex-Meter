@@ -123,6 +123,12 @@ SQLite connection. See the [usage history CLI guide](V02_USAGE_HISTORY_CLI.md)
 for filters, pagination, missing-value behavior, JSON output, and quota
 freshness policy.
 
+P039 adds `codex-meter tasks` over the same persisted token evidence. It groups
+only canonical per-response rows by persisted source, session, and task IDs.
+App Server thread/turn identities are not mapped to rollout identities without
+explicit validated evidence. Missing identity remains unattributed; cumulative
+and account-meter snapshots remain separate evidence domains.
+
 Each source has a hashed rollout identity and generation, an incremental reader
 cursor, the last complete line fingerprint, and a platform file-identity
 fingerprint where available. Token/quota/record-level diagnostic evidence,

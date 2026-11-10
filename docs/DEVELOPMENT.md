@@ -88,7 +88,7 @@ error. An unknown or missing fixture fails validation rather than being silently
 The Rust executable exposes `codex-meter tui` for the unreleased P034–P037 interactive dashboard
 and `codex-meter compose` to open its P035 Composer screen directly;
 `sync` for one-shot local Codex rollout ingestion,
-`tokens`, `history`, `inspect`, and `quota` for read-only evidence reporting, and `estimate` for
+`tokens`, `tasks`, `history`, `inspect`, and `quota` for read-only evidence reporting, and `estimate` for
 empirical current-capacity estimates. The unreleased P033 CLI adds `sessions`, `session show`,
 `session resume`, `session fork`, `models`, and `projects` through the installed Codex App Server.
 Those App Server commands do not access the usage database. `sync` migrates its per-user SQLite

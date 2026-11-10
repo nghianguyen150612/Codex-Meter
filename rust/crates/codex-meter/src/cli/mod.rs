@@ -12,7 +12,7 @@ mod sync;
 pub use args::{
     parse_args, CliAction, CliError, EstimateArguments, HistoryArguments, InspectArguments,
     ModelsArguments, ProjectsArguments, QuotaArguments, SessionForkArguments, SessionShowArguments,
-    SessionsArguments, SyncArguments, TokenScope, TokensArguments, TuiArguments,
+    SessionsArguments, SyncArguments, TasksArguments, TokenScope, TokensArguments, TuiArguments,
 };
 
 pub fn run<I, S>(arguments: I) -> Result<String, CliError>
@@ -32,6 +32,7 @@ where
         CliAction::SyncHelp => Ok(args::sync_help_text().to_owned()),
         CliAction::EstimateHelp => Ok(args::estimate_help_text().to_owned()),
         CliAction::TokensHelp => Ok(args::tokens_help_text().to_owned()),
+        CliAction::TasksHelp => Ok(args::tasks_help_text().to_owned()),
         CliAction::HistoryHelp => Ok(args::history_help_text().to_owned()),
         CliAction::InspectHelp => Ok(args::inspect_help_text().to_owned()),
         CliAction::QuotaHelp => Ok(args::quota_help_text().to_owned()),
@@ -41,6 +42,7 @@ where
         CliAction::Sync(arguments) => sync::run(arguments),
         CliAction::Estimate(arguments) => estimate::run(arguments),
         CliAction::Tokens(arguments) => reporting::tokens(arguments),
+        CliAction::Tasks(arguments) => reporting::tasks(arguments),
         CliAction::History(arguments) => reporting::history(arguments),
         CliAction::Inspect(arguments) => reporting::inspect(arguments),
         CliAction::Quota(arguments) => reporting::quota(arguments),

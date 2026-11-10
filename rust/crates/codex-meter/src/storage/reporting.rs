@@ -152,6 +152,67 @@ pub struct TokenStatistics {
     pub evidence_quality: EvidenceQualitySummary,
 }
 
+/// A task identity is scoped by all three persisted opaque IDs. Task IDs alone
+/// are not globally unique and are never joined to App Server thread IDs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskUsageQuery {
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskModelConfiguration {
+    pub model: Option<String>,
+    pub reasoning_level: Option<String>,
+    pub service_tier: Option<String>,
+    pub codex_version: Option<String>,
+    pub response_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskUsageSummary {
+    pub source_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub first_observed_at: String,
+    pub last_observed_at: String,
+    pub canonical_response_count: u64,
+    pub raw_total: MetricTotal,
+    pub input_tokens: MetricTotal,
+    pub cached_input_tokens: MetricTotal,
+    pub cache_write_input_tokens: MetricTotal,
+    pub output_tokens: MetricTotal,
+    pub reasoning_output_tokens: MetricTotal,
+    pub configurations: Vec<TaskModelConfiguration>,
+    pub configurations_truncated: bool,
+    pub evidence_status: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskUsageReport {
+    pub task_count: u64,
+    pub canonical_response_count: u64,
+    pub tasks: Vec<TaskUsageSummary>,
+    pub has_more: bool,
+    pub attributed: TaskTokenTotals,
+    pub unattributed: TaskTokenTotals,
+    pub evidence_quality: EvidenceQualitySummary,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskTokenTotals {
+    pub canonical_response_count: u64,
+    pub raw_total: MetricTotal,
+    pub input_tokens: MetricTotal,
+    pub cached_input_tokens: MetricTotal,
+    pub cache_write_input_tokens: MetricTotal,
+    pub output_tokens: MetricTotal,
+    pub reasoning_output_tokens: MetricTotal,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TokenHistoryPage {
     pub events: Vec<TokenUsageEvidence>,
@@ -293,6 +354,328 @@ pub(super) fn token_statistics(
     result.evidence_quality = evidence_quality_in_transaction(&transaction)?;
     transaction.commit().map_err(StorageError::sqlite)?;
     Ok(result)
+}
+
+struct TaskKey {
+    source_id: String,
+    session_id: String,
+    task_id: String,
+}
+
+type TaskConfigurationKey = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+#[derive(Default)]
+struct TaskAccumulator {
+    first_key: Option<String>,
+    first_observed_at: Option<String>,
+    last_key: Option<String>,
+    last_observed_at: Option<String>,
+    response_count: u64,
+    raw_total: MetricTotal,
+    input_tokens: MetricTotal,
+    cached_input_tokens: MetricTotal,
+    cache_write_input_tokens: MetricTotal,
+    output_tokens: MetricTotal,
+    reasoning_output_tokens: MetricTotal,
+    configurations: BTreeMap<TaskConfigurationKey, u64>,
+    configurations_truncated: bool,
+}
+
+impl TaskAccumulator {
+    fn add(&mut self, event: &TokenUsageEvidence) -> Result<(), StorageError> {
+        self.response_count = checked_increment(self.response_count)?;
+        accumulate_task_metrics(self, event)?;
+        let time_key = timestamp_sort_key(&event.observed_at);
+        if self
+            .first_key
+            .as_ref()
+            .is_none_or(|key| time_key.as_str() < key.as_str())
+        {
+            self.first_key = Some(time_key.clone());
+            self.first_observed_at = Some(event.observed_at.clone());
+        }
+        if self
+            .last_key
+            .as_ref()
+            .is_none_or(|key| time_key.as_str() > key.as_str())
+        {
+            self.last_key = Some(time_key);
+            self.last_observed_at = Some(event.observed_at.clone());
+        }
+        let configuration = (
+            event.model.clone(),
+            event.reasoning_level.clone(),
+            event.service_tier.clone(),
+            event.codex_version.clone(),
+        );
+        if let Some(count) = self.configurations.get_mut(&configuration) {
+            *count = checked_increment(*count)?;
+        } else if self.configurations.len() < 64 {
+            self.configurations.insert(configuration, 1);
+        } else {
+            self.configurations_truncated = true;
+        }
+        Ok(())
+    }
+
+    fn finish_metrics(&mut self) {
+        for metric in [
+            &mut self.raw_total,
+            &mut self.input_tokens,
+            &mut self.cached_input_tokens,
+            &mut self.cache_write_input_tokens,
+            &mut self.output_tokens,
+            &mut self.reasoning_output_tokens,
+        ] {
+            finish_metric(metric, self.response_count);
+        }
+    }
+}
+
+fn accumulate_task_metrics(
+    accumulator: &mut TaskAccumulator,
+    event: &TokenUsageEvidence,
+) -> Result<(), StorageError> {
+    accumulate_metric(&mut accumulator.raw_total, event.raw_total)?;
+    accumulate_metric(&mut accumulator.input_tokens, event.input_tokens)?;
+    accumulate_metric(
+        &mut accumulator.cached_input_tokens,
+        event.cached_input_tokens,
+    )?;
+    accumulate_metric(
+        &mut accumulator.cache_write_input_tokens,
+        event.cache_write_input_tokens,
+    )?;
+    accumulate_metric(&mut accumulator.output_tokens, event.output_tokens)?;
+    accumulate_metric(
+        &mut accumulator.reasoning_output_tokens,
+        event.reasoning_output_tokens,
+    )?;
+    Ok(())
+}
+
+pub(super) fn task_usage(
+    connection: &mut Connection,
+    query: &TaskUsageQuery,
+) -> Result<TaskUsageReport, StorageError> {
+    validate_time_range(query.since.as_deref(), query.until.as_deref())?;
+    validate_optional_filter(query.model.as_deref())?;
+    validate_optional_filter(query.session_id.as_deref())?;
+    validate_limit(query.limit)?;
+
+    let transaction = connection.transaction().map_err(StorageError::sqlite)?;
+    let since = query.since.as_deref().map(timestamp_sort_key);
+    let until = query.until.as_deref().map(timestamp_sort_key);
+
+    // Verify every in-scope canonical row while keeping memory bounded. This
+    // also builds the unattributed totals without consulting snapshots.
+    let scan_sql = format!(
+        "SELECT {TOKEN_COLUMNS} FROM token_usage_evidence \
+         WHERE record_semantic = 'per_response' \
+         AND (?1 IS NULL OR ({SORTED_TIME_EXPR}) >= ?1) \
+         AND (?2 IS NULL OR ({SORTED_TIME_EXPR}) < ?2) \
+         AND (?3 IS NULL OR model = ?3) \
+         AND (?4 IS NULL OR session_id = ?4) \
+         ORDER BY ({SORTED_TIME_EXPR}), event_id"
+    );
+    let mut unattributed = TaskAccumulator::default();
+    let mut attributed = TaskAccumulator::default();
+    let mut canonical_response_count = 0_u64;
+    {
+        let mut statement = transaction
+            .prepare(&scan_sql)
+            .map_err(StorageError::sqlite)?;
+        let mut rows = statement
+            .query(params![since, until, query.model, query.session_id])
+            .map_err(StorageError::sqlite)?;
+        while let Some(row) = rows.next().map_err(StorageError::sqlite)? {
+            let event = read_token_row(row)?;
+            canonical_response_count = checked_increment(canonical_response_count)?;
+            if event.task_id.is_none() || event.session_id.is_none() {
+                unattributed.add(&event)?;
+            } else {
+                attributed.add(&event)?;
+            }
+        }
+    }
+    unattributed.finish_metrics();
+    attributed.finish_metrics();
+
+    let task_count_sql = format!(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM token_usage_evidence \
+         WHERE record_semantic = 'per_response' AND task_id IS NOT NULL AND session_id IS NOT NULL \
+         AND (?1 IS NULL OR ({SORTED_TIME_EXPR}) >= ?1) \
+         AND (?2 IS NULL OR ({SORTED_TIME_EXPR}) < ?2) \
+         AND (?3 IS NULL OR model = ?3) AND (?4 IS NULL OR session_id = ?4) \
+         GROUP BY source_id, session_id, task_id)"
+    );
+    let task_count: i64 = transaction
+        .query_row(
+            &task_count_sql,
+            params![since, until, query.model, query.session_id],
+            |row| row.get(0),
+        )
+        .map_err(StorageError::sqlite)?;
+    let task_count = u64::try_from(task_count).map_err(|_| StorageError::EvidenceCorrupt)?;
+
+    let fetch_limit = query
+        .limit
+        .checked_add(1)
+        .ok_or(StorageError::ReportingQueryInvalid)?;
+    let candidate_sql = format!(
+        "SELECT source_id, session_id, task_id FROM token_usage_evidence \
+         WHERE record_semantic = 'per_response' AND task_id IS NOT NULL AND session_id IS NOT NULL \
+         AND (?1 IS NULL OR ({SORTED_TIME_EXPR}) >= ?1) \
+         AND (?2 IS NULL OR ({SORTED_TIME_EXPR}) < ?2) \
+         AND (?3 IS NULL OR model = ?3) AND (?4 IS NULL OR session_id = ?4) \
+         GROUP BY source_id, session_id, task_id \
+         ORDER BY SUM(raw_total) DESC, MAX({SORTED_TIME_EXPR}) DESC, source_id, session_id, task_id LIMIT ?5"
+    );
+    let mut keys = Vec::with_capacity(fetch_limit as usize);
+    {
+        let mut statement = transaction
+            .prepare(&candidate_sql)
+            .map_err(StorageError::sqlite)?;
+        let mut rows = statement
+            .query(params![
+                since,
+                until,
+                query.model,
+                query.session_id,
+                i64::from(fetch_limit)
+            ])
+            .map_err(reporting_sqlite_error)?;
+        while let Some(row) = rows.next().map_err(reporting_sqlite_error)? {
+            keys.push(TaskKey {
+                source_id: get_corrupt(row, 0)?,
+                session_id: get_corrupt(row, 1)?,
+                task_id: get_corrupt(row, 2)?,
+            });
+        }
+    }
+    let has_more = keys.len() > query.limit as usize;
+    if has_more {
+        keys.pop();
+    }
+    let mut tasks = Vec::with_capacity(keys.len());
+    for key in keys {
+        let event_sql = format!(
+            "SELECT {TOKEN_COLUMNS} FROM token_usage_evidence \
+             WHERE record_semantic = 'per_response' AND source_id = ?1 AND session_id = ?2 AND task_id = ?3 \
+             AND (?4 IS NULL OR ({SORTED_TIME_EXPR}) >= ?4) \
+             AND (?5 IS NULL OR ({SORTED_TIME_EXPR}) < ?5) \
+             AND (?6 IS NULL OR model = ?6) ORDER BY ({SORTED_TIME_EXPR}), event_id"
+        );
+        let mut accumulator = TaskAccumulator::default();
+        {
+            let mut statement = transaction
+                .prepare(&event_sql)
+                .map_err(StorageError::sqlite)?;
+            let mut rows = statement
+                .query(params![
+                    key.source_id,
+                    key.session_id,
+                    key.task_id,
+                    since,
+                    until,
+                    query.model,
+                ])
+                .map_err(StorageError::sqlite)?;
+            while let Some(row) = rows.next().map_err(StorageError::sqlite)? {
+                accumulator.add(&read_token_row(row)?)?;
+            }
+        }
+        accumulator.finish_metrics();
+        let configurations: Vec<_> = accumulator
+            .configurations
+            .into_iter()
+            .map(
+                |((model, reasoning_level, service_tier, codex_version), response_count)| {
+                    TaskModelConfiguration {
+                        model,
+                        reasoning_level,
+                        service_tier,
+                        codex_version,
+                        response_count,
+                    }
+                },
+            )
+            .collect();
+        let evidence_status = if accumulator.raw_total.coverage == MetricCoverage::Unavailable {
+            "usage_unavailable"
+        } else if [
+            accumulator.raw_total.coverage,
+            accumulator.input_tokens.coverage,
+            accumulator.cached_input_tokens.coverage,
+            accumulator.cache_write_input_tokens.coverage,
+            accumulator.output_tokens.coverage,
+            accumulator.reasoning_output_tokens.coverage,
+        ]
+        .contains(&MetricCoverage::Partial)
+            || [
+                accumulator.raw_total.coverage,
+                accumulator.input_tokens.coverage,
+                accumulator.cached_input_tokens.coverage,
+                accumulator.cache_write_input_tokens.coverage,
+                accumulator.output_tokens.coverage,
+                accumulator.reasoning_output_tokens.coverage,
+            ]
+            .contains(&MetricCoverage::Unavailable)
+        {
+            "partial"
+        } else {
+            "complete"
+        };
+        tasks.push(TaskUsageSummary {
+            source_id: key.source_id,
+            session_id: key.session_id,
+            task_id: key.task_id,
+            first_observed_at: accumulator.first_observed_at.unwrap_or_default(),
+            last_observed_at: accumulator.last_observed_at.unwrap_or_default(),
+            canonical_response_count: accumulator.response_count,
+            raw_total: accumulator.raw_total,
+            input_tokens: accumulator.input_tokens,
+            cached_input_tokens: accumulator.cached_input_tokens,
+            cache_write_input_tokens: accumulator.cache_write_input_tokens,
+            output_tokens: accumulator.output_tokens,
+            reasoning_output_tokens: accumulator.reasoning_output_tokens,
+            configurations,
+            configurations_truncated: accumulator.configurations_truncated,
+            evidence_status,
+        });
+    }
+    let evidence_quality = evidence_quality_in_transaction(&transaction)?;
+    transaction.commit().map_err(StorageError::sqlite)?;
+    Ok(TaskUsageReport {
+        task_count,
+        canonical_response_count,
+        tasks,
+        has_more,
+        attributed: TaskTokenTotals {
+            canonical_response_count: attributed.response_count,
+            raw_total: attributed.raw_total,
+            input_tokens: attributed.input_tokens,
+            cached_input_tokens: attributed.cached_input_tokens,
+            cache_write_input_tokens: attributed.cache_write_input_tokens,
+            output_tokens: attributed.output_tokens,
+            reasoning_output_tokens: attributed.reasoning_output_tokens,
+        },
+        unattributed: TaskTokenTotals {
+            canonical_response_count: unattributed.response_count,
+            raw_total: unattributed.raw_total,
+            input_tokens: unattributed.input_tokens,
+            cached_input_tokens: unattributed.cached_input_tokens,
+            cache_write_input_tokens: unattributed.cache_write_input_tokens,
+            output_tokens: unattributed.output_tokens,
+            reasoning_output_tokens: unattributed.reasoning_output_tokens,
+        },
+        evidence_quality,
+    })
 }
 
 pub(super) fn token_history(
@@ -734,6 +1117,17 @@ fn accumulate_metric(total: &mut MetricTotal, value: Option<u64>) -> Result<(), 
         None => total.missing_event_count = checked_increment(total.missing_event_count)?,
     }
     Ok(())
+}
+
+fn reporting_sqlite_error(error: rusqlite::Error) -> StorageError {
+    if matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(_, Some(message)) if message == "integer overflow"
+    ) {
+        StorageError::ReportingTotalOverflow
+    } else {
+        StorageError::sqlite(error)
+    }
 }
 
 fn finish_metric(metric: &mut MetricTotal, response_count: u64) {
@@ -1182,6 +1576,256 @@ mod tests {
     }
 
     #[test]
+    fn task_usage_scopes_ids_aggregates_responses_and_keeps_unknowns_unattributed() {
+        let database = path();
+        {
+            let store = SqliteStore::open(&database).unwrap();
+            let mut first = token(
+                "evt-task-a",
+                "2026-10-20T12:00:00.12Z",
+                Some("gpt-x"),
+                Some("session:a"),
+                TokenRecordSemantic::PerResponse,
+                Some(10),
+                Some(0),
+                Some(3),
+                Some(2),
+            );
+            first.task_id = Some("task:shared".into());
+            first.cache_write_input_tokens = Some(5);
+            insert_token(&store, &first);
+            // The evidence ledger's event ID primary key makes replayed events idempotent.
+            store
+                .connection()
+                .execute(
+                    "INSERT OR IGNORE INTO token_usage_evidence SELECT * FROM token_usage_evidence WHERE event_id = ?1",
+                    [&first.event_id],
+                )
+                .unwrap();
+
+            let mut second = token(
+                "evt-task-b",
+                "2026-10-20T12:00:00.1Z",
+                Some("gpt-y"),
+                Some("session:a"),
+                TokenRecordSemantic::PerResponse,
+                Some(20),
+                None,
+                Some(4),
+                Some(1),
+            );
+            second.task_id = Some("task:shared".into());
+            second.reasoning_level = None;
+            insert_token(&store, &second);
+
+            let mut other_source = token(
+                "evt-other-source",
+                "2026-10-20T12:00:01Z",
+                Some("gpt-z"),
+                Some("session:a"),
+                TokenRecordSemantic::PerResponse,
+                Some(7),
+                Some(8),
+                Some(1),
+                Some(0),
+            );
+            other_source.source_id = "src:second".into();
+            other_source.task_id = Some("task:shared".into());
+            insert_token(&store, &other_source);
+
+            let mut another_task = token(
+                "evt-another-task",
+                "2026-10-20T12:00:01.5Z",
+                Some("gpt-x"),
+                Some("session:a"),
+                TokenRecordSemantic::PerResponse,
+                Some(4),
+                Some(3),
+                Some(1),
+                Some(0),
+            );
+            another_task.task_id = Some("task:other".into());
+            insert_token(&store, &another_task);
+
+            let mut no_task = token(
+                "evt-no-task",
+                "2026-10-20T12:00:02Z",
+                Some("gpt-x"),
+                Some("session:a"),
+                TokenRecordSemantic::PerResponse,
+                Some(6),
+                Some(0),
+                None,
+                None,
+            );
+            no_task.task_id = None;
+            insert_token(&store, &no_task);
+
+            let mut no_session = token(
+                "evt-no-session",
+                "2026-10-20T12:00:03Z",
+                Some("gpt-x"),
+                None,
+                TokenRecordSemantic::PerResponse,
+                None,
+                None,
+                None,
+                None,
+            );
+            no_session.task_id = Some("task:ambiguous".into());
+            insert_token(&store, &no_session);
+
+            let mut snapshot = token(
+                "evt-snapshot",
+                "2026-10-20T12:00:04Z",
+                Some("gpt-x"),
+                Some("session:a"),
+                TokenRecordSemantic::ThreadCumulativeSnapshot,
+                Some(999),
+                Some(999),
+                Some(999),
+                Some(999),
+            );
+            snapshot.task_id = Some("task:shared".into());
+            insert_token(&store, &snapshot);
+            insert_diagnostic(
+                &store,
+                &diagnostic(
+                    "diag-task-coverage",
+                    IngestionDiagnosticCode::DataCoverageIncomplete,
+                ),
+            );
+        }
+
+        let before_read = fs::read(&database).unwrap();
+        let mut store = SqliteReadStore::open(&database).unwrap();
+        let report = store
+            .task_usage(&TaskUsageQuery {
+                since: None,
+                until: None,
+                model: None,
+                session_id: None,
+                limit: 2,
+            })
+            .unwrap();
+        let repeated = store
+            .task_usage(&TaskUsageQuery {
+                since: None,
+                until: None,
+                model: None,
+                session_id: None,
+                limit: 2,
+            })
+            .unwrap();
+        assert_eq!(report, repeated);
+        assert_eq!(report.task_count, 3);
+        assert_eq!(report.canonical_response_count, 6);
+        assert_eq!(report.attributed.canonical_response_count, 4);
+        assert_eq!(report.attributed.raw_total.known_sum, Some(41));
+        assert_eq!(report.tasks.len(), 2);
+        assert!(report.has_more);
+        let shared = report
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "src:opaque")
+            .unwrap();
+        assert_eq!(shared.task_id, "task:shared");
+        assert_eq!(shared.canonical_response_count, 2);
+        assert_eq!(shared.first_observed_at, "2026-10-20T12:00:00.1Z");
+        assert_eq!(shared.last_observed_at, "2026-10-20T12:00:00.12Z");
+        assert_eq!(shared.raw_total.known_sum, Some(30));
+        assert_eq!(shared.input_tokens.known_sum, Some(0));
+        assert_eq!(shared.input_tokens.missing_event_count, 1);
+        assert_eq!(shared.input_tokens.coverage, MetricCoverage::Partial);
+        assert_eq!(shared.cache_write_input_tokens.known_sum, Some(5));
+        assert_eq!(shared.output_tokens.known_sum, Some(7));
+        assert_eq!(shared.reasoning_output_tokens.known_sum, Some(3));
+        assert_eq!(shared.evidence_status, "partial");
+        assert_eq!(shared.configurations.len(), 2);
+        assert!(shared
+            .configurations
+            .iter()
+            .any(
+                |configuration| configuration.model.as_deref() == Some("gpt-y")
+                    && configuration.reasoning_level.is_none()
+            ));
+        assert_eq!(report.unattributed.canonical_response_count, 2);
+        assert_eq!(report.unattributed.raw_total.known_sum, Some(6));
+        assert_eq!(report.unattributed.raw_total.missing_event_count, 1);
+        assert_eq!(report.unattributed.input_tokens.known_sum, Some(0));
+        assert_eq!(report.evidence_quality.known_partial_collection, 1);
+
+        let filtered = store
+            .task_usage(&TaskUsageQuery {
+                since: None,
+                until: None,
+                model: Some("gpt-y".into()),
+                session_id: Some("session:a".into()),
+                limit: 20,
+            })
+            .unwrap();
+        assert_eq!(filtered.canonical_response_count, 1);
+        assert_eq!(filtered.task_count, 1);
+        assert_eq!(filtered.tasks[0].raw_total.known_sum, Some(20));
+        let bounded = store
+            .task_usage(&TaskUsageQuery {
+                since: Some("2026-10-20T12:00:00Z".into()),
+                until: Some("2026-10-20T12:00:02Z".into()),
+                model: None,
+                session_id: None,
+                limit: 20,
+            })
+            .unwrap();
+        assert_eq!(bounded.canonical_response_count, 4);
+        assert_eq!(bounded.task_count, 3);
+        drop(store);
+        assert_eq!(fs::read(&database).unwrap(), before_read);
+        remove(&database);
+    }
+
+    #[test]
+    fn task_usage_rejects_corrupt_in_scope_evidence_even_when_task_page_is_bounded() {
+        let database = path();
+        {
+            let writer = SqliteStore::open(&database).unwrap();
+            insert_token(
+                &writer,
+                &token(
+                    "evt-corrupt-task",
+                    "2026-10-20T12:00:00Z",
+                    Some("gpt-x"),
+                    Some("session:a"),
+                    TokenRecordSemantic::PerResponse,
+                    Some(10),
+                    Some(5),
+                    Some(5),
+                    Some(1),
+                ),
+            );
+            writer
+                .connection()
+                .execute(
+                    "UPDATE token_usage_evidence SET evidence_sha256 = ?1 WHERE event_id = 'evt-corrupt-task'",
+                    ["0000000000000000000000000000000000000000000000000000000000000000"],
+                )
+                .unwrap();
+        }
+        let mut reader = SqliteReadStore::open(&database).unwrap();
+        assert!(matches!(
+            reader.task_usage(&TaskUsageQuery {
+                since: None,
+                until: None,
+                model: None,
+                session_id: None,
+                limit: 1,
+            }),
+            Err(StorageError::EvidenceCorrupt)
+        ));
+        drop(reader);
+        remove(&database);
+    }
+
+    #[test]
     fn history_keyset_orders_fractional_timestamps_and_equal_timestamp_ids_stably() {
         let database = path();
         {
@@ -1388,6 +2032,16 @@ mod tests {
             store.token_statistics(&TokenStatisticsQuery::default()),
             Err(StorageError::ReportingTotalOverflow)
         ));
+        assert!(matches!(
+            store.task_usage(&TaskUsageQuery {
+                since: None,
+                until: None,
+                model: None,
+                session_id: None,
+                limit: 1,
+            }),
+            Err(StorageError::ReportingTotalOverflow)
+        ));
         drop(store);
         remove(&database);
     }
@@ -1412,6 +2066,19 @@ mod tests {
                     .token_statistics(&TokenStatisticsQuery::default())
                     .unwrap()
                     .canonical_response_count,
+                0
+            );
+            assert_eq!(
+                store
+                    .task_usage(&TaskUsageQuery {
+                        since: None,
+                        until: None,
+                        model: None,
+                        session_id: None,
+                        limit: 10,
+                    })
+                    .unwrap()
+                    .task_count,
                 0
             );
         }

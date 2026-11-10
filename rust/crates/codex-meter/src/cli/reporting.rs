@@ -8,13 +8,14 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use crate::storage::{
     EvidenceDetail, EvidenceQualitySummary, MetricCoverage, MetricTotal, QuotaHistoryCursor,
     QuotaHistoryPage, QuotaSnapshotEvidence, QuotaTimeline, SqliteReadStore, StorageError,
-    TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery, TokenRecordSemantic, TokenStatistics,
-    TokenStatisticsQuery,
+    TaskUsageQuery, TaskUsageReport, TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery,
+    TokenRecordSemantic, TokenStatistics, TokenStatisticsQuery,
 };
 use crate::telemetry::QuotaMeterType;
 
 use super::args::{
-    CliError, HistoryArguments, InspectArguments, QuotaArguments, TokenScope, TokensArguments,
+    CliError, HistoryArguments, InspectArguments, QuotaArguments, TasksArguments, TokenScope,
+    TokensArguments,
 };
 
 const REPORT_SCHEMA_VERSION: &str = "1.0.0";
@@ -30,6 +31,20 @@ struct TokenReportJson {
     model_filter: Option<String>,
     observation_status: &'static str,
     usage: TokenStatistics,
+}
+
+#[derive(Serialize)]
+struct TasksReportJson {
+    schema_version: &'static str,
+    generated_at: String,
+    source: &'static str,
+    period: PeriodJson,
+    model_filter: Option<String>,
+    session_filter: Option<String>,
+    page_size: u32,
+    observation_status: &'static str,
+    usage: TaskUsageReport,
+    attribution_contract: &'static str,
 }
 
 #[derive(Serialize)]
@@ -120,6 +135,49 @@ pub(super) fn tokens(arguments: TokensArguments) -> Result<String, CliError> {
         since.as_deref(),
         until.as_deref(),
         arguments.model.as_deref(),
+        &usage,
+    ))
+}
+
+pub(super) fn tasks(arguments: TasksArguments) -> Result<String, CliError> {
+    let generated_at = now_utc();
+    let (since, until, period_name) = token_period(arguments.scope, &generated_at)?;
+    let mut store = open_reporting_store(arguments.database)?;
+    let usage = store
+        .task_usage(&TaskUsageQuery {
+            since: since.clone(),
+            until: until.clone(),
+            model: arguments.model.clone(),
+            session_id: arguments.session_id.clone(),
+            limit: arguments.limit,
+        })
+        .map_err(storage_error)?;
+    if arguments.json {
+        return encode_json(&TasksReportJson {
+            schema_version: REPORT_SCHEMA_VERSION,
+            generated_at,
+            source: SOURCE_LABEL,
+            period: PeriodJson {
+                name: period_name,
+                since,
+                until,
+            },
+            model_filter: arguments.model,
+            session_filter: arguments.session_id,
+            page_size: arguments.limit,
+            observation_status: if usage.canonical_response_count == 0 {
+                "no_observations"
+            } else {
+                "observations_available"
+            },
+            usage,
+            attribution_contract: "task_id and session_id must both be persisted; source_id, session_id, and task_id form the identity",
+        });
+    }
+    Ok(render_tasks(
+        period_name,
+        since.as_deref(),
+        until.as_deref(),
         &usage,
     ))
 }
@@ -504,6 +562,98 @@ fn render_tokens(
     output.push_str("\nSemantics: source input may include cached input; categories can overlap. Reasoning output is reported separately and is not added to output. Raw totals are source-reported and are not reconstructed from components.\n");
     render_quality(&mut output, &usage.evidence_quality);
     output.push_str("Coverage: supported local Codex rollout evidence only; this is not complete ChatGPT account usage.\n");
+    output
+}
+
+fn render_tasks(
+    period_name: &str,
+    since: Option<&str>,
+    until: Option<&str>,
+    usage: &TaskUsageReport,
+) -> String {
+    let period_label = match period_name {
+        "today" => "Today (UTC)",
+        "trailing_7_days" => "Trailing 7 days (UTC)",
+        "all" => "All recorded history",
+        _ => period_name,
+    };
+    let mut output = format!("Codex Meter — Task Token Usage\nPeriod: {period_label}\n");
+    if since.is_some() || until.is_some() {
+        output.push_str(&format!(
+            "Range:  {} to {}\n",
+            since.unwrap_or("beginning of recorded history"),
+            until.unwrap_or("no upper bound")
+        ));
+    }
+    output.push_str("\nTask ID | Last observed (UTC) | Responses | Raw observed tokens | Model / reasoning | Coverage\n");
+    output.push_str("--------|---------------------|-----------|---------------------|-------------------|---------\n");
+    if usage.tasks.is_empty() {
+        output.push_str("No attributed task evidence for this period.\n");
+    }
+    for task in &usage.tasks {
+        let models = task
+            .configurations
+            .iter()
+            .take(2)
+            .map(|configuration| {
+                format!(
+                    "{}/{}",
+                    configuration.model.as_deref().unwrap_or("unavailable"),
+                    configuration
+                        .reasoning_level
+                        .as_deref()
+                        .unwrap_or("unavailable")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let model_summary = if task.configurations_truncated || task.configurations.len() > 2 {
+            format!("{models}, …")
+        } else if models.is_empty() {
+            "unavailable".to_owned()
+        } else {
+            models
+        };
+        let raw_total = task
+            .raw_total
+            .known_sum
+            .map(number)
+            .unwrap_or_else(|| "unavailable".to_owned());
+        output.push_str(&format!(
+            "{} | {} | {} | {} | {} | {}\n",
+            escape_terminal(&task.task_id),
+            escape_terminal(&task.last_observed_at),
+            number(task.canonical_response_count),
+            raw_total,
+            escape_terminal(&model_summary),
+            task.evidence_status,
+        ));
+    }
+    if usage.has_more {
+        output.push_str("Additional tasks are available; increase --limit (maximum 1000).\n");
+    }
+    output.push_str(&format!(
+        "\nAttributed usage: {} canonical responses across {} tasks (raw total: {}).\n",
+        number(usage.attributed.canonical_response_count),
+        number(usage.task_count),
+        usage
+            .attributed
+            .raw_total
+            .known_sum
+            .map(number)
+            .unwrap_or_else(|| "unavailable".into()),
+    ));
+    output.push_str(&format!(
+        "All canonical responses in scope: {}.\n",
+        number(usage.canonical_response_count),
+    ));
+    output.push_str(&format!(
+        "Unattributed responses: {} (raw total: {}). Missing task or session identity remains unattributed.\n",
+        number(usage.unattributed.canonical_response_count),
+        usage.unattributed.raw_total.known_sum.map(number).unwrap_or_else(|| "unavailable".into()),
+    ));
+    output.push_str("Raw tokens are source-reported per-response totals. Cumulative snapshots and account quota meters are not included. Local evidence may omit concurrent or other clients.\n");
+    render_quality(&mut output, &usage.evidence_quality);
     output
 }
 
@@ -1104,6 +1254,22 @@ mod tests {
         assert_eq!(tokens["usage"]["raw_total"]["known_sum"], 15);
         assert_eq!(tokens["usage"]["reasoning_output_tokens"]["known_sum"], 3);
 
+        let tasks = command(&["tasks", "--all", "--json"], &database).unwrap();
+        let tasks: serde_json::Value = serde_json::from_str(&tasks).unwrap();
+        assert_eq!(tasks["schema_version"], REPORT_SCHEMA_VERSION);
+        assert_eq!(tasks["observation_status"], "observations_available");
+        assert_eq!(tasks["usage"]["task_count"], 1);
+        assert_eq!(tasks["usage"]["tasks"][0]["task_id"], "task:hashed001");
+        assert_eq!(tasks["usage"]["tasks"][0]["raw_total"]["known_sum"], 15);
+        assert_eq!(tasks["usage"]["tasks"][0]["input_tokens"]["known_sum"], 10);
+        assert!(!tasks.to_string().contains("prompt"));
+        assert!(!tasks.to_string().contains("/workspace/"));
+        let human_tasks = command(&["tasks", "--all"], &database).unwrap();
+        assert!(human_tasks.contains("Task Token Usage"));
+        assert!(human_tasks.contains("task:hashed001"));
+        assert!(human_tasks.contains("Unattributed responses: 0"));
+        assert!(!human_tasks.contains("prompt"));
+
         let history = command(&["history", "--json"], &database).unwrap();
         let history: serde_json::Value = serde_json::from_str(&history).unwrap();
         assert_eq!(history["events"][0]["event_id"], event_id);
@@ -1143,6 +1309,10 @@ mod tests {
         assert!(command(&["quota"], &database)
             .unwrap()
             .contains("No supported sample"));
+        let tasks = command(&["tasks", "--all", "--json"], &database).unwrap();
+        let tasks: serde_json::Value = serde_json::from_str(&tasks).unwrap();
+        assert_eq!(tasks["observation_status"], "no_observations");
+        assert!(tasks["usage"]["tasks"].as_array().unwrap().is_empty());
         remove_database(&database);
 
         let missing = database_path();

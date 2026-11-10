@@ -17,7 +17,8 @@ use super::observations::{
 };
 use super::reporting::{
     self, EvidenceDetail, EvidenceQualitySummary, QuotaHistoryCursor, QuotaTimeline,
-    TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
+    TaskUsageQuery, TaskUsageReport, TokenHistoryPage, TokenHistoryQuery, TokenStatistics,
+    TokenStatisticsQuery,
 };
 use super::usage_evidence::{
     commit_usage_batch, has_other_rollout_generation, history_summary, load_source_boundary,
@@ -600,6 +601,10 @@ impl SqliteReadStore {
         query: &TokenStatisticsQuery,
     ) -> Result<TokenStatistics, StorageError> {
         reporting::token_statistics(&mut self.connection, query)
+    }
+
+    pub fn task_usage(&mut self, query: &TaskUsageQuery) -> Result<TaskUsageReport, StorageError> {
+        reporting::task_usage(&mut self.connection, query)
     }
 
     pub fn token_history(

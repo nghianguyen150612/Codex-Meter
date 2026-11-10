@@ -161,3 +161,16 @@ It never resets modes before a normal-exit assertion. A focused test verifies
 that reopening preserves an intentionally raw mode, rather than concealing it.
 Restoration assertions remain unchanged in strength. Native CI must verify this
 correction on both macOS architectures; the earlier failed run is not PASS evidence.
+
+### Darwin lifecycle follow-up
+
+Native ARM64 run 42752130976 at 4044275 passed 8/11 PTY tests; three crash
+restarts found a zero-sized terminal after session revocation. Crash reset now
+restores the harness window to 120x40 as well as termios. Normal-exit verification
+now uses a small /bin/sh supervisor as the session leader: the compiled TUI exits,
+the supervisor records its status and waits for the harness, and the harness
+asserts termios plus alternate-screen/cursor restoration **before** releasing the
+session leader. This prevents Darwin's terminal revocation/reset from concealing
+a mode-restoration failure. A bounded wait and group cleanup cover supervisor
+failure. Only crash reset is permitted to change modes; normal-exit checks never
+do so. Old failed runs remain failures, superseded queued runs are cancelled.

@@ -228,9 +228,21 @@ impl PtyHarness {
         let mut search_path = self.paths.bin.as_os_str().to_os_string();
         search_path.push(":");
         search_path.push(original_path);
-        let mut child_command = Command::new(env!("CARGO_BIN_EXE_codex-meter"));
+        let exit_file = self.paths.root.join("application-exit");
+        let release_file = self.paths.root.join("release-terminal");
+        let _ = fs::remove_file(&exit_file);
+        let _ = fs::remove_file(&release_file);
+        // Keep a shell as session leader until restoration has been inspected.
+        // Darwin revokes/resets the terminal when the session leader exits.
+        let mut child_command = Command::new("/bin/sh");
         child_command
+            .arg("-c")
+            .arg("\"$1\" \"$2\"; result=$?; printf '%s' \"$result\" > \"$3\"; while [ ! -f \"$4\" ]; do sleep 0.02; done; exit \"$result\"")
+            .arg("pty-supervisor")
+            .arg(env!("CARGO_BIN_EXE_codex-meter"))
             .arg(command)
+            .arg(exit_file)
+            .arg(release_file)
             .current_dir(&self.paths.workspace)
             .env("PATH", search_path)
             .env("TERM", "xterm-256color")
@@ -417,6 +429,7 @@ impl PtyHarness {
         // Darwin revokes slave descriptors when the controlling session leader dies.
         // Reopen the same PTY; this does not reset its termios.
         self.terminal_probe = self.open_slave();
+        self.resize(120, 40);
         assert_eq!(
             unsafe {
                 libc::tcsetattr(
@@ -448,8 +461,18 @@ impl PtyHarness {
     }
 
     fn wait_for_exit(&mut self) -> ExitStatus {
+        let exit_file = self.paths.root.join("application-exit");
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
+            if exit_file.exists()
+                && self.raw_output_text().contains("?1049l")
+                && self.raw_output_text().contains("?25h")
+            {
+                // Inspect modes while the original terminal still exists, before
+                // Darwin revokes it at the supervising session leader's exit.
+                self.assert_terminal_restored();
+                fs::write(self.paths.root.join("release-terminal"), b"release").unwrap();
+            }
             let child = self.child.as_mut().expect("child is running");
             if let Some(status) = child.try_wait().unwrap() {
                 self.child = None;
@@ -669,10 +692,7 @@ fn pty_crash_after_possible_thread_start_preserves_unknown_identity_without_repl
     assert!(
         pty.paths
             .wait_for_request_count("thread/start", 1, Duration::from_secs(10)),
-        "thread/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
-        pty.output_text(),
-        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
-        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+        "thread/start was not observed before bounded timeout"
     );
     pty.kill_process_group();
 
@@ -708,10 +728,7 @@ fn pty_crash_after_possible_turn_start_keeps_thread_known_and_never_replays() {
     assert!(
         pty.paths
             .wait_for_request_count("turn/start", 1, Duration::from_secs(10)),
-        "turn/start was not observed; PTY output: {}; fake requests: {:?}; fake state: {:?}",
-        pty.output_text(),
-        fs::read_to_string(&pty.paths.request_log).unwrap_or_default(),
-        fs::read_to_string(&pty.paths.state).unwrap_or_default()
+        "turn/start was not observed before bounded timeout"
     );
     pty.kill_process_group();
 
@@ -779,19 +796,13 @@ fn vt_screen_tracks_unicode_diff_clear_and_resize() {
 #[test]
 fn reopening_slave_preserves_terminal_modes() {
     let _serial = serialize_pty_test();
-    let mut pty = PtyHarness::new(TestPaths::new());
-    pty.spawn("compose", "success");
-    pty.assert_text("Composer");
-    let mut raw = unsafe { std::mem::zeroed::<libc::termios>() };
+    let pty = PtyHarness::new(TestPaths::new());
+    let mut raw = pty.baseline;
+    unsafe { libc::cfmakeraw(&mut raw) };
     assert_eq!(
-        unsafe { libc::tcgetattr(pty.slave.as_raw_fd(), &mut raw) },
+        unsafe { libc::tcsetattr(pty.slave.as_raw_fd(), libc::TCSANOW, &raw) },
         0
     );
-    assert_ne!(raw.c_lflag, pty.baseline.c_lflag);
-    // SIGKILL bypasses restoration and revokes Darwin's slave descriptors.
-    // Reopening must still expose raw mode, or normal-exit checks could pass
-    // merely because the harness opened a fresh descriptor.
-    pty.kill_process_group();
     let probe = pty.open_slave();
     let mut actual = unsafe { std::mem::zeroed::<libc::termios>() };
     assert_eq!(

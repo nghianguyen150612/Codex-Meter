@@ -180,3 +180,8 @@ again after releasing the supervisor. Verification/release is now performed once
 post-release polling only waits for exit. Destructor cleanup tolerates an already
 exited child so a failed assertion cannot cause a second panic/abort. Explicit
 crash-test termination continues to require successful group termination.
+
+Final harness checks also compare output/control flags and control characters,
+and assert the reconstructed terminal has left the alternate screen with a visible
+cursor. Existing raw lifecycle-sequence assertions are retained. Sanitized failures
+distinguish the supervisor's existence from the application's recorded exit code.

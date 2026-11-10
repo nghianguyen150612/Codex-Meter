@@ -315,15 +315,18 @@ impl PtyHarness {
             let output = self.output.lock().unwrap();
             let raw_contains = String::from_utf8_lossy(&output).contains(text);
             let screen = self.screen(&output);
+            let application_exit = fs::read_to_string(self.paths.root.join("application-exit"))
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok());
             let status = self.child.as_ref().map(|child| {
                 // kill(pid, 0) checks existence without changing the process.
                 unsafe { libc::kill(child.id() as i32, 0) == 0 }
             });
-            eprintln!("PTY_DIAG bytes={} raw_contains={raw_contains} running={} narrow_fallback={} approval={} tty_columns={} tty_rows={}",
+            eprintln!("PTY_DIAG bytes={} raw_contains={raw_contains} running={} narrow_fallback={} approval={} app_exited={} tty_columns={} tty_rows={}",
                 output.len(), screen.contains("Running"), screen.contains("Resize terminal"),
-                screen.contains("APPROVAL REQUIRED"), self.dimensions().0, self.dimensions().1);
+                screen.contains("APPROVAL REQUIRED"), application_exit.is_some(), self.dimensions().0, self.dimensions().1);
             panic!(
-                "PTY assertion failed: expected={text:?} bytes={} raw_contains={raw_contains} screen_contains=false tty_size={:?} child_exists={status:?} thread_starts={} turn_starts={}",
+                "PTY assertion failed: expected={text:?} bytes={} raw_contains={raw_contains} screen_contains=false tty_size={:?} supervisor_exists={status:?} application_exit={application_exit:?} thread_starts={} turn_starts={}",
                 output.len(), self.dimensions(), self.paths.request_count("thread/start"),
                 self.paths.request_count("turn/start")
             );
@@ -387,6 +390,10 @@ impl PtyHarness {
     }
 
     fn screen(&self, bytes: &[u8]) -> String {
+        self.parsed_screen(bytes).contents()
+    }
+
+    fn parsed_screen(&self, bytes: &[u8]) -> vt100::Screen {
         let mut parser = vt100::Parser::new(40, 120, 0);
         let mut offset = 0;
         for &(end, rows, columns) in self.resizes.lock().unwrap().iter() {
@@ -395,7 +402,7 @@ impl PtyHarness {
             offset = end;
         }
         parser.process(&bytes[offset..]);
-        parser.screen().contents()
+        parser.screen().clone()
     }
 
     fn resize(&self, columns: u16, rows: u16) {
@@ -493,6 +500,17 @@ impl PtyHarness {
         assert_eq!(unsafe { libc::tcgetattr(probe.as_raw_fd(), &mut after) }, 0);
         assert_eq!(after.c_lflag, self.baseline.c_lflag);
         assert_eq!(after.c_iflag, self.baseline.c_iflag);
+        assert_eq!(after.c_oflag, self.baseline.c_oflag);
+        assert_eq!(after.c_cflag, self.baseline.c_cflag);
+        assert_eq!(after.c_cc, self.baseline.c_cc);
+        let bytes = self.output.lock().unwrap();
+        let screen = self.parsed_screen(&bytes);
+        assert!(
+            !screen.alternate_screen(),
+            "alternate screen remains active"
+        );
+        assert!(!screen.hide_cursor(), "cursor remains hidden");
+        drop(bytes);
         let output = self.raw_output_text();
         assert!(
             output.contains("?1049h"),

@@ -462,9 +462,11 @@ impl PtyHarness {
 
     fn wait_for_exit(&mut self) -> ExitStatus {
         let exit_file = self.paths.root.join("application-exit");
+        let mut released = false;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if exit_file.exists()
+            if !released
+                && exit_file.exists()
                 && self.raw_output_text().contains("?1049l")
                 && self.raw_output_text().contains("?25h")
             {
@@ -472,6 +474,7 @@ impl PtyHarness {
                 // Darwin revokes it at the supervising session leader's exit.
                 self.assert_terminal_restored();
                 fs::write(self.paths.root.join("release-terminal"), b"release").unwrap();
+                released = true;
             }
             let child = self.child.as_mut().expect("child is running");
             if let Some(status) = child.try_wait().unwrap() {
@@ -510,7 +513,15 @@ impl PtyHarness {
 
 impl Drop for PtyHarness {
     fn drop(&mut self) {
-        self.kill_process_group();
+        // Cleanup must not panic if the failed assertion raced with child exit.
+        // Explicit crash tests still require kill_process_group to succeed.
+        if let Some(child) = self.child.as_mut() {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            let _ = child.wait();
+        }
+        self.child = None;
         self.reader_stop.store(true, Ordering::Release);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();

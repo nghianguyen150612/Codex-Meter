@@ -174,3 +174,9 @@ session leader. This prevents Darwin's terminal revocation/reset from concealing
 a mode-restoration failure. A bounded wait and group cleanup cover supervisor
 failure. Only crash reset is permitted to change modes; normal-exit checks never
 do so. Old failed runs remain failures, superseded queued runs are cancelled.
+
+Native Intel CI at b4dde418 additionally exposed a race when mode inspection ran
+again after releasing the supervisor. Verification/release is now performed once;
+post-release polling only waits for exit. Destructor cleanup tolerates an already
+exited child so a failed assertion cannot cause a second panic/abort. Explicit
+crash-test termination continues to require successful group termination.

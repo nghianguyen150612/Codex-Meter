@@ -779,13 +779,16 @@ fn vt_screen_tracks_unicode_diff_clear_and_resize() {
 #[test]
 fn reopening_slave_preserves_terminal_modes() {
     let _serial = serialize_pty_test();
-    let pty = PtyHarness::new(TestPaths::new());
-    let mut raw = pty.baseline;
-    unsafe { libc::cfmakeraw(&mut raw) };
-    assert_eq!(
-        unsafe { libc::tcsetattr(pty.slave.as_raw_fd(), libc::TCSANOW, &raw) },
-        0
-    );
+    let mut pty = PtyHarness::new(TestPaths::new());
+    pty.spawn("compose", "success");
+    pty.assert_text("Composer");
+    let mut raw = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(unsafe { libc::tcgetattr(pty.slave.as_raw_fd(), &mut raw) }, 0);
+    assert_ne!(raw.c_lflag, pty.baseline.c_lflag);
+    // SIGKILL bypasses restoration and revokes Darwin's slave descriptors.
+    // Reopening must still expose raw mode, or normal-exit checks could pass
+    // merely because the harness opened a fresh descriptor.
+    pty.kill_process_group();
     let probe = pty.open_slave();
     let mut actual = unsafe { std::mem::zeroed::<libc::termios>() };
     assert_eq!(

@@ -783,7 +783,10 @@ fn reopening_slave_preserves_terminal_modes() {
     pty.spawn("compose", "success");
     pty.assert_text("Composer");
     let mut raw = unsafe { std::mem::zeroed::<libc::termios>() };
-    assert_eq!(unsafe { libc::tcgetattr(pty.slave.as_raw_fd(), &mut raw) }, 0);
+    assert_eq!(
+        unsafe { libc::tcgetattr(pty.slave.as_raw_fd(), &mut raw) },
+        0
+    );
     assert_ne!(raw.c_lflag, pty.baseline.c_lflag);
     // SIGKILL bypasses restoration and revokes Darwin's slave descriptors.
     // Reopening must still expose raw mode, or normal-exit checks could pass

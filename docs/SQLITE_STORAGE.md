@@ -127,6 +127,11 @@ enables `query_only`, validates the recorded migration checksums and required
 tables without running migrations, and verifies checksums on evidence rows it
 returns or aggregates. It can read a supported P031 version 5 database without
 upgrading it; the default `sync` writer applies version 6 when it next runs.
+P039 task summaries are computed from this same ledger with bounded result
+materialization and streaming checksum validation; no task table, projection,
+or migration is added. Task identity is `(source_id, session_id, task_id)`.
+Responses with either task or session missing are retained in the unattributed
+aggregate. Snapshot records are excluded from consumption totals.
 
 Migration 0001 creates:
 

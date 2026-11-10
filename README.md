@@ -2,7 +2,7 @@
 
 Codex Meter is an independent, unofficial, local-first project for measuring Codex usage. The
 native Rust `codex-meter sync` command discovers supported local Codex rollout files and saves
-privacy-filtered token and quota evidence in a per-user SQLite database. The `tokens`, `history`,
+privacy-filtered token and quota evidence in a per-user SQLite database. The `tokens`, `tasks`, `history`,
 `inspect`, and `quota` commands report that evidence through read-only native Rust queries. The
 existing `codex-meter estimate` command continues to read a supplied Codex Meter SQLite dataset
 and report empirical current-capacity estimates through the Python analytics pipeline.
@@ -29,6 +29,7 @@ After syncing, inspect local usage without providing a database path or request 
 
 ```console
 cargo run --manifest-path rust/Cargo.toml -- tokens
+cargo run --manifest-path rust/Cargo.toml -- tasks --all --limit 20
 cargo run --manifest-path rust/Cargo.toml -- history --limit 20
 cargo run --manifest-path rust/Cargo.toml -- quota
 ```

@@ -16,6 +16,7 @@ pub use observations::{
 pub use reporting::{
     ConfigurationBreakdown, DiagnosticCount, EvidenceDetail, EvidenceQualitySummary,
     MetricCoverage, MetricTotal, QuotaHistoryCursor, QuotaHistoryPage, QuotaTimeline,
+    TaskModelConfiguration, TaskTokenTotals, TaskUsageQuery, TaskUsageReport, TaskUsageSummary,
     TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
     ValueCount,
 };

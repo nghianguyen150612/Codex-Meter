@@ -9,6 +9,8 @@ collect currently supported local rollout evidence.
 
 ```text
 codex-meter tokens [--today | --week | --all] [--model MODEL] [--json]
+codex-meter tasks [--today | --week | --all] [--model MODEL]
+    [--session SESSION_ID] [--limit N] [--json]
 codex-meter history [--today | --week] [--since UTC] [--until UTC]
     [--limit N] [--model MODEL] [--session SESSION_ID] [--after EVENT_ID] [--json]
 codex-meter inspect EVENT_ID [--json]
@@ -38,6 +40,27 @@ pass to `--after`; versioned JSON returns both `has_more` and `next_cursor`.
 Limits are 1 through 1,000. Model and session filters match exact persisted
 values. Terminal history shortens opaque session IDs; JSON and `inspect` retain
 the exact IDs.
+
+`tasks` uses the same UTC period defaults as `tokens`, accepts exact model and
+opaque session filters, and returns the highest known directly observed raw
+totals first. The result is bounded to 1–1,000 tasks (`--limit`, default 20);
+JSON reports `has_more` when additional lower-ranked tasks exist. A task key is
+the tuple `(source_id, session_id, task_id)`. The source ID prevents collisions
+between rollout sources, and the session ID prevents collisions between
+sessions. Only persisted task and session identities are accepted. Missing task
+or session identity is summarized as unattributed and never attached to a
+nearby task. The command does not join P033 App Server thread/turn identifiers
+to P031 rollout IDs; no validated mapping currently exists.
+
+Task summaries show response count, first/last observation times, direct source
+`total_tokens`, each directly observed component counter, and distinct model,
+reasoning, service-tier, and Codex-version configurations. A configuration
+tuple that differs in any field remains a separate observation, including
+explicitly missing fields. At most 64 configurations are included per task;
+`configurations_truncated` marks larger sets. Raw totals rank tasks; missing
+raw totals remain unavailable and are not reconstructed from components.
+`has_more` is a bounded top-task result indicator rather than a cursor, so
+raise `--limit` to inspect more (up to 1,000).
 
 ## Token accounting
 
@@ -80,6 +103,8 @@ supported local rollout evidence.
 
 `quota --history` lists persisted samples in reverse chronological order and
 supports the same bounded keyset continuation using `--after SAMPLE_ID`.
+Task totals do not use quota meter snapshots and cannot establish task-level
+account quota consumption.
 
 ## Fixture-only display examples
 

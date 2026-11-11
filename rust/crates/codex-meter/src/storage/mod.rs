@@ -26,3 +26,9 @@ pub use usage_evidence::{
     SourceBoundaryFingerprint, StoredQuotaSnapshot, TokenRecordSemantic, TokenUsageEvidence,
     UsageEvidenceBatch, UsageHistorySummary,
 };
+
+#[cfg(test)]
+pub(crate) use reporting::tests::{
+    insert_diagnostic as insert_test_diagnostic, insert_token as insert_test_token,
+    token as test_token,
+};

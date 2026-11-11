@@ -10,3 +10,6 @@ mod state;
 mod theme;
 
 pub use app::{run, run_composer};
+
+#[cfg(test)]
+mod test_support;

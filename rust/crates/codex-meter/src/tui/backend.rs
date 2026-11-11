@@ -16,12 +16,12 @@ use crate::codex_app_server::{
 };
 use crate::storage::{
     EvidenceDetail, EvidenceQualitySummary, QuotaHistoryCursor, QuotaHistoryPage, QuotaTimeline,
-    SqliteReadStore, StorageError, TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery,
-    TokenStatistics, TokenStatisticsQuery,
+    SqliteReadStore, StorageError, TaskUsageQuery, TaskUsageReport, TokenHistoryCursor,
+    TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
 };
 use crate::tui::composer::PreparedTask;
 
-use super::state::HistoryScope;
+use super::state::{HistoryScope, TASK_RESULT_LIMIT};
 
 const WORKER_QUEUE_CAPACITY: usize = 8;
 const RESULT_QUEUE_CAPACITY: usize = 32;
@@ -75,6 +75,10 @@ pub enum BackendEvent {
         id: u64,
         result: Result<TokenHistoryPage, String>,
     },
+    Tasks {
+        id: u64,
+        result: Result<Box<TaskUsageReport>, String>,
+    },
     QuotaHistory {
         id: u64,
         result: Result<QuotaHistoryPage, String>,
@@ -122,6 +126,11 @@ enum DatabaseCommand {
         scope: HistoryScope,
         model: Option<String>,
         cursor: Option<TokenHistoryCursor>,
+    },
+    Tasks {
+        id: u64,
+        scope: HistoryScope,
+        model: Option<String>,
     },
     QuotaHistory {
         id: u64,
@@ -322,6 +331,15 @@ impl Backend {
         })
     }
 
+    pub fn request_tasks(
+        &self,
+        id: u64,
+        scope: HistoryScope,
+        model: Option<String>,
+    ) -> Result<(), String> {
+        self.send_database(DatabaseCommand::Tasks { id, scope, model })
+    }
+
     pub fn request_quota_history(
         &self,
         id: u64,
@@ -463,6 +481,16 @@ fn database_worker(
                 id,
                 result: load_history(&database_path, scope, model.as_deref(), cursor.as_ref()),
             },
+            DatabaseCommand::Tasks { id, scope, model } => BackendEvent::Tasks {
+                id,
+                result: load_tasks(
+                    &database_path,
+                    scope,
+                    model.as_deref(),
+                    Arc::clone(&shutdown),
+                )
+                .map(Box::new),
+            },
             DatabaseCommand::QuotaHistory { id, cursor } => BackendEvent::QuotaHistory {
                 id,
                 result: load_quota_history(&database_path, cursor.as_ref()),
@@ -480,7 +508,7 @@ fn database_worker(
         if shutdown.load(Ordering::Acquire) {
             return;
         }
-        if sender.send(event).is_err() {
+        if !send_worker_event(&sender, event, &shutdown) {
             return;
         }
     }
@@ -564,6 +592,49 @@ fn load_history(
             session_id: None,
             limit: PAGE_SIZE,
             cursor: cursor.cloned(),
+        })
+        .map_err(database_error)
+}
+
+// A full result queue must not prevent database-worker shutdown.
+fn send_worker_event(
+    sender: &SyncSender<BackendEvent>,
+    mut event: BackendEvent,
+    shutdown: &AtomicBool,
+) -> bool {
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            return false;
+        }
+        match sender.try_send(event) {
+            Ok(()) => return true,
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(value)) => {
+                event = value;
+                thread::park_timeout(StdDuration::from_millis(10));
+            }
+        }
+    }
+}
+
+fn load_tasks(
+    path: &PathBuf,
+    scope: HistoryScope,
+    model: Option<&str>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<TaskUsageReport, String> {
+    let mut store = open_read_store(path)?;
+    store
+        .cancel_reporting_when(move || shutdown.load(Ordering::Acquire))
+        .map_err(database_error)?;
+    let (since, until) = history_bounds(scope);
+    store
+        .task_usage(&TaskUsageQuery {
+            since,
+            until,
+            model: model.map(str::to_owned),
+            session_id: None,
+            limit: TASK_RESULT_LIMIT,
         })
         .map_err(database_error)
 }
@@ -1087,7 +1158,7 @@ fn app_server_worker(
                 if shutdown.load(Ordering::Acquire) {
                     return;
                 }
-                if sender.send(event).is_err() {
+                if !send_worker_event(&sender, event, &shutdown) {
                     return;
                 }
             }
@@ -1157,6 +1228,218 @@ fn app_server_error(error: CodexAppError) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn task_loader_reuses_reporting_filters_counts_and_readonly_evidence() {
+        use super::super::test_support::{event, Fixture};
+        let mut events = vec![event(0), event(1), event(2), event(3), event(4)];
+        events[1].task_id = events[0].task_id.clone();
+        events[1].model = Some("second-model".into());
+        events[1].raw_total = None;
+        events[1].input_tokens = None;
+        events[2].task_id = events[0].task_id.clone();
+        events[2].source_id = "src:other".into();
+        events[3].task_id = None;
+        events[4].record_semantic = crate::storage::TokenRecordSemantic::ThreadCumulativeSnapshot;
+        let fixture = Fixture::new(&events);
+        let before = std::fs::read(&fixture.0).unwrap();
+        let report = load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(report.task_count, 2);
+        assert_eq!(report.canonical_response_count, 4);
+        assert_eq!(report.unattributed.canonical_response_count, 1);
+        let task = report
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "src:opaque")
+            .unwrap();
+        assert_eq!(task.raw_total.known_sum, Some(0));
+        assert_eq!(
+            task.raw_total.coverage,
+            crate::storage::MetricCoverage::Partial
+        );
+        assert_eq!(task.input_tokens.missing_event_count, 1);
+        assert_eq!(task.configurations.len(), 2);
+        assert!(report.evidence_quality.unsupported_source_versions > 0);
+        assert!(report.evidence_quality.known_partial_collection > 0);
+        let filtered = load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            Some("second-model"),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(filtered.canonical_response_count, 1);
+        assert_eq!(filtered.tasks[0].raw_total.known_sum, None);
+        assert_eq!(
+            filtered.tasks[0].raw_total.coverage,
+            crate::storage::MetricCoverage::Unavailable
+        );
+        assert_eq!(std::fs::read(&fixture.0).unwrap(), before);
+        assert!(load_tasks(
+            &fixture.0,
+            HistoryScope::Today,
+            None,
+            Arc::new(AtomicBool::new(false))
+        )
+        .unwrap()
+        .tasks
+        .is_empty());
+    }
+
+    #[test]
+    fn task_loader_has_explicit_empty_unattributed_and_top_limit_results() {
+        use super::super::test_support::{event, Fixture};
+        let empty = Fixture::new(&[]);
+        assert_eq!(
+            load_tasks(
+                &empty.0,
+                HistoryScope::All,
+                None,
+                Arc::new(AtomicBool::new(false))
+            )
+            .unwrap()
+            .canonical_response_count,
+            0
+        );
+        let mut orphan = event(1);
+        orphan.session_id = None;
+        let fixture = Fixture::new(&[orphan]);
+        let report = load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(report.tasks.is_empty());
+        assert_eq!(report.unattributed.canonical_response_count, 1);
+        let fixture = Fixture::new(&(0..201).map(event).collect::<Vec<_>>());
+        let report = load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(report.tasks.len(), TASK_RESULT_LIMIT as usize);
+        assert!(report.has_more);
+        assert_eq!(report.task_count, 201);
+    }
+
+    #[test]
+    fn task_database_errors_are_sanitized_and_do_not_create_missing_files() {
+        use super::super::test_support::{event, Fixture};
+        let fixture = Fixture::new(&[event(1)]);
+        let connection = rusqlite::Connection::open(&fixture.0).unwrap();
+        connection
+            .execute(
+                "UPDATE token_usage_evidence SET raw_total = raw_total + 1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let error = load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert!(error.contains("database_corrupt"));
+        assert!(!error.contains(fixture.0.to_str().unwrap()));
+        let missing = fixture.0.with_extension("missing");
+        assert!(load_tasks(
+            &missing,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false))
+        )
+        .unwrap_err()
+        .contains("codex-meter sync"));
+        assert!(!missing.exists());
+        assert!(load_tasks(
+            &fixture.0.parent().unwrap().to_path_buf(),
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(false))
+        )
+        .unwrap_err()
+        .contains("unavailable"));
+    }
+
+    fn no_app_server() -> Result<CodexAppServer, CodexAppError> {
+        panic!("task usage must not connect to App Server")
+    }
+
+    #[test]
+    fn task_worker_is_independent_of_app_server_and_preserves_request_ids() {
+        use super::super::test_support::{event, Fixture};
+        let fixture = Fixture::new(&[event(0)]);
+        let args = TuiArguments {
+            database: Some(fixture.0.clone()),
+        };
+        let backend = Backend::new_with_connector(&args, fixture.0.clone(), no_app_server).unwrap();
+        for id in 1..=6 {
+            backend.request_tasks(id, HistoryScope::All, None).unwrap();
+        }
+        for expected in 1..=6 {
+            let BackendEvent::Tasks { id, result } = backend
+                .result_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+            else {
+                panic!("task result required")
+            };
+            assert_eq!(id, expected);
+            assert_eq!(result.unwrap().tasks.len(), 1);
+        }
+    }
+
+    #[test]
+    fn shutdown_cancels_task_scan_and_full_result_queue_without_deadlock() {
+        use super::super::test_support::{event, Fixture};
+        let fixture = Fixture::new(&(0..500).map(event).collect::<Vec<_>>());
+        let started = std::time::Instant::now();
+        assert!(load_tasks(
+            &fixture.0,
+            HistoryScope::All,
+            None,
+            Arc::new(AtomicBool::new(true))
+        )
+        .is_err());
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        sender
+            .send(BackendEvent::Tasks {
+                id: 1,
+                result: Ok(Box::new(fixture.report())),
+            })
+            .unwrap();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
+        let handle = std::thread::spawn(move || {
+            send_worker_event(
+                &sender,
+                BackendEvent::Tasks {
+                    id: 2,
+                    result: Err("worker unavailable".into()),
+                },
+                &worker_shutdown,
+            )
+        });
+        shutdown.store(true, Ordering::Release);
+        assert!(!handle.join().unwrap());
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        assert!(send_bounded(&sender, 1).is_ok());
+        assert!(send_bounded(&sender, 2).unwrap_err().contains("queued"));
+    }
 
     #[test]
     fn history_ranges_have_exclusive_upper_bound_and_expected_scope() {

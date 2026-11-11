@@ -1,4 +1,4 @@
-# Codex Meter TUI dashboard, Composer, task execution, and recovery (P034–P037)
+# Codex Meter TUI dashboard, Composer, task execution, and recovery (P034–P040)
 
 P034 adds an interactive Rust terminal dashboard over the existing P031 telemetry ledger, P032
 reporting queries, and P033 Codex App Server services. P035 adds task preparation through the
@@ -35,7 +35,7 @@ periodic refresh.
 The six screens are Overview, Sessions, Projects, Models, History, and Composer. Wide terminals use a
 sidebar. Medium terminals use a tab strip, and narrow or short terminals use a compact active-view
 label and shorter help line. Lists render at most 50 rows per screen page. The history query itself
-uses the existing deterministic SQLite keyset cursor and reads only 50 records at a time.
+uses the existing deterministic SQLite keyset cursor and reads only 50 records at a time for token events and quota observations. Task usage loads a bounded top 200 tasks and pages those rows locally.
 
 | Key | Action |
 | --- | --- |
@@ -46,9 +46,9 @@ uses the existing deterministic SQLite keyset cursor and reads only 50 records a
 | `Enter` | Open safe metadata or inspect selected evidence |
 | `Esc` | Close a detail or confirmation dialog |
 | `/` | Search the current screen's displayed metadata |
-| `m` (History) | Set an exact model filter for token history |
+| `m` (History) | Set an exact model filter for token events and task usage |
 | `w` (History) | Cycle Today, Week, and All history |
-| `t` (History) | Switch between token and quota history |
+| `t` (History) | Cycle Token events → Task usage → Quota observations |
 | `f` (Sessions) | Cycle non-archived, archived, and all sessions |
 | `a` (Sessions) | Toggle the active runtime-state filter |
 | `L` (Sessions) | Explicitly load the selected thread |
@@ -119,10 +119,55 @@ entitlement or execution access. The TUI does not switch models or send model re
 
 ### History
 
-History defaults to All history, ordered newest first. The token view uses P032's canonical
+History defaults to Token events and All history; token and quota events are ordered newest first. The token view uses P032's canonical
 per-response records only. Incomplete rows remain visibly incomplete; snapshots are not added to
 consumption totals. `Enter` performs a read-only evidence inspection. The quota subview displays
 observed account-meter snapshots separately and never sums them as task usage.
+
+### Task usage (P040)
+
+Press `5`, then `t` to open Task usage. The six existing screens and Composer controls remain
+unchanged. Task rows show an opaque compact identity, last UTC observation, canonical response
+count, directly observed raw tokens, model summary, and metric coverage. Wide layouts use six
+columns; narrower layouts use four- or six-line rows. Small terminals show a resize instruction.
+
+`Up`/`Down` or `j`/`k` select a row. `n`/`p`, PageDown/PageUp, and `]`/`[` navigate
+50-row pages of the **loaded top 200 tasks**. They never fetch unseen rows. `TRUNCATED` means
+P039 reported `has_more`; use `codex-meter tasks --all --limit 1000` for a larger bounded CLI
+report. `/` searches loaded safe identifiers/models; `m` sets an exact persisted model filter,
+and an empty model filter removes it. `w` cycles All → Today → Week → All using the existing
+UTC inclusive lower/exclusive upper bounds. Model/time filters apply to token and task views;
+quota observations retain their existing independent snapshot semantics. `r` explicitly reloads;
+there is no automatic refresh or network request on the task path.
+
+Selection compares the complete validated `(source_id, session_id, task_id)` tuple after refresh.
+The compact `task:` label hashes the length-prefixed full tuple for display only; it is never used
+for lookup. Reordered results preserve the exact task; a missing identity selects the first loaded
+matching row. Filter changes invalidate older requests and cached task reports. Separate task
+selection prevents a late response from moving the token/quota selection.
+
+`Enter` opens a read-only snapshot of the selected typed P039 summary. It includes the complete
+opaque source/session/task identity, first/last timestamps, response count, all six token metrics,
+known/missing coverage, configuration tuples (model, reasoning, tier, Codex version), global source
+warnings, and truncation notices. `j`/`k` or arrows scroll; `n`/`p` and PageDown/PageUp move ten
+lines; Home/End go to the bounds; Esc or Enter closes. The footer always starts with `Esc close`,
+including the tiny-terminal fallback. Resize recalculates wrapping and clamps scroll bounds.
+An in-flight refresh cannot change an already open detail snapshot.
+
+Only checksummed `per_response` records contribute. Raw totals are never reconstructed from
+components; cached input is not subtracted and reasoning is not added to output. Missing is
+`Unavailable`, incomplete counters say `partial`, and observed zero remains zero. The summary
+always identifies unattributed responses/raw totals separately. Missing task/session identities
+are never inferred from App Server threads, conversation text, timestamps, or nearby rows.
+Source diagnostics remain global ingestion coverage, rather than evidence of a particular task's
+quality. Task raw totals cannot establish a task-specific quota percentage or official capacity.
+
+Loading and sanitized database/worker errors replace the table, including during refresh. A
+missing database points to `codex-meter sync`; corrupt or unverifiable evidence fails closed with
+`database_corrupt`, without displaying cached totals. Empty scope, only-unattributed observations,
+unsupported versions, partial collection, malformed evidence, continuity warnings, compressed
+sources, and truncated results have explicit labels. Task viewing never creates/migrates a ledger,
+changes source evidence, launches/resumes a task, reads a transcript, or calls App Server.
 
 ### Composer
 
@@ -195,7 +240,7 @@ App Server model catalog != guaranteed model entitlement
 Displayed telemetry comes from the Rust-owned privacy-filtered P031/P032 SQLite store. Session,
 project, and model metadata comes from P033's local Codex App Server interface. Read-only database
 workers use `SqliteReadStore`, which opens the file read-only and enables SQLite query-only mode.
-History pagination uses deterministic keyset cursors; snapshots are inspected independently from
+Token and quota history pagination uses deterministic keyset cursors; snapshots are inspected independently from
 canonical consumption events.
 
 Quota freshness and source-version labels describe the observed local sample. No sample is not zero
@@ -247,8 +292,8 @@ crashing. App Server requests and interactive events are bounded; the TUI pages 
 50 rows.
 
 No dedicated large-ledger or live rendering benchmark was run. Unit rendering tests cover wide,
-medium, narrow, short, and low-height test backends; the history request remains bounded to 50
-records. This is measured test coverage, not a claim about performance on every terminal or ledger.
+medium, narrow, short, and low-height test backends; token/quota history requests remain bounded to 50
+records and task reports to 200 tasks. This is measured test coverage, not a claim about performance on every terminal or ledger.
 
 The reference Arch Linux desktop was not attached to this implementation environment. Live startup,
 real quota observations, model catalog, sandbox configuration, task confirmation, approval view,

@@ -47,3 +47,12 @@ remain the source for synthetic task execution, approval, interruption, crash, a
 
 See [PROMPT037_MANIFEST.md](PROMPT037_MANIFEST.md) for the consolidated device and platform gates,
 and [V02_EXECUTION_RECOVERY.md](V02_EXECUTION_RECOVERY.md) for recovery guarantees.
+
+## P040 task usage compatibility
+
+Task usage is a local read-only P039 reporting adapter and works independently of an installed
+App Server. It retains the audited 0.157.1 telemetry format boundary. Neither P040 nor its
+synthetic tests broaden the execution runtime allowlist to 0.164.0. Native Linux, Windows,
+macOS Intel, and macOS ARM64 CI/release evidence is recorded in
+[P040 manifest](PROMPT040_MANIFEST.md). Physical Windows G4 and Arch G5 remain UNVERIFIED;
+cloud engineering evidence does not qualify those devices or unblock the stacked merges.

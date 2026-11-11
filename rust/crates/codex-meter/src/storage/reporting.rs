@@ -1304,7 +1304,7 @@ fn matches_history_filters(event: &TokenUsageEvidence, query: &TokenHistoryQuery
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)] // Fixture fields mirror the typed evidence row.
-    fn token(
+    pub(crate) fn token(
         id: &str,
         timestamp: &str,
         model: Option<&str>,
@@ -1359,7 +1359,7 @@ mod tests {
         }
     }
 
-    fn insert_token(store: &SqliteStore, evidence: &TokenUsageEvidence) {
+    pub(crate) fn insert_token(store: &SqliteStore, evidence: &TokenUsageEvidence) {
         let status = if evidence.record_semantic == TokenRecordSemantic::PerResponse {
             "observed"
         } else {
@@ -1446,7 +1446,7 @@ mod tests {
         }
     }
 
-    fn insert_diagnostic(store: &SqliteStore, value: &IngestionDiagnostic) {
+    pub(crate) fn insert_diagnostic(store: &SqliteStore, value: &IngestionDiagnostic) {
         let checksum = canonical_hash(value).unwrap();
         store
             .connection()

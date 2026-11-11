@@ -2872,8 +2872,11 @@ mod tests {
             state.selected_task_summary().unwrap().session_id,
             "session:second"
         );
+        // Remove the selected task from a nonzero position. Keeping its old row
+        // index would select an unrelated identity instead of the safe first row.
+        state.selected_task = 2;
         state.tasks.begin(11);
-        report.tasks.remove(0);
+        report.tasks.remove(2);
         assert!(apply_backend_event(
             &mut state,
             &backend,

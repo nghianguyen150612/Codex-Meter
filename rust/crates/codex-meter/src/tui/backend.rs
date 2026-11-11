@@ -672,7 +672,10 @@ fn open_read_store(path: &PathBuf) -> Result<SqliteReadStore, String> {
 }
 
 fn history_bounds(scope: HistoryScope) -> (Option<String>, Option<String>) {
-    let now = OffsetDateTime::now_utc();
+    history_bounds_at(scope, OffsetDateTime::now_utc())
+}
+
+fn history_bounds_at(scope: HistoryScope, now: OffsetDateTime) -> (Option<String>, Option<String>) {
     let until = now.format(&Rfc3339).ok();
     let since_time = match scope {
         HistoryScope::Today => Some(now.date().with_time(Time::MIDNIGHT).assume_utc()),
@@ -1281,15 +1284,27 @@ mod tests {
             crate::storage::MetricCoverage::Unavailable
         );
         assert_eq!(std::fs::read(&fixture.0).unwrap(), before);
-        assert!(load_tasks(
-            &fixture.0,
-            HistoryScope::Today,
-            None,
-            Arc::new(AtomicBool::new(false))
-        )
-        .unwrap()
-        .tasks
-        .is_empty());
+        // Pin UTC boundaries instead of making this fixture depend on the date of the run.
+        let now = OffsetDateTime::parse("2026-10-21T12:34:56Z", &Rfc3339).unwrap();
+        let (since, until) = history_bounds_at(HistoryScope::Today, now);
+        assert_eq!(since.as_deref(), Some("2026-10-21T00:00:00Z"));
+        assert_eq!(until.as_deref(), Some("2026-10-21T12:34:56Z"));
+        assert_eq!(
+            history_bounds_at(HistoryScope::Week, now).0.as_deref(),
+            Some("2026-10-14T12:34:56Z")
+        );
+        let filtered = SqliteReadStore::open(&fixture.0)
+            .unwrap()
+            .task_usage(&TaskUsageQuery {
+                since,
+                until,
+                model: None,
+                session_id: None,
+                limit: TASK_RESULT_LIMIT,
+            })
+            .unwrap();
+        assert!(filtered.tasks.is_empty());
+        assert_eq!(filtered.canonical_response_count, 0);
     }
 
     #[test]

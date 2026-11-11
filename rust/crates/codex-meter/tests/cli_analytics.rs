@@ -450,3 +450,110 @@ fn native_help_version_and_missing_database_behave_explicitly() {
     assert!(!database.exists());
     let _ = fs::remove_file(request);
 }
+
+#[test]
+#[cfg(not(feature = "release-artifact"))]
+fn readiness_scoped_agrees_with_validated_workload_for_exact_and_missing_cohorts() {
+    for (samples, model) in [(2, "gpt-5.6-sol"), (3, "gpt-5.6-sol"), (3, "unknown-model")] {
+        let database = temporary_path("readiness.sqlite");
+        let request = temporary_path("readiness.json");
+        if samples == 2 {
+            synthetic_database(&database);
+        } else {
+            synthetic_database_with_three_tasks(&database);
+        }
+        fs::write(&request, request_json(None, model)).unwrap();
+        let before = fs::read(&database).unwrap();
+        let workload = invoke_workload(
+            &database,
+            &request,
+            &["--json", "--five-hour-used-percent", "24"],
+        );
+        assert!(workload.status.success());
+        let expected: Value = serde_json::from_slice(&workload.stdout).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+            .args(["readiness", "--database"])
+            .arg(&database)
+            .arg("--request")
+            .arg(&request)
+            .args([
+                "--generated-at",
+                GENERATED_AT,
+                "--json",
+                "--five-hour-used-percent",
+                "24",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["request_id"], expected["request_id"]);
+        assert_eq!(
+            result["scoped_coverage"]["accounting"],
+            expected["task_size_distribution"]["accounting"]
+        );
+        let status = &expected["meter_predictions"][0]["status"];
+        assert_eq!(
+            result["per_meter_readiness"][0]["status"],
+            if status == "available" {
+                json!("ready")
+            } else {
+                status.clone()
+            }
+        );
+        assert_eq!(before, fs::read(&database).unwrap());
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert!(!report.contains("observation_id"));
+        fs::remove_file(database).unwrap();
+        fs::remove_file(request).unwrap();
+    }
+}
+
+#[test]
+#[cfg(not(feature = "release-artifact"))]
+fn readiness_missing_position_does_not_hide_the_other_meter() {
+    let database = temporary_path("readiness-independent.sqlite");
+    let request = temporary_path("readiness-independent.json");
+    synthetic_database_with_three_tasks(&database);
+    let mut document: Value = serde_json::from_str(&request_json(None, "gpt-5.6-sol")).unwrap();
+    document["target_quota_windows"] = json!(["five_hour", "weekly"]);
+    fs::write(&request, document.to_string()).unwrap();
+    for (flag, ready_index, missing_index) in [
+        ("--five-hour-used-percent", 0, 1),
+        ("--weekly-used-percent", 1, 0),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+            .args(["readiness", "--database"])
+            .arg(&database)
+            .arg("--request")
+            .arg(&request)
+            .args(["--generated-at", GENERATED_AT, "--json", flag, "0"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            result["per_meter_readiness"][ready_index]["status"],
+            "ready"
+        );
+        assert_eq!(
+            result["per_meter_readiness"][missing_index]["status"],
+            "unavailable"
+        );
+        assert_eq!(
+            result["per_meter_readiness"][missing_index]["insufficiency_reasons"],
+            json!(["current_quota_position_required"])
+        );
+        assert!(result["per_meter_readiness"][missing_index]["capacity_confidence"].is_null());
+    }
+    fs::remove_file(database).unwrap();
+    fs::remove_file(request).unwrap();
+}

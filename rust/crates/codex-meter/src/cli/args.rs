@@ -21,6 +21,12 @@ pub struct EstimateArguments {
 pub type WorkloadArguments = EstimateArguments;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ReadinessArguments {
+    pub analytics: EstimateArguments,
+    pub scoped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SyncArguments {
     pub codex_home: Option<PathBuf>,
     pub database: Option<PathBuf>,
@@ -130,6 +136,7 @@ pub enum CliAction {
     SyncHelp,
     EstimateHelp,
     WorkloadHelp,
+    ReadinessHelp,
     TokensHelp,
     TasksHelp,
     HistoryHelp,
@@ -141,6 +148,7 @@ pub enum CliAction {
     Sync(SyncArguments),
     Estimate(EstimateArguments),
     Workload(WorkloadArguments),
+    Readiness(ReadinessArguments),
     Tokens(TokensArguments),
     Tasks(TasksArguments),
     History(HistoryArguments),
@@ -185,6 +193,9 @@ where
     if arguments[0] == OsStr::new("sync") {
         return parse_sync_args(&arguments[1..]);
     }
+    if arguments[0] == OsStr::new("readiness") {
+        return parse_readiness_args(&arguments[1..]);
+    }
     if arguments[0] == OsStr::new("workload") {
         return parse_estimate_args(&arguments[1..], true);
     }
@@ -228,6 +239,56 @@ where
         ));
     }
     parse_estimate_args(&arguments[1..], false)
+}
+
+fn parse_readiness_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments.iter().any(|value| value == "--help") {
+        return Ok(CliAction::ReadinessHelp);
+    }
+    let scoped = arguments.iter().any(|value| value == "--request");
+    let mut normalized = arguments.to_vec();
+    if !arguments.iter().any(|value| value == "--database") {
+        normalized.push("--database".into());
+        normalized.push(
+            super::default_database_path()
+                .map_err(|_| {
+                    error(
+                        "database_path_unavailable",
+                        "default database path unavailable",
+                    )
+                })?
+                .into_os_string(),
+        );
+    }
+    if !scoped {
+        normalized.extend([OsString::from("--request"), OsString::from("inventory")]);
+        if arguments
+            .iter()
+            .any(|value| value == "--five-hour-used-percent" || value == "--weekly-used-percent")
+        {
+            return Err(error(
+                "invalid_argument",
+                "manual meter positions require a request",
+            ));
+        }
+    }
+    if !arguments.iter().any(|value| value == "--generated-at") {
+        normalized.extend([
+            OsString::from("--generated-at"),
+            OsString::from(
+                time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|_| error("invalid_generated_at", "current UTC time unavailable"))?,
+            ),
+        ]);
+    }
+    match parse_estimate_args(&normalized, true)? {
+        CliAction::Workload(analytics) => Ok(CliAction::Readiness(ReadinessArguments {
+            analytics,
+            scoped,
+        })),
+        _ => unreachable!(),
+    }
 }
 
 fn parse_estimate_args(arguments: &[OsString], workload: bool) -> Result<CliAction, CliError> {
@@ -1046,7 +1107,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter readiness [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {

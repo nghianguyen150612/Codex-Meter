@@ -16,9 +16,9 @@ pub use observations::{
 pub use reporting::{
     ConfigurationBreakdown, DiagnosticCount, EvidenceDetail, EvidenceQualitySummary,
     MetricCoverage, MetricTotal, QuotaHistoryCursor, QuotaHistoryPage, QuotaTimeline,
-    TaskModelConfiguration, TaskTokenTotals, TaskUsageQuery, TaskUsageReport, TaskUsageSummary,
-    TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery, TokenStatistics, TokenStatisticsQuery,
-    ValueCount,
+    ReadinessLedgerCoverage, TaskModelConfiguration, TaskTokenTotals, TaskUsageQuery,
+    TaskUsageReport, TaskUsageSummary, TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery,
+    TokenStatistics, TokenStatisticsQuery, ValueCount,
 };
 pub use sqlite::{SqliteReadStore, SqliteStore, StorageError, StorageInfo, DEFAULT_BUSY_TIMEOUT};
 pub use usage_evidence::{

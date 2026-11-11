@@ -617,3 +617,56 @@ def test_estimate_worker_protocol_remains_default_and_workload_is_explicit(
     ]
     assert _arguments(common).operation == "estimate"
     assert _arguments([*common, "--operation", "workload"]).operation == "workload"
+
+
+@pytest.mark.parametrize("observations", [0, 1, 3])
+def test_readiness_inventory_uses_validated_terminal_reader(
+    tmp_path: Path, observations: int
+) -> None:
+    from codex_meter.integration.worker import execute_inventory
+
+    database = tmp_path / "inventory.sqlite"
+    _create_database(database, observations=observations)
+    before = database.read_bytes()
+    context = _context(database, five_hour=None)
+    result = json.loads(execute_inventory(context))
+    assert result["candidate_terminal_count"] == observations
+    assert result["raw_total_available"] == observations
+    assert result["raw_total_missing"] == 0
+    assert result["token_quality"] == ({"B": observations} if observations else {})
+    assert not result["scan_limit_reached"]
+    assert before == database.read_bytes()
+    assert "worker-observation" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("statement", "code"),
+    [
+        (
+            "UPDATE schema_migrations SET checksum_sha256 = 'bad' WHERE version = 1",
+            "migration_checksum_drift",
+        ),
+        (
+            "UPDATE observations SET observation_sha256 = '" + "0" * 64 + "'",
+            "corrupt_observation",
+        ),
+        (
+            "UPDATE schema_migrations SET version = 999 WHERE version = 6",
+            "database_schema_incompatible",
+        ),
+    ],
+)
+def test_readiness_inventory_rejects_integrity_failures(
+    tmp_path: Path, statement: str, code: str
+) -> None:
+    from codex_meter.integration.worker import execute_inventory
+
+    database = tmp_path / "inventory.sqlite"
+    _create_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(statement)
+    before = database.read_bytes()
+    with pytest.raises(WorkerError) as caught:
+        execute_inventory(_context(database, five_hour=None))
+    assert caught.value.code == code
+    assert before == database.read_bytes()

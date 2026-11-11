@@ -305,6 +305,8 @@ class ObservationDatabase:
                 batch = cursor.fetchmany(256)
                 if not batch:
                     break
+                if len(rows) + len(batch) > MAXIMUM_OBSERVATIONS_SAFETY_LIMIT:
+                    raise QueryValidationError("observation reader safety limit exceeded")
                 rows.extend(_record_from_row(row) for row in batch)
             self._connection.execute("COMMIT")
         except (AnalyticsDataError, sqlite3.Error) as exc:
@@ -322,6 +324,21 @@ class ObservationDatabase:
             migration_version=self.migration_version,
             selected_configuration=selector.configuration,
         )
+
+    def load_inventory(self) -> ObservationDataset:
+        """Bound SQLite VM work as well as materialized terminal inventory rows."""
+        remaining_callbacks = 10_000
+
+        def exhausted() -> bool:
+            nonlocal remaining_callbacks
+            remaining_callbacks -= 1
+            return remaining_callbacks <= 0
+
+        self._connection.set_progress_handler(exhausted, 1000)
+        try:
+            return self.load_dataset(ObservationSelector(maximum_observations=1000))
+        finally:
+            self._connection.set_progress_handler(None, 0)
 
     def load(self, selector: ObservationSelector | None = None) -> ObservationDataset:
         return self.load_dataset(selector)

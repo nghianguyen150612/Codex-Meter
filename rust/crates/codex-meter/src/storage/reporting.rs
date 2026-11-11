@@ -1465,6 +1465,97 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn readiness_ledger_covers_attribution_missing_tokens_and_unsupported_sources() {
+        let database = path();
+        let store = SqliteStore::open(&database).unwrap();
+        let mut attributed = token(
+            "r1",
+            "2026-10-20T12:00:00Z",
+            None,
+            Some("session:1"),
+            TokenRecordSemantic::PerResponse,
+            Some(0),
+            None,
+            None,
+            None,
+        );
+        attributed.task_id = Some("task:1".into());
+        insert_token(&store, &attributed);
+        insert_token(
+            &store,
+            &token(
+                "r2",
+                "2026-10-20T12:00:00Z",
+                None,
+                None,
+                TokenRecordSemantic::PerResponse,
+                None,
+                None,
+                None,
+                None,
+            ),
+        );
+        insert_token(
+            &store,
+            &token(
+                "snapshot",
+                "2026-10-20T12:00:00Z",
+                None,
+                None,
+                TokenRecordSemantic::ThreadCumulativeSnapshot,
+                Some(999),
+                None,
+                None,
+                None,
+            ),
+        );
+        insert_diagnostic(
+            &store,
+            &diagnostic("d1", IngestionDiagnosticCode::UnsupportedCodexVersion),
+        );
+        insert_quota(
+            &store,
+            &quota(
+                "q1",
+                QuotaMeterType::FiveHour,
+                "2026-10-20T12:00:00Z",
+                0.0,
+                None,
+            ),
+        );
+        drop(store);
+        let before = fs::read(&database).unwrap();
+        let coverage = SqliteReadStore::open(&database)
+            .unwrap()
+            .readiness_coverage()
+            .unwrap();
+        assert_eq!(coverage.canonical_response_count, 2);
+        assert_eq!(coverage.attributed_response_count, 1);
+        assert_eq!(coverage.unattributed_response_count, 1);
+        assert_eq!(coverage.raw_total_available, 1);
+        assert_eq!(coverage.raw_total_missing, 1);
+        assert_eq!(coverage.quota_snapshot_count, 1);
+        assert_eq!(coverage.diagnostics["unsupported_codex_version"], 1);
+        assert_eq!(before, fs::read(&database).unwrap());
+        let store = SqliteStore::open(&database).unwrap();
+        store
+            .connection()
+            .execute(
+                "UPDATE token_usage_evidence SET evidence_sha256 = ?1 WHERE event_id = 'r1'",
+                ["0".repeat(64)],
+            )
+            .unwrap();
+        drop(store);
+        assert!(matches!(
+            SqliteReadStore::open(&database)
+                .unwrap()
+                .readiness_coverage(),
+            Err(StorageError::EvidenceCorrupt)
+        ));
+        remove(&database);
+    }
+
+    #[test]
     fn statistics_count_only_per_response_and_keep_missing_zero_and_overlapping_fields_distinct() {
         let database = path();
         {
@@ -2197,4 +2288,83 @@ pub(super) mod tests {
         ));
         remove(&database);
     }
+}
+
+/// P031-owned bounded coverage. Every scanned row uses the reporting checksum
+/// readers; cumulative snapshots never enter canonical response accounting.
+#[derive(Debug, Default, Serialize)]
+pub struct ReadinessLedgerCoverage {
+    pub canonical_response_count: u64,
+    pub attributed_response_count: u64,
+    pub unattributed_response_count: u64,
+    pub raw_total_available: u64,
+    pub raw_total_missing: u64,
+    pub quota_snapshot_count: u64,
+    pub diagnostics: BTreeMap<String, u64>,
+    pub scan_limit_reached: bool,
+}
+
+pub(super) fn readiness_coverage(
+    connection: &mut Connection,
+) -> Result<ReadinessLedgerCoverage, StorageError> {
+    let transaction = connection.transaction().map_err(StorageError::sqlite)?;
+    let mut result = ReadinessLedgerCoverage::default();
+    for (table, columns) in [
+        ("token_usage_evidence", TOKEN_COLUMNS),
+        ("quota_snapshot_evidence", QUOTA_COLUMNS),
+        ("ingestion_diagnostics", DIAGNOSTIC_COLUMNS),
+    ] {
+        let key = match table {
+            "token_usage_evidence" => "event_id",
+            "quota_snapshot_evidence" => "sample_id",
+            _ => "diagnostic_id",
+        };
+        let sql = format!("SELECT {columns} FROM {table} ORDER BY {key} LIMIT 1001");
+        let mut statement = transaction.prepare(&sql).map_err(StorageError::sqlite)?;
+        let mut rows = statement.query([]).map_err(StorageError::sqlite)?;
+        let mut count = 0;
+        while let Some(row) = rows.next().map_err(StorageError::sqlite)? {
+            if count == 1000 {
+                result.scan_limit_reached = true;
+                break;
+            }
+            count += 1;
+            match table {
+                "token_usage_evidence" => {
+                    let event = read_token_row(row)?;
+                    if event.record_semantic != TokenRecordSemantic::PerResponse {
+                        continue;
+                    }
+                    result.canonical_response_count =
+                        checked_increment(result.canonical_response_count)?;
+                    let attribution = if event.task_id.is_some() && event.session_id.is_some() {
+                        &mut result.attributed_response_count
+                    } else {
+                        &mut result.unattributed_response_count
+                    };
+                    *attribution = checked_increment(*attribution)?;
+                    let raw = if event.raw_total.is_some() {
+                        &mut result.raw_total_available
+                    } else {
+                        &mut result.raw_total_missing
+                    };
+                    *raw = checked_increment(*raw)?;
+                }
+                "quota_snapshot_evidence" => {
+                    read_quota_row(row)?;
+                    result.quota_snapshot_count = checked_increment(result.quota_snapshot_count)?;
+                }
+                _ => {
+                    let diagnostic = read_diagnostic_row(row)?;
+                    let value = result
+                        .diagnostics
+                        .entry(diagnostic.diagnostic_code.as_str().to_owned())
+                        .or_default();
+                    *value = checked_increment(*value)?;
+                }
+            }
+        }
+    }
+    transaction.commit().map_err(StorageError::sqlite)?;
+    Ok(result)
 }

@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0.0",
+  "analysis_type": "forecast_readiness",
+  "mode": "scoped",
+  "generated_at": "2026-10-16T07:00:00Z",
+  "request_id": "worker-test-1",
+  "requested_selection": {
+    "configuration": {
+      "codex_version": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      },
+      "model": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "gpt-5.6-sol"
+      },
+      "plan": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "plus"
+      },
+      "reasoning_level": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "high"
+      },
+      "speed_mode": {
+        "availability": "available",
+        "provenance": "derived",
+        "value": "standard"
+      }
+    },
+    "observed_from": "2026-10-01T00:00:00Z",
+    "observed_through": "2026-10-02T00:00:00Z"
+  },
+  "status": "insufficient_evidence",
+  "database_present": true,
+  "source_compatibility": "supported_recorded_schema",
+  "observation_coverage": null,
+  "ledger_coverage": {
+    "canonical_response_count": 0,
+    "attributed_response_count": 0,
+    "unattributed_response_count": 0,
+    "raw_total_available": 0,
+    "raw_total_missing": 0,
+    "quota_snapshot_count": 0,
+    "diagnostics": {},
+    "scan_limit_reached": false
+  },
+  "scoped_coverage": {
+    "accounting": {
+      "c_quality_observations": 0,
+      "candidate_observations": 0,
+      "eligible_observations": 0,
+      "excluded_observations": 0
+    },
+    "configuration": {
+      "codex_version": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      },
+      "model": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "gpt-5.6-sol"
+      },
+      "plan": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "plus"
+      },
+      "reasoning_level": {
+        "availability": "available",
+        "provenance": "observed",
+        "value": "high"
+      },
+      "speed_mode": {
+        "availability": "available",
+        "provenance": "derived",
+        "value": "standard"
+      }
+    },
+    "exclusion_reasons": {},
+    "history_status": "insufficient"
+  },
+  "per_meter_readiness": [
+    {
+      "capacity_confidence": "insufficient",
+      "capacity_reason_codes": [
+        "unknown_reason"
+      ],
+      "capacity_sample_accounting": {
+        "candidate_observations": 0,
+        "excluded_observations": 0,
+        "outliers_removed": 0,
+        "used_observations": 0,
+        "valid_observations": 0
+      },
+      "insufficiency_reasons": [
+        "task_history_insufficient",
+        "capacity_insufficient"
+      ],
+      "manual_position_present": false,
+      "meter_type": "five_hour",
+      "status": "insufficient_task_history_and_capacity"
+    }
+  ],
+  "diagnostics": [
+    "quota_snapshots_absent",
+    "response_evidence_absent"
+  ],
+  "next_action_codes": [
+    "qualified_observation_integration_required"
+  ],
+  "partial": false
+}

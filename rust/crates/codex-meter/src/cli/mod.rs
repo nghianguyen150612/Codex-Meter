@@ -4,6 +4,7 @@ mod args;
 mod estimate;
 mod models;
 mod projects;
+mod readiness;
 mod render;
 mod reporting;
 mod sessions;
@@ -12,9 +13,9 @@ mod workload;
 
 pub use args::{
     parse_args, CliAction, CliError, EstimateArguments, HistoryArguments, InspectArguments,
-    ModelsArguments, ProjectsArguments, QuotaArguments, SessionForkArguments, SessionShowArguments,
-    SessionsArguments, SyncArguments, TasksArguments, TokenScope, TokensArguments, TuiArguments,
-    WorkloadArguments,
+    ModelsArguments, ProjectsArguments, QuotaArguments, ReadinessArguments, SessionForkArguments,
+    SessionShowArguments, SessionsArguments, SyncArguments, TasksArguments, TokenScope,
+    TokensArguments, TuiArguments, WorkloadArguments,
 };
 
 pub fn run<I, S>(arguments: I) -> Result<String, CliError>
@@ -33,6 +34,7 @@ where
         CliAction::ProjectsHelp => Ok(args::projects_help_text().to_owned()),
         CliAction::SyncHelp => Ok(args::sync_help_text().to_owned()),
         CliAction::EstimateHelp => Ok(args::estimate_help_text().to_owned()),
+        CliAction::ReadinessHelp => Ok(readiness::HELP.to_owned()),
         CliAction::WorkloadHelp => Ok(args::workload_help_text().to_owned()),
         CliAction::TokensHelp => Ok(args::tokens_help_text().to_owned()),
         CliAction::TasksHelp => Ok(args::tasks_help_text().to_owned()),
@@ -44,6 +46,7 @@ where
         CliAction::Version => Ok(format!("codex-meter {}\n", env!("CARGO_PKG_VERSION"))),
         CliAction::Sync(arguments) => sync::run(arguments),
         CliAction::Estimate(arguments) => estimate::run(arguments),
+        CliAction::Readiness(arguments) => readiness::run(arguments),
         CliAction::Workload(arguments) => workload::run(arguments),
         CliAction::Tokens(arguments) => reporting::tokens(arguments),
         CliAction::Tasks(arguments) => reporting::tasks(arguments),

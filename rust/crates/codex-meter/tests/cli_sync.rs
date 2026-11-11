@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -476,8 +476,20 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
     assert_eq!(first["observations_added"], 1);
     assert!(first["five_hour_meter"].is_null());
     assert!(first["weekly_meter"].is_null());
+    for warning in ["data_coverage_incomplete", "quota_evidence_incomplete"] {
+        assert!(first["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == warning));
+    }
+    assert_eq!(diagnostic_count(&database, "data_coverage_incomplete"), 1);
+    assert_eq!(diagnostic_count(&database, "quota_evidence_incomplete"), 1);
     let connection = Connection::open(&database).unwrap();
-    let (lifecycle, raw_total, five_hour_validity, weekly_validity, payload): (
+    let (lifecycle, started_at, ended_at, token_validity, raw_total, five_hour_validity, weekly_validity, payload): (
+        String,
+        Option<String>,
+        Option<String>,
         String,
         i64,
         String,
@@ -485,12 +497,18 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
         String,
     ) = connection
         .query_row(
-            "SELECT lifecycle_state, raw_total, five_hour_validity, weekly_validity, observation_json FROM observations",
+            "SELECT lifecycle_state, started_at, ended_at, token_validity, raw_total, five_hour_validity, weekly_validity, observation_json FROM observations",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
         )
         .unwrap();
     assert_eq!(lifecycle, "incomplete");
+    assert!(started_at.is_some(), "observed task start must be retained");
+    assert!(
+        ended_at.is_some(),
+        "observed task completion must be retained"
+    );
+    assert_eq!(token_validity, "incomplete");
     assert_eq!(raw_total, 100);
     assert_eq!(five_hour_validity, "unavailable");
     assert_eq!(weekly_validity, "unavailable");
@@ -499,10 +517,60 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
     assert!(!payload.contains("/synthetic/private/repository"));
     drop(connection);
 
+    let repeated_terminal = TASK_COMPLETED.replace("2026-10-03T10:02:00Z", "2026-10-03T10:03:00Z");
+    OpenOptions::new()
+        .append(true)
+        .open(active_rollout(&home, "completed-task.jsonl"))
+        .unwrap()
+        .write_all(format!("{}\n", repeated_terminal.trim()).as_bytes())
+        .unwrap();
+
     let (second_output, second) = run_sync(&home, &database);
     assert!(second_output.status.success());
     assert_eq!(second["responses_added"], 0);
     assert_eq!(second["observations_added"], 0);
+    for warning in ["data_coverage_incomplete", "quota_evidence_incomplete"] {
+        assert!(second["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == warning));
+    }
+    let connection = Connection::open(&database).unwrap();
+    let observation_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        observation_count, 1,
+        "repeated terminal must not fork identity"
+    );
+    assert_eq!(diagnostic_count(&database, "data_coverage_incomplete"), 2);
+    assert_eq!(diagnostic_count(&database, "quota_evidence_incomplete"), 2);
+
+    #[cfg(not(feature = "release-artifact"))]
+    {
+        let readiness = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+            .args(["readiness", "--database"])
+            .arg(&database)
+            .args(["--generated-at", "2026-10-16T07:00:00Z", "--json"])
+            .output()
+            .expect("readiness process should start");
+        assert!(
+            readiness.status.success(),
+            "readiness failed: {}",
+            String::from_utf8_lossy(&readiness.stderr)
+        );
+        let readiness: Value = serde_json::from_slice(&readiness.stdout).unwrap();
+        assert_eq!(readiness["partial"], true);
+        assert_eq!(
+            readiness["ledger_coverage"]["diagnostics"]["data_coverage_incomplete"],
+            2
+        );
+        assert_eq!(
+            readiness["ledger_coverage"]["diagnostics"]["quota_evidence_incomplete"],
+            2
+        );
+    }
 }
 
 #[test]

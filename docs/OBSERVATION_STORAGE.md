@@ -25,7 +25,7 @@ match every stored projection. P016 never repairs a corrupt row.
 
 Migration `0003_observations` creates one `STRICT` table named `observations`.
 SQLite migration version `4`, Observation schema version `1.0.0`, and checkpoint
-state format version `1` are independent version domains.
+state format version `2` are independent version domains.
 
 The intentional application tables after migration 4 are exactly
 `schema_migrations`, `storage_metadata`, `runtime_checkpoints`, and
@@ -135,6 +135,16 @@ straightforward: persist the terminal Observation while removing its completed
 reconciliation from the next checkpoint. A crash before commit leaves the old
 checkpoint available for deterministic replay; a crash after commit leaves both
 Observation and next checkpoint durable.
+
+P043 adds the first observed task start and terminal timestamps to serialized
+P009 telemetry checkpoint state format 2. These fields default to unavailable
+when reading older version-1 checkpoint payloads, so existing cursor and
+checksum validation remains authoritative and no historical Observation is
+modified. These timestamps are persisted atomically with the source cursor and
+any Observation created by that batch. Repeated terminal markers retain the
+first terminal timestamp for deterministic Observation identity. The
+Observation uses the real start timestamp only when it does not follow that
+terminal timestamp.
 
 ## Privacy and read-only boundary
 

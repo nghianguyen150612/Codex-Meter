@@ -12,7 +12,7 @@ use crate::telemetry::{
 
 use super::sqlite::StorageError;
 
-pub const STATE_FORMAT_VERSION: u32 = 1;
+pub const STATE_FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeCheckpoint {
@@ -37,7 +37,7 @@ pub struct ActiveReconciliationCheckpoint {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct PersistedRuntimeStateV1 {
+struct PersistedRuntimeState {
     state_format_version: u32,
     telemetry_state: TelemetryState,
     quota_tracking_state: QuotaTrackingState,
@@ -125,7 +125,7 @@ impl TryFrom<PersistedReconciliationPolicyV1> for ReconciliationPolicy {
     }
 }
 
-impl From<&RuntimeRecoveryState> for PersistedRuntimeStateV1 {
+impl From<&RuntimeRecoveryState> for PersistedRuntimeState {
     fn from(value: &RuntimeRecoveryState) -> Self {
         Self {
             state_format_version: STATE_FORMAT_VERSION,
@@ -148,10 +148,10 @@ impl From<&RuntimeRecoveryState> for PersistedRuntimeStateV1 {
     }
 }
 
-impl TryFrom<PersistedRuntimeStateV1> for RuntimeRecoveryState {
+impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
     type Error = StorageError;
 
-    fn try_from(value: PersistedRuntimeStateV1) -> Result<Self, Self::Error> {
+    fn try_from(value: PersistedRuntimeState) -> Result<Self, Self::Error> {
         if value.state_format_version > STATE_FORMAT_VERSION {
             return Err(StorageError::CheckpointFormatTooNew {
                 found: value.state_format_version,
@@ -218,7 +218,7 @@ fn validate_telemetry(state: &TelemetryState) -> Result<(), StorageError> {
 
 pub(crate) fn encode_state(state: &RuntimeRecoveryState) -> Result<(String, String), StorageError> {
     validate_runtime_state(state)?;
-    let dto = PersistedRuntimeStateV1::from(state);
+    let dto = PersistedRuntimeState::from(state);
     let bytes = serde_json::to_vec(&dto).map_err(|_| StorageError::CheckpointDecode)?;
     let json = String::from_utf8(bytes).map_err(|_| StorageError::CheckpointDecode)?;
     let checksum = Sha256::digest(json.as_bytes())
@@ -260,7 +260,7 @@ fn decode_state(json: &str, checksum: &str) -> Result<RuntimeRecoveryState, Stor
     if calculated != checksum {
         return Err(StorageError::CheckpointCorrupt);
     }
-    let dto: PersistedRuntimeStateV1 =
+    let dto: PersistedRuntimeState =
         serde_json::from_str(json).map_err(|_| StorageError::CheckpointDecode)?;
     dto.try_into()
 }
@@ -830,8 +830,47 @@ mod tests {
         let (_, checksum) = encode_state(&RuntimeRecoveryState::default()).unwrap();
         assert_eq!(
             checksum,
-            "62981bef0c6ccdfa5afaaf020ccf8298f8fddb9a9ba0fc5ba8651c68e1954fa7"
+            "f1f52d1ee7859a0b97305dcc5a64265f390eae92b7b600259dfb845f149035ac"
         );
+    }
+
+    #[test]
+    fn checkpoint_v1_task_state_defaults_new_lifecycle_timestamps() {
+        let mut state = RuntimeRecoveryState::default();
+        state.telemetry_state.tasks.insert(
+            "task-1".to_owned(),
+            TaskState {
+                task_id: "task-1".to_owned(),
+                root_task_id: None,
+                observed_root_task_ids: BTreeSet::new(),
+                lifecycle: TaskLifecycle::Active,
+                start_observed: true,
+                started_at: Some("2025-01-01T00:00:00Z".to_owned()),
+                terminal_at: None,
+                terminal_evidence: BTreeSet::new(),
+                anomalies: BTreeSet::new(),
+                configuration_override: ConfigurationState::default(),
+                token_configuration_fingerprints: BTreeSet::new(),
+                configuration_consistency: ConfigurationConsistency::NoTokenConsumption,
+            },
+        );
+        let (encoded, _) = encode_state(&state).unwrap();
+        let mut old: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        old["state_format_version"] = serde_json::json!(1);
+        let task = &mut old["telemetry_state"]["tasks"]["task-1"];
+        task.as_object_mut().unwrap().remove("started_at");
+        task.as_object_mut().unwrap().remove("terminal_at");
+        let old_bytes = serde_json::to_vec(&old).unwrap();
+        let old_json = String::from_utf8(old_bytes).unwrap();
+        let checksum = Sha256::digest(old_json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+
+        let recovered = decode_state(&old_json, &checksum).unwrap();
+        let task = recovered.telemetry_state.tasks.get("task-1").unwrap();
+        assert_eq!(task.started_at, None);
+        assert_eq!(task.terminal_at, None);
     }
 
     #[test]
@@ -858,6 +897,8 @@ mod tests {
                 observed_root_task_ids: ["task-1".to_owned()].into_iter().collect(),
                 lifecycle: TaskLifecycle::Active,
                 start_observed: true,
+                started_at: Some("2025-01-01T00:00:00Z".to_owned()),
+                terminal_at: None,
                 terminal_evidence: BTreeSet::<TaskTerminalEvidence>::new(),
                 anomalies: BTreeSet::<TaskAnomaly>::new(),
                 configuration_override: ConfigurationState::default(),

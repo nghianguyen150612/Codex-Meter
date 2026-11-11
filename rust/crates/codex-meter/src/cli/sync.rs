@@ -119,6 +119,7 @@ struct SourceCounts {
     snapshots_added: usize,
     quota_snapshots_added: usize,
     observations_added: usize,
+    terminal_evidence_seen: bool,
     skipped_records: usize,
     source_processed: bool,
     source_warning: Option<SyncWarning>,
@@ -210,6 +211,13 @@ pub(super) fn run(arguments: SyncArguments) -> Result<String, CliError> {
                 }
             }
             warnings.insert(warning);
+        }
+        if counts.terminal_evidence_seen {
+            // Terminal P017 rows currently have observed tokens but no source
+            // guarantee of complete per-task coverage or task-specific quota
+            // samples. Keep both evidence gaps visible in the sync result.
+            warnings.insert(SyncWarning::DataCoverageIncomplete);
+            warnings.insert(SyncWarning::QuotaEvidenceIncomplete);
         }
     }
 
@@ -545,6 +553,92 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                         continue;
                     }
                 };
+            let terminal_task_observed = assembled.outputs.iter().any(|output| {
+                matches!(
+                    output,
+                    AssembledOutput::TaskLifecycle(transition)
+                        if transition.task_id.is_some()
+                            && matches!(
+                                transition.transition,
+                                TaskLifecycleTransitionKind::Completed
+                                    | TaskLifecycleTransitionKind::Failed
+                                    | TaskLifecycleTransitionKind::Aborted
+                            )
+                )
+            });
+            let lifecycle_anomaly = assembled.outputs.iter().any(|output| {
+                let AssembledOutput::TaskLifecycle(transition) = output else {
+                    return false;
+                };
+                let Some(task_id) = transition.task_id.as_ref() else {
+                    return false;
+                };
+                let Some(task) = assembled.next_state.tasks.get(task_id) else {
+                    return false;
+                };
+                if transition.transition == TaskLifecycleTransitionKind::Started {
+                    return task
+                        .anomalies
+                        .contains(&crate::telemetry::TaskAnomaly::StartAfterTerminal);
+                }
+                if !matches!(
+                    transition.transition,
+                    TaskLifecycleTransitionKind::Completed
+                        | TaskLifecycleTransitionKind::Failed
+                        | TaskLifecycleTransitionKind::Aborted
+                ) {
+                    return false;
+                }
+                !task.anomalies.is_empty()
+                    || task.started_at.as_deref().is_some_and(|started_at| {
+                        !timestamp_not_after(started_at, &transition.event_at)
+                    })
+            });
+            if lifecycle_anomaly && !terminal_task_observed {
+                diagnostics.push(make_diagnostic(
+                    &rollout.source,
+                    item,
+                    source_id(&rollout.source),
+                    timestamp.clone(),
+                    semantic,
+                    IngestionDiagnosticCode::DataCoverageIncomplete,
+                ));
+            }
+            let token_after_terminal = assembled.outputs.iter().any(|output| {
+                let AssembledOutput::AttributedToken(event) = output else {
+                    return false;
+                };
+                event
+                    .normalized_event
+                    .task_id
+                    .as_ref()
+                    .is_some_and(|task_id| {
+                        assembled.next_state.tasks.get(task_id).is_some_and(|task| {
+                            task.anomalies
+                                .contains(&crate::telemetry::TaskAnomaly::TokenAfterTerminal)
+                        })
+                    })
+            });
+            if token_after_terminal || terminal_task_observed {
+                diagnostics.push(make_diagnostic(
+                    &rollout.source,
+                    item,
+                    source_id(&rollout.source),
+                    timestamp.clone(),
+                    semantic,
+                    IngestionDiagnosticCode::DataCoverageIncomplete,
+                ));
+            }
+            if terminal_task_observed {
+                diagnostics.push(make_diagnostic(
+                    &rollout.source,
+                    item,
+                    source_id(&rollout.source),
+                    timestamp.clone(),
+                    semantic,
+                    IngestionDiagnosticCode::QuotaEvidenceIncomplete,
+                ));
+            }
             for output in &assembled.outputs {
                 if let AssembledOutput::TaskLifecycle(transition) = output {
                     if matches!(
@@ -554,11 +648,13 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                             | TaskLifecycleTransitionKind::Aborted
                     ) {
                         if let Some(task_id) = transition.task_id.as_ref() {
-                            terminal_tasks.push((
-                                task_id.clone(),
-                                transition.event_at.clone(),
-                                transition.transition,
-                            ));
+                            let ended_at = assembled
+                                .next_state
+                                .tasks
+                                .get(task_id)
+                                .and_then(|task| task.terminal_at.clone())
+                                .unwrap_or_else(|| transition.event_at.clone());
+                            terminal_tasks.push((task_id.clone(), ended_at, transition.transition));
                         }
                     }
                 }
@@ -828,15 +924,19 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
             last_line_sha256,
             file_identity_sha256: current_file_identity.clone(),
         };
-        let observations =
-            match build_terminal_observations(store, &terminal_tasks, &token_evidence, &next_state)
-            {
-                Ok(observations) => observations,
-                Err(_) => {
-                    counts.source_warning = Some(SyncWarning::CheckpointCorruptOrUnsupported);
-                    break;
-                }
-            };
+        let observations = match build_terminal_observations(
+            store,
+            &rollout.source,
+            &terminal_tasks,
+            &token_evidence,
+            &next_state,
+        ) {
+            Ok(observations) => observations,
+            Err(_) => {
+                counts.source_warning = Some(SyncWarning::CheckpointCorruptOrUnsupported);
+                break;
+            }
+        };
         match store.commit_usage_batch(
             &rollout.source,
             &next_cursor,
@@ -855,6 +955,7 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                 counts.snapshots_added += inserted.snapshots;
                 counts.quota_snapshots_added += inserted.quota_samples;
                 counts.observations_added += inserted.observations;
+                counts.terminal_evidence_seen |= !terminal_tasks.is_empty();
                 state = next_state;
                 cursor = saved.cursor.clone();
                 boundary_hash = next_boundary.last_line_sha256;
@@ -1014,12 +1115,14 @@ fn token_row(identity: TokenRowIdentity, usage: &TokenUsage) -> TokenUsageEviden
 
 fn build_terminal_observations(
     store: &SqliteStore,
+    source: &SourceIdentity,
     terminal_tasks: &[(String, String, TaskLifecycleTransitionKind)],
     current_tokens: &[TokenUsageEvidence],
     state: &RuntimeRecoveryState,
 ) -> Result<Vec<NormalizedObservation>, StorageError> {
     let mut observations = BTreeMap::new();
-    for (task_id, ended_at, transition) in terminal_tasks {
+    let source_id = source_id(source);
+    for (task_id, ended_at, _transition) in terminal_tasks {
         let session_id = state
             .telemetry_state
             .session
@@ -1027,11 +1130,14 @@ fn build_terminal_observations(
             .map(|session| session.session_id.clone());
         let mut evidence = BTreeMap::new();
         for row in store.task_response_evidence(task_id, session_id.as_deref())? {
-            evidence.insert(row.event_id.clone(), row);
+            if row.source_id == source_id {
+                evidence.insert(row.event_id.clone(), row);
+            }
         }
         for row in current_tokens.iter().filter(|row| {
             row.task_id.as_deref() == Some(task_id)
                 && row.session_id == session_id
+                && row.source_id == source_id
                 && row.record_semantic == TokenRecordSemantic::PerResponse
         }) {
             if evidence
@@ -1043,8 +1149,16 @@ fn build_terminal_observations(
         }
         let session_id =
             session_id.or_else(|| evidence.values().find_map(|row| row.session_id.clone()));
-        let mut target =
-            TaskReconciliationTarget::new(task_id.clone(), None, Some(ended_at.clone()));
+        let mut target = TaskReconciliationTarget::new(
+            task_id.clone(),
+            state
+                .telemetry_state
+                .tasks
+                .get(task_id)
+                .and_then(|task| task.started_at.clone())
+                .filter(|started_at| timestamp_not_after(started_at, ended_at)),
+            Some(ended_at.clone()),
+        );
         target.session_id = session_id;
         let policy = ReconciliationPolicy {
             max_before_sample_age: time::Duration::seconds(0),
@@ -1059,12 +1173,11 @@ fn build_terminal_observations(
             .values()
             .map(attributed_token_event)
             .collect::<Vec<_>>();
-        let completeness = if *transition == TaskLifecycleTransitionKind::Completed {
-            TokenTelemetryCompleteness::Complete
-        } else {
-            TokenTelemetryCompleteness::ProcessInterrupted
-        };
-        let observation = build_observation(&ObservationInput::new(
+        // The supported rollout records expose terminal task markers, but do not
+        // certify that every per-response token event has been flushed and read.
+        // Terminal lifecycle evidence therefore cannot prove token completeness.
+        let completeness = TokenTelemetryCompleteness::Incomplete;
+        let mut observation = build_observation(&ObservationInput::new(
             reconciliation,
             attributed,
             completeness,
@@ -1072,14 +1185,31 @@ fn build_terminal_observations(
             Some(ended_at.clone()),
         ))
         .map_err(|_| StorageError::EvidenceInvalid)?;
-        if store
-            .load_observation(&observation.observation_id)?
-            .is_none()
-        {
-            observations.insert(observation.observation_id.clone(), observation);
+        observation.source_instance_id =
+            Some(crate::telemetry::identity::source_instance_id(source));
+        match store.load_observation(&observation.observation_id)? {
+            Some(stored) if stored.observation != observation => {
+                return Err(StorageError::ObservationIdentityConflict);
+            }
+            Some(_) => {}
+            None => {
+                observations.insert(observation.observation_id.clone(), observation);
+            }
         }
     }
     Ok(observations.into_values().collect())
+}
+
+fn timestamp_not_after(started_at: &str, ended_at: &str) -> bool {
+    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+
+    match (
+        OffsetDateTime::parse(started_at, &Rfc3339),
+        OffsetDateTime::parse(ended_at, &Rfc3339),
+    ) {
+        (Ok(started), Ok(ended)) => started <= ended,
+        _ => false,
+    }
 }
 
 fn attributed_token_event(evidence: &TokenUsageEvidence) -> AttributedTokenEvent {
@@ -1508,7 +1638,9 @@ fn warning_label(warning: SyncWarning) -> &'static str {
         SyncWarning::SourceReadLimited => "a source reached the per-sync processing limit",
         SyncWarning::SourceReadFailed => "a source could not be read completely",
         SyncWarning::SourceTransactionConflict => "a source batch was not committed",
-        SyncWarning::QuotaEvidenceIncomplete => "supported local quota snapshots were unavailable",
+        SyncWarning::QuotaEvidenceIncomplete => {
+            "task-specific quota evidence is unavailable or incomplete"
+        }
         SyncWarning::DataCoverageIncomplete => "history coverage is incomplete",
         SyncWarning::DiagnosticWriteFailed => "a sanitized ingestion diagnostic could not be saved",
     }

@@ -58,6 +58,12 @@ pub struct TaskState {
     pub observed_root_task_ids: BTreeSet<String>,
     pub lifecycle: TaskLifecycle,
     pub start_observed: bool,
+    /// Timestamp from the first observed task start event. Older checkpoints omit it.
+    #[serde(default)]
+    pub started_at: Option<String>,
+    /// Timestamp from the first observed terminal event. Older checkpoints omit it.
+    #[serde(default)]
+    pub terminal_at: Option<String>,
     pub terminal_evidence: BTreeSet<TaskTerminalEvidence>,
     pub anomalies: BTreeSet<TaskAnomaly>,
     pub configuration_override: ConfigurationState,
@@ -90,6 +96,8 @@ pub enum TaskAnomaly {
     ConflictingRootTaskEvidence,
     ConflictingTerminalEvidence,
     TokenAfterTerminal,
+    RepeatedTerminalEvidence,
+    StartAfterTerminal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -300,10 +308,21 @@ fn assemble_item(
                 let task_id = identity::task_id(&started.turn_id);
                 let root_task_id = started.root_turn_id.as_deref().map(identity::task_id);
                 let task = task_mut(state, &task_id, started.root_turn_id.as_deref());
+                let after_terminal = matches!(
+                    task.lifecycle,
+                    TaskLifecycle::Completed
+                        | TaskLifecycle::Failed
+                        | TaskLifecycle::Aborted
+                        | TaskLifecycle::ConflictingTerminalEvidence
+                );
                 let repeated = task.start_observed;
                 task.start_observed = true;
-                if repeated {
+                if after_terminal {
+                    task.anomalies.insert(TaskAnomaly::StartAfterTerminal);
+                } else if repeated {
                     task.anomalies.insert(TaskAnomaly::RepeatedStart);
+                } else {
+                    task.started_at = Some(record.timestamp.clone());
                 }
                 if matches!(task.lifecycle, TaskLifecycle::Observed) {
                     task.lifecycle = TaskLifecycle::Active;
@@ -330,7 +349,7 @@ fn assemble_item(
                     TaskCompletion::Completed => TaskTerminalEvidence::Completed,
                     TaskCompletion::Failed => TaskTerminalEvidence::Failed,
                 };
-                terminal_update(task, evidence);
+                terminal_update(task, evidence, &record.timestamp);
                 outputs.push(AssembledOutput::TaskLifecycle(TaskLifecycleTransition {
                     evidence_id: identity::lifecycle_event_id(
                         source,
@@ -360,7 +379,7 @@ fn assemble_item(
                     if !task.start_observed {
                         task.anomalies.insert(TaskAnomaly::AbortWithoutStart);
                     }
-                    terminal_update(task, TaskTerminalEvidence::Aborted);
+                    terminal_update(task, TaskTerminalEvidence::Aborted, &record.timestamp);
                 }
                 outputs.push(AssembledOutput::TaskLifecycle(TaskLifecycleTransition {
                     evidence_id: identity::lifecycle_event_id(
@@ -588,6 +607,8 @@ fn task_mut<'a>(
             observed_root_task_ids: observed_root_task_id.iter().cloned().collect(),
             lifecycle: TaskLifecycle::Observed,
             start_observed: false,
+            started_at: None,
+            terminal_at: None,
             terminal_evidence: BTreeSet::new(),
             anomalies: BTreeSet::new(),
             configuration_override: ConfigurationState::default(),
@@ -612,7 +633,7 @@ fn task_mut<'a>(
     task
 }
 
-fn terminal_update(task: &mut TaskState, evidence: TaskTerminalEvidence) {
+fn terminal_update(task: &mut TaskState, evidence: TaskTerminalEvidence, event_at: &str) {
     if !task.start_observed {
         match evidence {
             TaskTerminalEvidence::Aborted => task.anomalies.insert(TaskAnomaly::AbortWithoutStart),
@@ -620,6 +641,12 @@ fn terminal_update(task: &mut TaskState, evidence: TaskTerminalEvidence) {
                 task.anomalies.insert(TaskAnomaly::CompletionWithoutStart)
             }
         };
+    }
+    if task.terminal_evidence.contains(&evidence) {
+        task.anomalies.insert(TaskAnomaly::RepeatedTerminalEvidence);
+    }
+    if task.terminal_at.is_none() {
+        task.terminal_at = Some(event_at.to_owned());
     }
     if task
         .terminal_evidence
@@ -731,6 +758,53 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_terminal_marker_is_an_anomaly() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let input = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-complete.json"
+        ));
+        let first = item(input, 0);
+        let mut repeated = item(input, 100);
+        if let ReadItemOutcome::Decoded(record) = &mut repeated.outcome {
+            record.timestamp = "2026-10-03T10:03:00Z".to_owned();
+        }
+        let result = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![first, repeated]),
+        )
+        .unwrap();
+        let task = result.next_state.tasks.values().next().unwrap();
+        assert!(task
+            .anomalies
+            .contains(&TaskAnomaly::RepeatedTerminalEvidence));
+        assert_eq!(task.terminal_at.as_deref(), Some("2026-10-03T10:02:00Z"));
+    }
+
+    #[test]
+    fn start_after_terminal_is_not_used_as_the_task_start() {
+        let source = SourceIdentity::new("assembly-test-rollout", "generation-a").unwrap();
+        let completed = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-complete.json"
+        ));
+        let started = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/codex-rollout/v0.157.1/task-started.json"
+        ));
+        let result = assemble_batch(
+            &TelemetryState::default(),
+            &source,
+            &batch(vec![item(completed, 0), item(started, 100)]),
+        )
+        .unwrap();
+        let task = result.next_state.tasks.values().next().unwrap();
+        assert_eq!(task.started_at, None);
+        assert!(task.anomalies.contains(&TaskAnomaly::StartAfterTerminal));
+    }
+
+    #[test]
     fn normal_flow_detects_session_attributes_tokens_and_completes_task() {
         let (source, source_batch) = fixture_batch("session-task-flow.jsonl");
         let assembled = assemble_batch(&TelemetryState::default(), &source, &source_batch)
@@ -786,6 +860,10 @@ mod tests {
             .next()
             .expect("task state");
         assert_eq!(task.lifecycle, TaskLifecycle::Completed);
+        assert!(
+            task.started_at.is_some(),
+            "start timestamp should be retained"
+        );
         assert_eq!(
             task.configuration_consistency,
             ConfigurationConsistency::Consistent

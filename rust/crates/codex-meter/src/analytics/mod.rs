@@ -3,10 +3,11 @@
 mod process;
 mod request;
 mod result;
+mod workload_result;
 
 pub use process::{
     invoke_worker, invoke_worker_with_mode, ProcessLimits, PythonWorkerMode, WorkerInvocation,
-    ANALYTICS_PROCESS_PROTOCOL_VERSION,
+    WorkerOperation, ANALYTICS_PROCESS_PROTOCOL_VERSION,
 };
 pub use request::{
     utc_timestamp, AnalyticsRequest, AnalyticsRequestError, ConfigurationIdentity,
@@ -17,3 +18,4 @@ pub use result::{
     AnalyticsResult, Confidence, ManualMeterPositions, QuotaCapacityEstimate, ReasonCode,
     ResultError, ResultStatus,
 };
+pub use workload_result::{TaskSizeDecision, WorkloadResult};

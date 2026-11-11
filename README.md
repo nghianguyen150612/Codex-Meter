@@ -5,7 +5,9 @@ native Rust `codex-meter sync` command discovers supported local Codex rollout f
 privacy-filtered token and quota evidence in a per-user SQLite database. The `tokens`, `tasks`, `history`,
 `inspect`, and `quota` commands report that evidence through read-only native Rust queries. The
 existing `codex-meter estimate` command continues to read a supplied Codex Meter SQLite dataset
-and report empirical current-capacity estimates through the Python analytics pipeline.
+and report empirical current-capacity estimates through the Python analytics pipeline. The
+`codex-meter workload` command uses at least three qualified terminal P017 Observations with the
+existing P020 and P022 analytics pipeline; P039 task aggregates alone do not qualify.
 
 The initial distribution candidate is version `0.1.0`. It pairs a native Rust executable with the
 `codex-meter-analytics` wheel and a Python 3.11–3.13 environment; it is not a standalone binary.
@@ -99,3 +101,5 @@ wheel installation, installed-worker selection, and runtime compatibility covera
 - [Installation guide](docs/INSTALLATION.md)
 - [Release readiness](docs/RELEASE_READINESS.md)
 - [Roadmap completion audit](docs/ROADMAP_COMPLETION_AUDIT.md)
+- [Remaining-workload prediction](docs/REMAINING_WORKLOAD_PREDICTION.md)
+- [CLI analytics integration](docs/CLI_ANALYTICS_INTEGRATION.md)

@@ -18,6 +18,7 @@ from codex_meter.integration.worker import (
     LocalExecutionContext,
     WorkerError,
     execute_request,
+    execute_workload_request,
     parse_request,
 )
 
@@ -60,7 +61,7 @@ def _request(*, targets: list[str] | None = None, options: dict | None = None) -
     }
 
 
-def _create_database(path: Path) -> None:
+def _create_database(path: Path, *, observations: int = 2) -> None:
     connection = sqlite3.connect(path)
     connection.execute(
         "CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, "
@@ -73,7 +74,7 @@ def _create_database(path: Path) -> None:
             "INSERT INTO schema_migrations VALUES (?, ?, ?)", (version, name, checksum)
         )
     document = json.loads(OBSERVATION_FIXTURE.read_text(encoding="utf-8"))
-    for index in range(2):
+    for index in range(observations):
         row_document = json.loads(json.dumps(document))
         row_document["observation_id"] = f"worker-observation-{index}"
         row_document["task_id"] = f"worker-task-{index}"
@@ -541,3 +542,78 @@ def test_manual_position_for_unrequested_meter_is_rejected(tmp_path: Path) -> No
             ),
         )
     assert error.value.code == "unrequested_meter_position"
+
+
+@pytest.mark.parametrize("observations", [0, 1, 2, 3])
+def test_workload_worker_uses_qualified_p017_rows_and_p022_insufficiency(
+    tmp_path: Path, observations: int
+) -> None:
+    database = tmp_path / "synthetic.sqlite"
+    _create_database(database, observations=observations)
+    request = _request(targets=["five_hour", "weekly"])
+    context = LocalExecutionContext(
+        database_path=database,
+        generated_at=GENERATED_AT,
+        five_hour_used_percent=24.0,
+        weekly_used_percent=12.5,
+    )
+
+    document = json.loads(execute_workload_request(json.dumps(request).encode(), context))
+
+    assert document["schema_version"] == "1.0.0"
+    assert document["analysis_type"] == "remaining_workload_forecast"
+    assert document["request_id"] == request["request_id"]
+    assert document["capacity_result"]["analysis_type"] == "current_capacity_estimate"
+    distribution = document["task_size_distribution"]
+    assert distribution["accounting"]["candidate_observations"] == observations
+    assert distribution["accounting"]["eligible_observations"] == observations
+    if observations < 3:
+        assert distribution["status"] == "insufficient"
+        assert [distribution[f"p{percent}_raw_tokens"] for percent in (25, 50, 75)] == [
+            None,
+            None,
+            None,
+        ]
+        for item, capacity in zip(
+            document["meter_predictions"],
+            document["capacity_result"]["quota_capacity_estimates"],
+            strict=True,
+        ):
+            expected_status = (
+                "insufficient_task_history_and_capacity"
+                if capacity["confidence"] == "insufficient"
+                else "insufficient_task_history"
+            )
+            assert item["status"] == expected_status
+        assert all(item["light_task_count"] is None for item in document["meter_predictions"])
+    else:
+        assert distribution["status"] == "available"
+        assert [distribution[f"p{percent}_raw_tokens"] for percent in (25, 50, 75)] == [
+            14500.0,
+            14500.0,
+            14500.0,
+        ]
+        assert [item["meter_type"] for item in document["meter_predictions"]] == [
+            "five_hour",
+            "weekly",
+        ]
+        assert all(item["status"] == "available" for item in document["meter_predictions"])
+
+
+def test_estimate_worker_protocol_remains_default_and_workload_is_explicit(
+    tmp_path: Path,
+) -> None:
+    from codex_meter.integration.worker import _arguments
+
+    database = tmp_path / "synthetic.sqlite"
+    _create_database(database)
+    common = [
+        "--database",
+        str(database),
+        "--runtime-context-version",
+        "1.0.0",
+        "--generated-at",
+        GENERATED_AT,
+    ]
+    assert _arguments(common).operation == "estimate"
+    assert _arguments([*common, "--operation", "workload"]).operation == "workload"

@@ -54,6 +54,7 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
             generated_at: &arguments.generated_at,
             five_hour_used_percent: arguments.five_hour_used_percent,
             weekly_used_percent: arguments.weekly_used_percent,
+            operation: crate::analytics::WorkerOperation::Estimate,
         },
         &request_bytes,
         ProcessLimits::default(),
@@ -88,7 +89,7 @@ pub fn run(arguments: EstimateArguments) -> Result<String, CliError> {
     }
 }
 
-fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
+pub(super) fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
     }
@@ -97,7 +98,7 @@ fn absolute_database_path(path: &Path) -> Result<std::path::PathBuf, CliError> {
         .map_err(|_| cli_error("database_missing", "analytics database does not exist"))
 }
 
-fn validate_database_readable(path: &Path) -> Result<(), CliError> {
+pub(super) fn validate_database_readable(path: &Path) -> Result<(), CliError> {
     let metadata = std::fs::metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             cli_error("database_missing", "analytics database does not exist")
@@ -123,7 +124,7 @@ fn validate_database_readable(path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-fn validate_python_executable(executable: &OsStr) -> Result<(), CliError> {
+pub(super) fn validate_python_executable(executable: &OsStr) -> Result<(), CliError> {
     let configured = Path::new(executable);
     let has_directory = configured.is_absolute() || configured.components().count() > 1;
     let usable = if has_directory {

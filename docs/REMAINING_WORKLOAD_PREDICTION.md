@@ -207,3 +207,57 @@ P023 may assume:
 P023 will implement:
 
 **Historical metering-regime and quota-change detection, using defensible statistical evidence and explicit uncertainty.**
+
+## Native CLI integration (P041)
+
+`codex-meter workload` is the native entry point for this internal P022
+predictor. It takes an existing `AnalyticsRequest` v1 document for exact
+configuration, observation range, bounded row count, and target meters. The
+request continues to use `analysis_type: current_capacity_estimate`; the
+worker selects the separate, explicit `workload` operation. This preserves the
+closed request v1 and all existing `estimate` behavior.
+
+The worker opens the same checksummed P017 database read-only, loads one
+terminal Observation dataset selected by all five configuration dimensions,
+passes that exact dataset to the existing P020 capacity candidate and result
+functions, then passes the same dataset and validated P020 result to
+`predict_remaining_workload`. The P022 quantile and count calculations are not
+reimplemented. Five-hour and weekly capacity estimates remain separate.
+
+```sh
+codex-meter workload \
+  --database ~/.local/share/codex-meter/evidence.sqlite3 \
+  --request analytics-request.json \
+  --generated-at 2026-10-16T07:00:00Z \
+  --five-hour-used-percent 24 \
+  --weekly-used-percent 12.5
+```
+
+Meter positions are optional caller-supplied percentage points, manual and
+unverified. P020 requires a position only when that meter has enough valid
+capacity evidence to estimate a remaining capacity. The command never reads a
+current provider quota or contacts OpenAI.
+
+JSON mode emits the closed `WorkloadResult` v1 contract in
+`schemas/v1/workload-result.schema.json`. It includes the full validated P020
+result, request and generation identity, configuration values with provenance,
+an overall `succeeded` or `insufficient_evidence` result status, P022 method
+version, complete task decision accounting, per-row exclusion
+reasons, token quality, separate meter predictions, confidence, and typed
+insufficiency states. Unavailable quantiles, remaining capacity, and counts
+are JSON `null`. Human output reports configuration provenance, sample counts,
+exclusion reasons, quantiles, independent meter results, confidence, and the
+empirical unofficial warning. It does not report an evidence-freshness age:
+P022 defines no freshness policy and P041 adds no threshold.
+
+The worker operation uses the existing bounded Rust/Python process
+supervision, installed or source runtime selection, minimal child environment,
+fixed success marker, sanitized errors, and read-only SQLite API. `estimate`
+remains the default worker operation. Unknown worker operations are rejected.
+
+P039's per-task usage rows are a different evidence model. They do not prove a
+terminal P017 lifecycle, A/B/C token quality, complete Observation boundaries,
+exact five-dimension configuration, P020-valid capacity evidence, or an
+App Server turn association. Therefore the workload CLI does not convert or
+consume P039 task rows. A database with no eligible terminal P017 Observations
+correctly returns P022 insufficiency, even if P039 task usage is present.

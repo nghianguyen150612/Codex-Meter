@@ -149,3 +149,29 @@ P028 preserves the supported command and AnalyticsRequest/Result v1 contracts wh
 worker resolution, interpreter environment, process cleanup, error privacy, result scope, and manual
 meter arithmetic. See [CLI security hardening](CLI_SECURITY_HARDENING.md) for the threat model,
 enforced guarantees, known limits, and P029 handoff.
+
+## Remaining-workload command (P041)
+
+The `workload` command uses the same AnalyticsRequest v1 input and process
+limits, with an explicit versioned worker operation. For example:
+
+```sh
+codex-meter workload --database ./codex-meter.db \
+  --request ./analytics-request.json \
+  --generated-at 2026-10-16T07:00:00Z \
+  --five-hour-used-percent 24 --weekly-used-percent 12.5 --json
+```
+
+The request selects exact plan, model, reasoning level, speed mode, Codex
+version, time range, target meters, and row bound. The worker uses the
+checksummed P017 terminal Observation dataset, derives P020 with the existing
+estimator, then invokes the existing P022 predictor on that same dataset.
+P039 task attribution is not promoted into qualified P022 history. The
+versioned output schema is `schemas/v1/workload-result.schema.json`; null
+quantiles and counts mean evidence is insufficient, not zero.
+
+The command is read-only and local. Current meter positions, when supplied,
+are manual and unverified. It launches no App Server, creates no turns, and
+contacts no provider. See [remaining-workload prediction](REMAINING_WORKLOAD_PREDICTION.md)
+for eligibility, quantiles, confidence, limitations, and the P039/P017 evidence
+boundary.

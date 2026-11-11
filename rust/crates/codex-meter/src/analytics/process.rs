@@ -28,6 +28,12 @@ pub enum PythonWorkerMode {
     Installed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerOperation {
+    Estimate,
+    Workload,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct WorkerInvocation<'a> {
     pub python: &'a OsStr,
@@ -36,6 +42,7 @@ pub struct WorkerInvocation<'a> {
     pub generated_at: &'a str,
     pub five_hour_used_percent: Option<f64>,
     pub weekly_used_percent: Option<f64>,
+    pub operation: WorkerOperation,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +99,7 @@ pub fn invoke_worker(
             generated_at,
             five_hour_used_percent,
             weekly_used_percent,
+            operation: WorkerOperation::Estimate,
         },
         request,
         limits,
@@ -130,6 +138,9 @@ pub fn invoke_worker_with_mode(
         .arg(ANALYTICS_PROCESS_PROTOCOL_VERSION)
         .arg("--generated-at")
         .arg(invocation.generated_at);
+    if invocation.operation == WorkerOperation::Workload {
+        command.arg("--operation").arg("workload");
+    }
     if let Some(value) = invocation.five_hour_used_percent {
         command
             .arg("--five-hour-used-percent")
@@ -965,6 +976,14 @@ def distribution_roots():
             "codex_meter/estimation/candidates.py",
             "codex_meter/estimation/result.py",
             "codex_meter/estimation/robust.py",
+            "codex_meter/analysis/__init__.py",
+            "codex_meter/analysis/benchmark.py",
+            "codex_meter/analysis/benchmark_models.py",
+            "codex_meter/analysis/historical.py",
+            "codex_meter/analysis/models.py",
+            "codex_meter/analysis/regime.py",
+            "codex_meter/analysis/regime_models.py",
+            "codex_meter/analysis/workload.py",
         }
         if not required.issubset(file_names):
             fail_resolution()
@@ -1304,6 +1323,14 @@ mod tests {
             "codex_meter/estimation/candidates.py",
             "codex_meter/estimation/result.py",
             "codex_meter/estimation/robust.py",
+            "codex_meter/analysis/__init__.py",
+            "codex_meter/analysis/benchmark.py",
+            "codex_meter/analysis/benchmark_models.py",
+            "codex_meter/analysis/historical.py",
+            "codex_meter/analysis/models.py",
+            "codex_meter/analysis/regime.py",
+            "codex_meter/analysis/regime_models.py",
+            "codex_meter/analysis/workload.py",
         ];
         let mut record = required_files
             .iter()

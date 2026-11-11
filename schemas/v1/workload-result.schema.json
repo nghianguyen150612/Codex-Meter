@@ -1,0 +1,445 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workload result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "analysis_type",
+    "result_status",
+    "request_id",
+    "generated_at",
+    "dataset_configuration",
+    "workload_method_version",
+    "capacity_estimator_method_version",
+    "capacity_result",
+    "task_size_distribution",
+    "meter_predictions",
+    "capacity_request_id",
+    "capacity_generated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "analysis_type": {
+      "const": "remaining_workload_forecast"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/utcTimestamp"
+    },
+    "dataset_configuration": {
+      "$ref": "common.schema.json#/$defs/configurationIdentity"
+    },
+    "workload_method_version": {
+      "const": "1.0.0"
+    },
+    "capacity_estimator_method_version": {
+      "const": "1.0.0"
+    },
+    "capacity_result": {
+      "$ref": "analytics-result.schema.json"
+    },
+    "task_size_distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method_version",
+        "configuration",
+        "status",
+        "p25_raw_tokens",
+        "p50_raw_tokens",
+        "p75_raw_tokens",
+        "accounting",
+        "decisions"
+      ],
+      "properties": {
+        "method_version": {
+          "const": "1.0.0"
+        },
+        "configuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "plan",
+            "model",
+            "reasoning_level",
+            "speed_mode",
+            "codex_version"
+          ],
+          "properties": {
+            "plan": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "reasoning_level": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "speed_mode": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "codex_version": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "status": {
+          "enum": [
+            "available",
+            "insufficient"
+          ]
+        },
+        "p25_raw_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "p50_raw_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "p75_raw_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "accounting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidate_observations",
+            "eligible_observations",
+            "excluded_observations",
+            "c_quality_observations"
+          ],
+          "properties": {
+            "candidate_observations": {
+              "$ref": "common.schema.json#/$defs/safeInteger"
+            },
+            "eligible_observations": {
+              "$ref": "common.schema.json#/$defs/safeInteger"
+            },
+            "excluded_observations": {
+              "$ref": "common.schema.json#/$defs/safeInteger"
+            },
+            "c_quality_observations": {
+              "$ref": "common.schema.json#/$defs/safeInteger"
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "observation_id",
+                  "configuration",
+                  "raw_total",
+                  "token_quality"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "sample"
+                  },
+                  "observation_id": {
+                    "$ref": "common.schema.json#/$defs/opaqueId"
+                  },
+                  "configuration": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "plan",
+                      "model",
+                      "reasoning_level",
+                      "speed_mode",
+                      "codex_version"
+                    ],
+                    "properties": {
+                      "plan": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "model": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "reasoning_level": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "speed_mode": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "codex_version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1,
+                        "maxLength": 128
+                      }
+                    }
+                  },
+                  "raw_total": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "token_quality": {
+                    "enum": [
+                      "A",
+                      "B",
+                      "C"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "observation_id",
+                  "reasons"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "exclusion"
+                  },
+                  "observation_id": {
+                    "$ref": "common.schema.json#/$defs/opaqueId"
+                  },
+                  "reasons": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "token_not_valid",
+                        "token_quality_ineligible",
+                        "raw_total_unavailable",
+                        "zero_raw_total"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "meter_predictions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "meter_type",
+          "configuration",
+          "capacity_confidence",
+          "capacity_provider_authority",
+          "capacity_reason_codes",
+          "estimated_remaining_raw_tokens",
+          "light_task_count",
+          "normal_task_count",
+          "heavy_task_count",
+          "status",
+          "insufficiency_reasons"
+        ],
+        "properties": {
+          "meter_type": {
+            "$ref": "common.schema.json#/$defs/quotaMeterType"
+          },
+          "configuration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "plan",
+              "model",
+              "reasoning_level",
+              "speed_mode",
+              "codex_version"
+            ],
+            "properties": {
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "reasoning_level": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "speed_mode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "codex_version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          "capacity_confidence": {
+            "$ref": "common.schema.json#/$defs/confidence"
+          },
+          "capacity_provider_authority": {
+            "const": "codex_meter_empirical_estimate"
+          },
+          "capacity_reason_codes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "common.schema.json#/$defs/reasonCode"
+            }
+          },
+          "estimated_remaining_raw_tokens": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "light_task_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "normal_task_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "heavy_task_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "enum": [
+              "available",
+              "insufficient_task_history",
+              "insufficient_capacity",
+              "insufficient_task_history_and_capacity"
+            ]
+          },
+          "insufficiency_reasons": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "task_history_insufficient",
+                "capacity_insufficient"
+              ]
+            }
+          }
+        }
+      },
+      "maxItems": 2
+    },
+    "capacity_request_id": {
+      "$ref": "common.schema.json#/$defs/opaqueId"
+    },
+    "capacity_generated_at": {
+      "$ref": "common.schema.json#/$defs/utcTimestamp"
+    },
+    "result_status": {
+      "enum": [
+        "succeeded",
+        "insufficient_evidence"
+      ]
+    }
+  }
+}

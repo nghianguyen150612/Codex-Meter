@@ -1,0 +1,210 @@
+{
+  "schema_version": "1.0.0",
+  "analysis_type": "remaining_workload_forecast",
+  "result_status": "insufficient_evidence",
+  "request_id": "worker-test-1",
+  "generated_at": "2026-10-16T07:00:00Z",
+  "dataset_configuration": {
+    "plan": {
+      "availability": "available",
+      "value": "plus",
+      "provenance": "observed"
+    },
+    "model": {
+      "availability": "available",
+      "value": "gpt-5.6-sol",
+      "provenance": "observed"
+    },
+    "reasoning_level": {
+      "availability": "available",
+      "value": "high",
+      "provenance": "observed"
+    },
+    "speed_mode": {
+      "availability": "available",
+      "value": "standard",
+      "provenance": "derived"
+    },
+    "codex_version": {
+      "availability": "unavailable",
+      "provenance": "unavailable"
+    }
+  },
+  "workload_method_version": "1.0.0",
+  "capacity_estimator_method_version": "1.0.0",
+  "capacity_result": {
+    "schema_version": "1.0.0",
+    "request_id": "worker-test-1",
+    "analysis_type": "current_capacity_estimate",
+    "result_status": "succeeded",
+    "dataset_configuration": {
+      "plan": {
+        "availability": "available",
+        "value": "plus",
+        "provenance": "observed"
+      },
+      "model": {
+        "availability": "available",
+        "value": "gpt-5.6-sol",
+        "provenance": "observed"
+      },
+      "reasoning_level": {
+        "availability": "available",
+        "value": "high",
+        "provenance": "observed"
+      },
+      "speed_mode": {
+        "availability": "available",
+        "value": "standard",
+        "provenance": "derived"
+      },
+      "codex_version": {
+        "availability": "unavailable",
+        "provenance": "unavailable"
+      }
+    },
+    "generated_at": "2026-10-16T07:00:00Z",
+    "estimator_method_version": "1.0.0",
+    "quota_capacity_estimates": [
+      {
+        "meter_type": "five_hour",
+        "metric_kind": "estimated_raw_tokens",
+        "provider_authority": "codex_meter_empirical_estimate",
+        "confidence": "low",
+        "sample_accounting": {
+          "candidate_observations": 2,
+          "valid_observations": 2,
+          "excluded_observations": 0,
+          "outliers_removed": 0,
+          "used_observations": 2
+        },
+        "reason_codes": [],
+        "estimated_full_capacity_raw_tokens": 362500.0,
+        "estimated_used_raw_tokens": 87000.0,
+        "estimated_remaining_raw_tokens": 275500.0,
+        "capacity_percentiles_raw_tokens": {
+          "p25": 362500.0,
+          "p50": 362500.0,
+          "p75": 362500.0
+        }
+      },
+      {
+        "meter_type": "weekly",
+        "metric_kind": "estimated_raw_tokens",
+        "provider_authority": "codex_meter_empirical_estimate",
+        "confidence": "low",
+        "sample_accounting": {
+          "candidate_observations": 2,
+          "valid_observations": 2,
+          "excluded_observations": 0,
+          "outliers_removed": 0,
+          "used_observations": 2
+        },
+        "reason_codes": [],
+        "estimated_full_capacity_raw_tokens": 1450000.0,
+        "estimated_used_raw_tokens": 181250.0,
+        "estimated_remaining_raw_tokens": 1268750.0,
+        "capacity_percentiles_raw_tokens": {
+          "p25": 1450000.0,
+          "p50": 1450000.0,
+          "p75": 1450000.0
+        }
+      }
+    ],
+    "warnings": []
+  },
+  "task_size_distribution": {
+    "method_version": "1.0.0",
+    "configuration": {
+      "plan": "plus",
+      "model": "gpt-5.6-sol",
+      "reasoning_level": "high",
+      "speed_mode": "standard",
+      "codex_version": null
+    },
+    "status": "insufficient",
+    "p25_raw_tokens": null,
+    "p50_raw_tokens": null,
+    "p75_raw_tokens": null,
+    "accounting": {
+      "candidate_observations": 2,
+      "eligible_observations": 2,
+      "excluded_observations": 0,
+      "c_quality_observations": 0
+    },
+    "decisions": [
+      {
+        "kind": "sample",
+        "observation_id": "worker-observation-0",
+        "configuration": {
+          "plan": "plus",
+          "model": "gpt-5.6-sol",
+          "reasoning_level": "high",
+          "speed_mode": "standard",
+          "codex_version": null
+        },
+        "raw_total": 14500,
+        "token_quality": "B"
+      },
+      {
+        "kind": "sample",
+        "observation_id": "worker-observation-1",
+        "configuration": {
+          "plan": "plus",
+          "model": "gpt-5.6-sol",
+          "reasoning_level": "high",
+          "speed_mode": "standard",
+          "codex_version": null
+        },
+        "raw_total": 14500,
+        "token_quality": "B"
+      }
+    ]
+  },
+  "meter_predictions": [
+    {
+      "meter_type": "five_hour",
+      "configuration": {
+        "plan": "plus",
+        "model": "gpt-5.6-sol",
+        "reasoning_level": "high",
+        "speed_mode": "standard",
+        "codex_version": null
+      },
+      "capacity_confidence": "low",
+      "capacity_provider_authority": "codex_meter_empirical_estimate",
+      "capacity_reason_codes": [],
+      "estimated_remaining_raw_tokens": 275500.0,
+      "light_task_count": null,
+      "normal_task_count": null,
+      "heavy_task_count": null,
+      "status": "insufficient_task_history",
+      "insufficiency_reasons": [
+        "task_history_insufficient"
+      ]
+    },
+    {
+      "meter_type": "weekly",
+      "configuration": {
+        "plan": "plus",
+        "model": "gpt-5.6-sol",
+        "reasoning_level": "high",
+        "speed_mode": "standard",
+        "codex_version": null
+      },
+      "capacity_confidence": "low",
+      "capacity_provider_authority": "codex_meter_empirical_estimate",
+      "capacity_reason_codes": [],
+      "estimated_remaining_raw_tokens": 1268750.0,
+      "light_task_count": null,
+      "normal_task_count": null,
+      "heavy_task_count": null,
+      "status": "insufficient_task_history",
+      "insufficiency_reasons": [
+        "task_history_insufficient"
+      ]
+    }
+  ],
+  "capacity_request_id": "worker-test-1",
+  "capacity_generated_at": "2026-10-16T07:00:00Z"
+}

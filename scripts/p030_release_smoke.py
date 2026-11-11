@@ -122,6 +122,14 @@ def main() -> int:
             raise AssertionError(
                 "estimate help must document installed worker selection"
             )
+        workload_help = run([str(binary), "workload", "--help"], cwd=base)
+        if (
+            b"WorkloadResult v1 JSON" not in workload_help
+            or b"P022" not in workload_help
+        ):
+            raise AssertionError(
+                "workload help must document its result contract and P022 reuse"
+            )
 
         environment = base / "fresh Python environment"
         venv.EnvBuilder(with_pip=True).create(environment)
@@ -197,6 +205,38 @@ def main() -> int:
         if replay.returncode or replay.stdout != first.stdout:
             raise AssertionError("installed candidate output must be deterministic")
 
+        workload_command = p029.cli_command(
+            binary, python, database, request, operation="workload"
+        )
+        workload_result = subprocess.run(
+            workload_command,
+            cwd=caller,
+            env=cli_environment,
+            check=False,
+            capture_output=True,
+            timeout=90,
+        )
+        if workload_result.returncode:
+            raise AssertionError(
+                "installed candidate workload operation failed: "
+                + workload_result.stderr.decode("utf-8", errors="replace")
+            )
+        workload = json.loads(workload_result.stdout)
+        if (
+            workload.get("schema_version") != "1.0.0"
+            or workload.get("analysis_type") != "remaining_workload_forecast"
+            or workload.get("result_status") != "insufficient_evidence"
+            or workload["task_size_distribution"].get("status") != "insufficient"
+            or workload["task_size_distribution"].get("p25_raw_tokens") is not None
+            or any(
+                item.get("light_task_count") is not None
+                for item in workload["meter_predictions"]
+            )
+        ):
+            raise AssertionError(
+                "installed candidate fabricated or changed insufficient workload evidence"
+            )
+
         insufficient_request = base / "insufficient request.json"
         p029.write_request(insufficient_request, "p030-insufficient", insufficient=True)
         insufficient = subprocess.run(
@@ -248,8 +288,8 @@ def main() -> int:
 
     print(
         f"P030 extracted candidate smoke passed: {verified['target_triple']}, "
-        f"source {verified['source_commit_sha']}, installed worker, sufficient and "
-        "insufficient estimates, deterministic JSON, version compatibility, and read-only SQLite"
+        f"source {verified['source_commit_sha']}, installed estimate and workload workers, "
+        "sufficient and insufficient states, deterministic JSON, version compatibility, and read-only SQLite"
     )
     return 0
 

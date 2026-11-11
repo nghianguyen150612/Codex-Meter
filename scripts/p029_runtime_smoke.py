@@ -102,6 +102,7 @@ def validate_wheel(wheel: Path) -> None:
             "codex_meter/history/sqlite.py",
             "codex_meter/estimation/result.py",
             "codex_meter/analysis/historical.py",
+            "codex_meter/analysis/workload.py",
         }
         if not required <= entries:
             raise AssertionError("wheel is missing a worker or analytics module")
@@ -263,11 +264,12 @@ def cli_command(
     request: Path,
     *,
     mode: str = "installed",
+    operation: str = "estimate",
     extra: tuple[str, ...] = ("--five-hour-used-percent", "24"),
 ) -> list[str]:
     return [
         str(binary),
-        "estimate",
+        operation,
         "--database",
         str(database),
         "--request",
@@ -402,6 +404,38 @@ def main() -> None:
         ):
             raise AssertionError(
                 "installed worker returned an unexpected AnalyticsResult v1"
+            )
+        workload_command = cli_command(
+            relocated_binary,
+            python,
+            database,
+            request,
+            operation="workload",
+        )
+        workload_output = invoke(
+            workload_command, cwd=caller_directory, env=shadow_environment
+        )
+        if workload_output.returncode:
+            raise AssertionError(
+                "installed worker workload operation failed: "
+                + workload_output.stderr.decode("utf-8", errors="replace")
+            )
+        workload = json.loads(workload_output.stdout)
+        distribution = workload["task_size_distribution"]
+        if (
+            workload["schema_version"] != "1.0.0"
+            or workload["analysis_type"] != "remaining_workload_forecast"
+            or workload["result_status"] != "insufficient_evidence"
+            or distribution["status"] != "insufficient"
+            or distribution["accounting"]["eligible_observations"] != 2
+            or distribution["p25_raw_tokens"] is not None
+            or any(
+                prediction["light_task_count"] is not None
+                for prediction in workload["meter_predictions"]
+            )
+        ):
+            raise AssertionError(
+                "installed worker returned a fabricated or incompatible workload result"
             )
         estimate = result["quota_capacity_estimates"][0]
         full_capacity = estimate["estimated_full_capacity_raw_tokens"]
@@ -667,7 +701,8 @@ def main() -> None:
                         )
 
     print(
-        "P029 runtime smoke passed: reproducible wheel, isolated installation, relocation, "
+        "P029 runtime smoke passed: reproducible wheel, isolated installation, estimate and "
+        "workload operations, relocation, "
         "source mode, independent cwd, paths, determinism, concurrency, and read-only SQLite"
     )
 

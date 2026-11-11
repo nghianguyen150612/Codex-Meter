@@ -20,6 +20,7 @@ FIXTURES = {
     "analytics-estimate-request.json": "analytics-request.schema.json",
     "analytics-result-insufficient.json": "analytics-result.schema.json",
     "analytics-result-success.json": "analytics-result.schema.json",
+    "workload-result-insufficient-history.json": "workload-result.schema.json",
     "normalized-token-event.json": "normalized-event.schema.json",
     "normalized-token-event-codex-rollout.json": "normalized-event.schema.json",
     "normalized-session-detected-codex-rollout.json": "normalized-event.schema.json",
@@ -68,7 +69,7 @@ def main() -> int:
     expected_schemas = set(schemas)
     mapped_schemas = set(FIXTURES.values())
     if expected_schemas != mapped_schemas | {"common.schema.json"}:
-        failures.append("fixture inventory does not cover exactly the six v1 schemas")
+        failures.append("fixture inventory does not cover exactly the seven v1 schemas")
 
     for name, schema in schemas.items():
         try:

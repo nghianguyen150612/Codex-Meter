@@ -51,6 +51,28 @@ fn synthetic_database(path: &std::path::Path) {
     drop(store);
 }
 
+#[cfg(not(feature = "release-artifact"))]
+fn synthetic_database_with_three_tasks(path: &std::path::Path) {
+    synthetic_database(path);
+    let mut store = SqliteStore::open(path).expect("synthetic database should reopen");
+    let mut document: Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/contracts/v1/observation-codex-finalized.json"
+    ))
+    .expect("published synthetic Observation fixture should parse");
+    document["observation_id"] = json!("p041-observation-2");
+    document["task_id"] = json!("p041-task-2");
+    document["session_id"] = json!("p041-session-2");
+    document["timing"]["started_at"] = json!("2026-10-01T04:00:00Z");
+    document["timing"]["ended_at"] = json!("2026-10-01T04:15:00Z");
+    document["timing"]["finalized_at"] = json!("2026-10-01T04:20:00Z");
+    document["token_evidence"]["raw_token_counters"]["raw_total"]["value"] = json!(18_000);
+    let observation: NormalizedObservation = serde_json::from_value(document)
+        .expect("synthetic Observation should match the Rust-owned model");
+    store
+        .save_observation(&observation, None)
+        .expect("third synthetic Observation should be stored");
+}
+
 fn request_json(observed_from: Option<&str>, model: &str) -> String {
     let mut selector = json!({
         "configuration": {
@@ -92,6 +114,120 @@ fn invoke(
         .args(extra)
         .output()
         .expect("CLI process should start")
+}
+
+#[cfg(not(feature = "release-artifact"))]
+fn invoke_workload(
+    database: &std::path::Path,
+    request: &std::path::Path,
+    extra: &[&str],
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+        .arg("workload")
+        .arg("--database")
+        .arg(database)
+        .arg("--request")
+        .arg(request)
+        .arg("--generated-at")
+        .arg(GENERATED_AT)
+        .args(extra)
+        .output()
+        .expect("CLI process should start")
+}
+
+#[test]
+#[cfg(not(feature = "release-artifact"))]
+fn workload_cli_reuses_p020_and_p022_with_insufficient_history_state() {
+    let database = temporary_path("workload data.sqlite");
+    let request = temporary_path("workload request.json");
+    synthetic_database(&database);
+    fs::write(&request, request_json(None, "gpt-5.6-sol")).expect("request should be created");
+    let before = Sha256::digest(fs::read(&database).expect("database should exist"));
+
+    let output = invoke_workload(
+        &database,
+        &request,
+        &["--five-hour-used-percent", "24", "--json"],
+    );
+    assert!(
+        output.status.success(),
+        "workload CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("one versioned JSON result");
+    assert_eq!(result["schema_version"], "1.0.0");
+    assert_eq!(result["analysis_type"], "remaining_workload_forecast");
+    assert_eq!(result["result_status"], "insufficient_evidence");
+    assert_eq!(result["workload_method_version"], "1.0.0");
+    assert_eq!(result["capacity_estimator_method_version"], "1.0.0");
+    assert_eq!(result["task_size_distribution"]["status"], "insufficient");
+    assert_eq!(
+        result["task_size_distribution"]["accounting"]["eligible_observations"],
+        2
+    );
+    assert!(result["task_size_distribution"]["p25_raw_tokens"].is_null());
+    assert_eq!(
+        result["meter_predictions"][0]["status"],
+        "insufficient_task_history"
+    );
+    assert!(result["meter_predictions"][0]["light_task_count"].is_null());
+
+    let human = invoke_workload(&database, &request, &["--five-hour-used-percent", "24"]);
+    assert!(human.status.success());
+    let report = String::from_utf8(human.stdout).unwrap();
+    assert!(report.contains("Historical task sizes"));
+    assert!(report.contains("insufficient task history"));
+    assert!(report.contains("empirical and unofficial"));
+    assert!(!report.contains(database.to_string_lossy().as_ref()));
+    assert_eq!(
+        before.as_slice(),
+        Sha256::digest(fs::read(&database).unwrap()).as_slice()
+    );
+    let _ = fs::remove_file(database);
+    let _ = fs::remove_file(request);
+}
+
+#[test]
+#[cfg(not(feature = "release-artifact"))]
+fn workload_cli_emits_validated_quantiles_and_whole_task_counts() {
+    let database = temporary_path("workload sufficient.sqlite");
+    let request = temporary_path("workload sufficient request.json");
+    synthetic_database_with_three_tasks(&database);
+    fs::write(&request, request_json(None, "gpt-5.6-sol")).expect("request should be created");
+    let output = invoke_workload(
+        &database,
+        &request,
+        &["--five-hour-used-percent", "24", "--json"],
+    );
+    assert!(
+        output.status.success(),
+        "workload CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("one valid result");
+    let distribution = &result["task_size_distribution"];
+    assert_eq!(distribution["status"], "available");
+    assert_eq!(distribution["p25_raw_tokens"], 15_250.0);
+    assert_eq!(distribution["p50_raw_tokens"], 16_000.0);
+    assert_eq!(distribution["p75_raw_tokens"], 17_000.0);
+    let capacity = result["capacity_result"]["quota_capacity_estimates"][0]
+        ["estimated_remaining_raw_tokens"]
+        .as_f64()
+        .unwrap();
+    let prediction = &result["meter_predictions"][0];
+    assert_eq!(prediction["status"], "available");
+    for (quantile, count) in [
+        (15_250.0, "light_task_count"),
+        (16_000.0, "normal_task_count"),
+        (17_000.0, "heavy_task_count"),
+    ] {
+        assert_eq!(
+            prediction[count].as_u64().unwrap(),
+            (capacity / quantile).floor() as u64
+        );
+    }
+    let _ = fs::remove_file(database);
+    let _ = fs::remove_file(request);
 }
 
 #[test]

@@ -171,3 +171,10 @@ P029 may assume:
 P029 focuses on:
 
 **Cross-platform resilience, installation/runtime compatibility, and operational hardening.**
+
+P041 adds `codex-meter workload` as an explicit worker operation over the same
+bounded process protocol. It reuses AnalyticsRequest v1 without changing its
+schema or default operation, validates a separate WorkloadResult v1 contract
+in Rust, and invokes only the read-only P017 loader, P020 estimator, and P022
+predictor. The result contains only validated aggregate fields and opaque
+Observation IDs. P039 usage aggregates are not mapped into P022 evidence.

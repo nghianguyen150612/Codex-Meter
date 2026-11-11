@@ -1,4 +1,4 @@
-"""Narrow stdin/stdout worker for the Rust current-capacity CLI."""
+"""Narrow stdin/stdout worker for Rust's local capacity and workload CLIs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from codex_meter.analysis import predict_remaining_workload
 from codex_meter.estimation import (
     ConfigurationProvenance,
     CurrentCapacityResultContext,
@@ -56,6 +57,7 @@ _REQUEST_FIELDS = {
 _SAFE_DIAGNOSTICS = {
     "invalid_request": "Python worker rejected the analytics request",
     "unsupported_analysis_type": "only current_capacity_estimate is supported",
+    "unsupported_operation": "analytics worker operation is not supported",
     "unsupported_estimator_option": "requested estimator option is not supported",
     "invalid_manual_meter_percentage": "manual meter percentage is invalid",
     "unrequested_meter_position": "manual meter position targets an unrequested meter",
@@ -70,6 +72,7 @@ _SAFE_DIAGNOSTICS = {
         "a current meter percentage is required for sufficient historical evidence"
     ),
     "analytics_failed": "Python capacity analysis failed",
+    "workload_failed": "Python workload analysis failed",
 }
 
 
@@ -268,10 +271,12 @@ def _configuration_key(identity: ResultConfigurationIdentity) -> ConfigurationKe
     return identity.configuration_key
 
 
-def execute_request(raw: bytes, context: LocalExecutionContext) -> str:
-    """Run the P017/P018/P019/P020 pipeline and return one AnalyticsResult v1 JSON string."""
-
-    request, identity = parse_request(raw)
+def _dataset_and_capacity(
+    request: dict[str, Any],
+    identity: ResultConfigurationIdentity,
+    context: LocalExecutionContext,
+) -> tuple[Any, Any]:
+    """Load one qualified P017 dataset and derive its P020 capacity result."""
     positions = _validate_context(context)
     targets = tuple(QuotaMeterType(value) for value in request["target_quota_windows"])
     if not set(positions) <= set(targets):
@@ -313,7 +318,7 @@ def execute_request(raw: bytes, context: LocalExecutionContext) -> str:
 
     try:
         candidate_sets = {meter: derive_capacity_candidates(dataset, meter) for meter in targets}
-        result = build_current_capacity_result(
+        capacity = build_current_capacity_result(
             context=CurrentCapacityResultContext(
                 request_id=request["request_id"],
                 dataset_configuration=identity,
@@ -334,7 +339,112 @@ def execute_request(raw: bytes, context: LocalExecutionContext) -> str:
         raise WorkerError(
             "analytics_failed", "the empirical capacity estimate could not be finalized"
         ) from exc
+    return dataset, capacity
+
+
+def execute_request(raw: bytes, context: LocalExecutionContext) -> str:
+    """Run the P017/P020 pipeline and return one AnalyticsResult v1 JSON string."""
+
+    request, identity = parse_request(raw)
+    _, result = _dataset_and_capacity(request, identity, context)
     return result.to_json()
+
+
+def _configuration_key_json(configuration: ConfigurationKey) -> dict[str, str | None]:
+    return {
+        "plan": configuration.plan,
+        "model": configuration.model,
+        "reasoning_level": configuration.reasoning_level,
+        "speed_mode": configuration.speed_mode,
+        "codex_version": configuration.codex_version,
+    }
+
+
+def _distribution_json(distribution: Any) -> dict[str, Any]:
+    decisions: list[dict[str, Any]] = []
+    for decision in distribution.decisions:
+        if hasattr(decision, "raw_total"):
+            decisions.append(
+                {
+                    "kind": "sample",
+                    "observation_id": decision.observation_id,
+                    "configuration": _configuration_key_json(decision.configuration),
+                    "raw_total": decision.raw_total,
+                    "token_quality": decision.token_quality.value,
+                }
+            )
+        else:
+            decisions.append(
+                {
+                    "kind": "exclusion",
+                    "observation_id": decision.observation_id,
+                    "reasons": [reason.value for reason in decision.reasons],
+                }
+            )
+    return {
+        "method_version": distribution.method_version,
+        "configuration": _configuration_key_json(distribution.configuration),
+        "status": distribution.status.value,
+        "p25_raw_tokens": distribution.p25_raw_tokens,
+        "p50_raw_tokens": distribution.p50_raw_tokens,
+        "p75_raw_tokens": distribution.p75_raw_tokens,
+        "accounting": {
+            "candidate_observations": distribution.accounting.candidate_observations,
+            "eligible_observations": distribution.accounting.eligible_observations,
+            "excluded_observations": distribution.accounting.excluded_observations,
+            "c_quality_observations": distribution.c_quality_observations,
+        },
+        "decisions": decisions,
+    }
+
+
+def execute_workload_request(raw: bytes, context: LocalExecutionContext) -> str:
+    """Run P017, P020 and the existing P022 predictor in one worker operation."""
+    from codex_meter.analysis import WorkloadAnalysisError
+
+    request, identity = parse_request(raw)
+    dataset, capacity = _dataset_and_capacity(request, identity, context)
+    try:
+        prediction = predict_remaining_workload(dataset=dataset, capacity_result=capacity)
+    except WorkloadAnalysisError as exc:
+        raise WorkerError(
+            "workload_failed", "P022 rejected the qualified workload evidence"
+        ) from exc
+    body = {
+        "schema_version": "1.0.0",
+        "analysis_type": "remaining_workload_forecast",
+        "result_status": (
+            "succeeded"
+            if any(item.status.value == "available" for item in prediction.meter_predictions)
+            else "insufficient_evidence"
+        ),
+        "request_id": request["request_id"],
+        "generated_at": context.generated_at,
+        "dataset_configuration": capacity.dataset_configuration.to_dict(),
+        "workload_method_version": prediction.method_version,
+        "capacity_estimator_method_version": prediction.capacity_estimator_method_version,
+        "capacity_result": capacity.to_dict(),
+        "task_size_distribution": _distribution_json(prediction.task_size_distribution),
+        "meter_predictions": [
+            {
+                "meter_type": item.meter_type.value,
+                "configuration": _configuration_key_json(item.configuration),
+                "capacity_confidence": item.capacity_confidence.value,
+                "capacity_provider_authority": item.capacity_provider_authority,
+                "capacity_reason_codes": [reason.value for reason in item.capacity_reason_codes],
+                "estimated_remaining_raw_tokens": item.estimated_remaining_raw_tokens,
+                "light_task_count": item.light_task_count,
+                "normal_task_count": item.normal_task_count,
+                "heavy_task_count": item.heavy_task_count,
+                "status": item.status.value,
+                "insufficiency_reasons": [reason.value for reason in item.insufficiency_reasons],
+            }
+            for item in prediction.meter_predictions
+        ],
+        "capacity_request_id": prediction.capacity_request_id,
+        "capacity_generated_at": prediction.capacity_generated_at,
+    }
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 def _arguments(argv: list[str] | None) -> argparse.Namespace:
@@ -344,6 +454,7 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--generated-at", required=True)
     parser.add_argument("--five-hour-used-percent", type=float)
     parser.add_argument("--weekly-used-percent", type=float)
+    parser.add_argument("--operation", choices=("estimate", "workload"), default="estimate")
     return parser.parse_args(argv)
 
 
@@ -358,7 +469,11 @@ def main(argv: list[str] | None = None) -> int:
             protocol_version=arguments.runtime_context_version,
         )
         raw = sys.stdin.buffer.read(MAXIMUM_REQUEST_BYTES + 1)
-        output = execute_request(raw, context)
+        output = (
+            execute_workload_request(raw, context)
+            if arguments.operation == "workload"
+            else execute_request(raw, context)
+        )
     except WorkerError as exc:
         message = _SAFE_DIAGNOSTICS.get(exc.code)
         if message is None:

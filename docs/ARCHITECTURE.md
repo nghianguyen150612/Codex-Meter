@@ -97,6 +97,16 @@ A SQLite progress hook cancels long task queries on worker shutdown. Result deli
 shutdown when backpressured, so queued task results cannot indefinitely block worker teardown.
 Source counters and their coverage are formatted directly; rendering never reconstructs totals.
 
+### Remaining-workload CLI (unreleased P041)
+
+`codex-meter workload` selects the explicit workload operation on the existing bounded Python
+worker. The worker loads one read-only P017 `ObservationDataset`, calls the existing P020 capacity
+estimator with that dataset, and passes the same dataset plus validated P020 result to the P022
+predictor. Rust validates a separate WorkloadResult v1 envelope and the nested AnalyticsResult v1
+capacity result before rendering. The AnalyticsRequest v1 contract and default `estimate` worker
+operation remain unchanged. P039 task attribution is not used as a substitute for P017 terminal
+Observation evidence.
+
 ### Native Codex task execution and recovery (unreleased P036–P037)
 
 ```text

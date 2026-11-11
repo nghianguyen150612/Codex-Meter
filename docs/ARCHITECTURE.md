@@ -85,6 +85,18 @@ Python owns robust capacity estimation, median and weighted-median calculations,
 
 The Rust CLI is the v1 interface. It renders normalized application and estimator results; formatting does not own telemetry, domain semantics, storage, or estimation. The unreleased P034–P037 TUI follows the same rule: Ratatui rendering, application state transitions, bounded worker I/O, typed task-preparation and execution state, and existing P031–P033 domain services are separated. It opens P031/P032 SQLite reports read-only, uses P033 App Server metadata, and never parses raw rollout payloads in the presentation layer. Composer drafts use a separate, explicit user-owned document store; they do not create a second usage ledger. P036 execution output is bounded and transient; it is not written to the SQLite evidence database or draft store. P037 recovery uses a separate bounded identifier-only journal. A web dashboard is outside v1.
 
+### Task usage presentation (unreleased P040)
+
+History's task mode consumes P039 `TaskUsageReport` and `TaskUsageSummary` through the
+existing SQLite worker (8 queued commands, 32 shared result events). It reuses `SqliteReadStore`
+and `TaskUsageQuery`; no aggregation, ingestion path, schema migration, or App Server call is added.
+Results contain at most 200 tasks and 64 configurations per task; 50-row local navigation has no
+continuation cursor. Request generations isolate filters and separate task selection uses the full
+source/session/task key. The read-only detail snapshot is bounded, sanitized, and scrollable.
+A SQLite progress hook cancels long task queries on worker shutdown. Result delivery checks
+shutdown when backpressured, so queued task results cannot indefinitely block worker teardown.
+Source counters and their coverage are formatted directly; rendering never reconstructs totals.
+
 ### Native Codex task execution and recovery (unreleased P036–P037)
 
 ```text

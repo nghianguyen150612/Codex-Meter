@@ -107,6 +107,8 @@ fn run_loop(
             redraw |= apply_backend_event(state, backend, event);
         }
         if redraw {
+            let size = terminal.size().map_err(terminal_error)?;
+            render::update_task_detail_scroll(state, size.width, size.height);
             terminal
                 .draw(|frame| render::draw(frame, state, theme))
                 .map_err(terminal_error)?;
@@ -218,7 +220,7 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
             open_composer_for_selected_session(state, backend)
         }
         KeyCode::Char('m')
-            if state.active == Screen::History && state.history_mode == HistoryMode::Tokens =>
+            if state.active == Screen::History && state.history_mode != HistoryMode::Quota =>
         {
             state.search = Some(SearchInput {
                 screen: Screen::History,
@@ -228,6 +230,7 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
         }
         KeyCode::Char('w') if state.active == Screen::History => {
             state.history_scope = state.history_scope.next();
+            invalidate_tasks(state);
             state.history_page_cursors = vec![None];
             state.selected_history = 0;
             state.history.value = None;
@@ -235,11 +238,7 @@ fn handle_key(state: &mut AppState, backend: &Backend, key: KeyEvent) -> bool {
             request_screen(state, backend, Screen::History);
         }
         KeyCode::Char('t') if state.active == Screen::History => {
-            state.history_mode = if state.history_mode == HistoryMode::Tokens {
-                HistoryMode::Quota
-            } else {
-                HistoryMode::Tokens
-            };
+            state.history_mode = state.history_mode.next();
             state.selected_history = 0;
             request_screen(state, backend, Screen::History);
         }
@@ -1720,6 +1719,11 @@ fn handle_search_input(state: &mut AppState, backend: &Backend, key: KeyEvent) -
             let search = state.search.take().expect("search mode is active");
             match search.kind {
                 SearchKind::Text => {
+                    if search.screen == Screen::History && state.history_mode == HistoryMode::Tasks
+                    {
+                        state.task_page = 0;
+                        state.selected_task = 0;
+                    }
                     state
                         .searches
                         .insert(search.screen, search.value.trim().to_owned());
@@ -1730,6 +1734,7 @@ fn handle_search_input(state: &mut AppState, backend: &Backend, key: KeyEvent) -
                 SearchKind::Model => {
                     let value = search.value.trim();
                     state.history_model_filter = (!value.is_empty()).then(|| value.to_owned());
+                    invalidate_tasks(state);
                     state.history_page_cursors = vec![None];
                     state.selected_history = 0;
                     state.history.value = None;
@@ -1898,6 +1903,34 @@ fn handle_overlay(
             }
             _ => return false,
         },
+        Overlay::TaskDetail => match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                state.overlay = None;
+                state.task_detail = None;
+                state.task_detail_lines.clear();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.task_detail_scroll = state
+                    .task_detail_scroll
+                    .saturating_add(1)
+                    .min(state.task_detail_max_scroll)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.task_detail_scroll = state.task_detail_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown | KeyCode::Char('n') => {
+                state.task_detail_scroll = state
+                    .task_detail_scroll
+                    .saturating_add(10)
+                    .min(state.task_detail_max_scroll)
+            }
+            KeyCode::PageUp | KeyCode::Char('p') => {
+                state.task_detail_scroll = state.task_detail_scroll.saturating_sub(10)
+            }
+            KeyCode::Home => state.task_detail_scroll = 0,
+            KeyCode::End => state.task_detail_scroll = state.task_detail_max_scroll,
+            _ => return false,
+        },
         Overlay::ModelDetail | Overlay::ProjectDetail | Overlay::EvidenceDetail => {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
                 state.overlay = None;
@@ -1958,6 +1991,37 @@ fn open_selected(state: &mut AppState, backend: &Backend) {
             }
         }
         Screen::History => {
+            if state.history_mode == HistoryMode::Tasks {
+                if state.tasks.loading || state.tasks.error.is_some() {
+                    return;
+                }
+                if let Some(task) = state.selected_task_summary().cloned() {
+                    state.task_detail_lines = render::task_detail_lines(
+                        &task,
+                        &state
+                            .tasks
+                            .value
+                            .as_ref()
+                            .expect("selected report")
+                            .evidence_quality,
+                    );
+                    if state
+                        .tasks
+                        .value
+                        .as_ref()
+                        .is_some_and(|report| report.has_more)
+                    {
+                        state.task_detail_lines.push(
+                            "TRUNCATED: the task list contains only the loaded top 200 tasks."
+                                .into(),
+                        );
+                    }
+                    state.task_detail = Some(task);
+                    state.task_detail_scroll = 0;
+                    state.overlay = Some(Overlay::TaskDetail);
+                }
+                return;
+            }
             let evidence_id = if state.history_mode == HistoryMode::Quota {
                 state
                     .visible_quota_samples()
@@ -2082,6 +2146,7 @@ fn request_screen(state: &mut AppState, backend: &Backend, screen: Screen) {
         }
         Screen::History => match state.history_mode {
             HistoryMode::Tokens => request_history_page(state, backend),
+            HistoryMode::Tasks => request_tasks(state, backend),
             HistoryMode::Quota => request_quota_page(state, backend),
         },
         Screen::Composer => {
@@ -2107,6 +2172,9 @@ fn refresh_screen(state: &mut AppState, backend: &Backend) {
         Screen::Models => request_models(state, backend),
         Screen::History if state.history_mode == HistoryMode::Tokens => {
             request_history_page(state, backend)
+        }
+        Screen::History if state.history_mode == HistoryMode::Tasks => {
+            request_tasks(state, backend)
         }
         Screen::History => request_quota_page(state, backend),
         Screen::Composer => {
@@ -2165,6 +2233,26 @@ fn request_models(state: &mut AppState, backend: &Backend) {
     }
 }
 
+fn invalidate_tasks(state: &mut AppState) {
+    let id = state.next_request_id();
+    state.tasks = super::state::Resource {
+        request_id: id,
+        ..Default::default()
+    };
+    state.task_page = 0;
+    state.selected_task = 0;
+}
+
+fn request_tasks(state: &mut AppState, backend: &Backend) {
+    let id = state.next_request_id();
+    state.tasks.begin(id);
+    if let Err(error) =
+        backend.request_tasks(id, state.history_scope, state.history_model_filter.clone())
+    {
+        state.tasks.finish(id, Err(error));
+    }
+}
+
 fn request_history_page(state: &mut AppState, backend: &Backend) {
     let id = state.next_request_id();
     state.history.begin(id);
@@ -2189,6 +2277,10 @@ fn request_quota_page(state: &mut AppState, backend: &Backend) {
 }
 
 fn next_history_page(state: &mut AppState, backend: &Backend) {
+    if state.history_mode == HistoryMode::Tasks {
+        state.change_task_page(1);
+        return;
+    }
     if state.history_mode == HistoryMode::Tokens {
         let Some(page) = state.history.value.as_ref() else {
             return;
@@ -2215,6 +2307,10 @@ fn next_history_page(state: &mut AppState, backend: &Backend) {
 }
 
 fn previous_history_page(state: &mut AppState, backend: &Backend) {
+    if state.history_mode == HistoryMode::Tasks {
+        state.change_task_page(-1);
+        return;
+    }
     let can_go_back = if state.history_mode == HistoryMode::Tokens {
         state.history_page_cursors.len() > 1
     } else {
@@ -2361,6 +2457,32 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
             }
             applied
         }
+        BackendEvent::Tasks { id, result } => {
+            let selected_key = state.selected_task_summary().map(|task| {
+                (
+                    task.source_id.clone(),
+                    task.session_id.clone(),
+                    task.task_id.clone(),
+                )
+            });
+            let applied = state.tasks.finish(id, result.map(|report| *report));
+            if applied {
+                let position = selected_key
+                    .and_then(|key| {
+                        state.visible_tasks().iter().position(|task| {
+                            (
+                                task.source_id.as_str(),
+                                task.session_id.as_str(),
+                                task.task_id.as_str(),
+                            ) == (key.0.as_str(), key.1.as_str(), key.2.as_str())
+                        })
+                    })
+                    .unwrap_or(0);
+                state.task_page = position / LIST_PAGE_SIZE;
+                state.selected_task = position % LIST_PAGE_SIZE;
+            }
+            applied
+        }
         BackendEvent::History { id, result } => {
             let selected_id = state
                 .visible_token_events()
@@ -2432,6 +2554,9 @@ fn apply_backend_event(state: &mut AppState, backend: &Backend, event: BackendEv
                         Screen::Models => request_models(state, backend),
                         Screen::History if state.history_mode == HistoryMode::Tokens => {
                             request_history_page(state, backend)
+                        }
+                        Screen::History if state.history_mode == HistoryMode::Tasks => {
+                            request_tasks(state, backend)
                         }
                         Screen::History => request_quota_page(state, backend),
                         Screen::Overview | Screen::Sessions | Screen::Composer => {}
@@ -2718,6 +2843,198 @@ impl Drop for TerminalLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_selection_preserves_only_exact_composite_key_and_falls_back_to_first() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::History;
+        state.history_mode = HistoryMode::Tasks;
+        let mut report = super::super::test_support::report(3);
+        report.tasks[1].task_id = report.tasks[0].task_id.clone();
+        report.tasks[1].session_id = "session:second".into();
+        report.tasks[2].task_id = report.tasks[0].task_id.clone();
+        report.tasks[2].source_id = "src:second".into();
+        state.tasks.value = Some(report.clone());
+        state.selected_task = 1;
+        state.tasks.begin(10);
+        report.tasks.swap(0, 1);
+        assert!(apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 10,
+                result: Ok(Box::new(report.clone()))
+            }
+        ));
+        assert_eq!(state.selected_task, 0);
+        assert_eq!(
+            state.selected_task_summary().unwrap().session_id,
+            "session:second"
+        );
+        // Remove the selected task from a nonzero position. Keeping its old row
+        // index would select an unrelated identity instead of the safe first row.
+        state.selected_task = 2;
+        state.tasks.begin(11);
+        report.tasks.remove(2);
+        assert!(apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 11,
+                result: Ok(Box::new(report))
+            }
+        ));
+        assert_eq!(state.selected_task, 0);
+        assert_eq!(state.task_page, 0);
+    }
+
+    #[test]
+    fn stale_task_results_do_not_change_report_selection_or_other_history_modes() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::History;
+        state.history_mode = HistoryMode::Tasks;
+        state.tasks.value = Some(super::super::test_support::report(3));
+        state.selected_task = 2;
+        state.tasks.begin(20);
+        assert!(!apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 19,
+                result: Ok(Box::new(super::super::test_support::report(1)))
+            }
+        ));
+        assert_eq!(state.selected_task, 2);
+        assert!(state.tasks.loading);
+        state.history_mode = HistoryMode::Quota;
+        state.selected_history = 7;
+        assert!(apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 20,
+                result: Ok(Box::new(super::super::test_support::report(1)))
+            }
+        ));
+        assert_eq!(state.history_mode, HistoryMode::Quota);
+        assert_eq!(state.selected_history, 7);
+        invalidate_tasks(&mut state);
+        assert!(!apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 20,
+                result: Err("old error".into())
+            }
+        ));
+        assert!(state.tasks.error.is_none());
+    }
+
+    #[test]
+    fn task_keyboard_navigation_refresh_scope_model_and_all_six_screens_remain_available() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::History;
+        handle_key(&mut state, &backend, key(KeyCode::Char('t')));
+        assert_eq!(state.history_mode, HistoryMode::Tasks);
+        assert!(state.tasks.loading || state.tasks.error.is_some());
+        let request = state.tasks.request_id;
+        handle_key(&mut state, &backend, key(KeyCode::Char('r')));
+        assert_ne!(state.tasks.request_id, request);
+        state.tasks.value = Some(super::super::test_support::report(55));
+        handle_key(&mut state, &backend, key(KeyCode::PageDown));
+        assert_eq!(state.task_page, 1);
+        handle_key(&mut state, &backend, key(KeyCode::Char('j')));
+        assert_eq!(state.selected_task, 1);
+        handle_key(&mut state, &backend, key(KeyCode::Char('k')));
+        handle_key(&mut state, &backend, key(KeyCode::Char('p')));
+        assert_eq!(state.task_page, 0);
+        handle_key(&mut state, &backend, key(KeyCode::Char('w')));
+        assert_eq!(
+            state.history_scope,
+            super::super::state::HistoryScope::Today
+        );
+        assert!(state.tasks.value.is_none());
+        let previous = state.tasks.request_id;
+        handle_key(&mut state, &backend, key(KeyCode::Char('m')));
+        for ch in "model-fixture".chars() {
+            handle_key(&mut state, &backend, key(KeyCode::Char(ch)));
+        }
+        handle_key(&mut state, &backend, key(KeyCode::Enter));
+        assert_eq!(state.history_model_filter.as_deref(), Some("model-fixture"));
+        assert_ne!(state.tasks.request_id, previous);
+        handle_key(&mut state, &backend, key(KeyCode::Char('t')));
+        assert_eq!(state.history_mode, HistoryMode::Quota);
+        handle_key(&mut state, &backend, key(KeyCode::Char('t')));
+        assert_eq!(state.history_mode, HistoryMode::Tokens);
+        for number in '1'..='6' {
+            handle_key(&mut state, &backend, key(KeyCode::Char(number)));
+            assert_eq!(state.active.index(), number as usize - '1' as usize);
+        }
+        assert!(!state.mutation_pending);
+        assert_eq!(state.execution.phase, ExecutionPhase::Idle);
+    }
+
+    #[test]
+    fn task_detail_snapshot_scroll_dismissal_and_shortcuts_cannot_execute_or_approve() {
+        let backend = test_backend();
+        let mut state = AppState::default();
+        state.active = Screen::History;
+        state.history_mode = HistoryMode::Tasks;
+        state.tasks.value = Some(super::super::test_support::report(2));
+        open_selected(&mut state, &backend);
+        assert_eq!(state.overlay, Some(Overlay::TaskDetail));
+        let selected = state.task_detail.clone();
+        render::update_task_detail_scroll(&mut state, 40, 14);
+        for _ in 0..100 {
+            handle_key(&mut state, &backend, key(KeyCode::PageDown));
+        }
+        assert_eq!(state.task_detail_scroll, state.task_detail_max_scroll);
+        handle_key(&mut state, &backend, key(KeyCode::Home));
+        assert_eq!(state.task_detail_scroll, 0);
+        for code in [
+            KeyCode::Char('6'),
+            KeyCode::Char('s'),
+            KeyCode::Char('y'),
+            KeyCode::Char('a'),
+            KeyCode::Tab,
+        ] {
+            handle_key(&mut state, &backend, key(code));
+        }
+        assert_eq!(state.active, Screen::History);
+        assert_eq!(state.execution.phase, ExecutionPhase::Idle);
+        assert!(!state.mutation_pending);
+        state.tasks.begin(40);
+        apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 40,
+                result: Ok(Box::new(super::super::test_support::report(1))),
+            },
+        );
+        assert_eq!(state.task_detail, selected);
+        handle_key(&mut state, &backend, key(KeyCode::Esc));
+        assert_eq!(state.overlay, None);
+        assert!(state.task_detail.is_none());
+        assert!(state.task_detail_lines.is_empty());
+        state.tasks.begin(41);
+        open_selected(&mut state, &backend);
+        assert_eq!(state.overlay, None);
+        apply_backend_event(
+            &mut state,
+            &backend,
+            BackendEvent::Tasks {
+                id: 41,
+                result: Err("Local worker is unavailable; refresh to retry.".into()),
+            },
+        );
+        assert!(!state.tasks.loading);
+        open_selected(&mut state, &backend);
+        assert_eq!(state.overlay, None);
+    }
 
     #[test]
     fn global_navigation_and_search_mode_do_not_conflict() {

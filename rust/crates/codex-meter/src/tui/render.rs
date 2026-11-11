@@ -1,3 +1,7 @@
+#[path = "task_usage.rs"]
+mod task_usage;
+pub(super) use task_usage::{task_detail_lines, update_task_detail_scroll};
+
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
@@ -1469,6 +1473,10 @@ fn model_row(model: &ModelInfo, selected: bool, theme: Theme) -> Row<'static> {
 }
 
 fn draw_history(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme, _wide: bool) {
+    if state.history_mode == HistoryMode::Tasks {
+        task_usage::draw_tasks(frame, area, state, theme);
+        return;
+    }
     if state.history_mode == HistoryMode::Quota {
         draw_quota_history(frame, area, state, theme);
         return;
@@ -1725,8 +1733,9 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
     }
     let keys = match state.active {
         Screen::Sessions => "Tab switch | Up/Down/jk move | n/p page | Enter details | / search | f archive | a active | L load | F fork | r refresh | s sync | ? help | q quit",
-        Screen::History if state.history_mode == HistoryMode::Tokens => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | m model | w scope | t token/quota | r refresh | s sync | ? help | q quit",
-        Screen::History => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | w scope | t token/quota | r refresh | s sync | ? help | q quit",
+        Screen::History if state.history_mode == HistoryMode::Tasks => "t modes | j/k move | n/p loaded page | Enter details | w scope | m model | r refresh | / search | ? help | q quit",
+        Screen::History if state.history_mode == HistoryMode::Tokens => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | m model | w scope | t modes | r refresh | s sync | ? help | q quit",
+        Screen::History => "Tab switch | Up/Down/jk move | n/p page | Enter inspect | / search | w scope | t modes | r refresh | s sync | ? help | q quit",
         Screen::Projects | Screen::Models => "Tab switch | Up/Down/jk move | n/p page | Enter details | / search | r refresh | s sync | ? help | q quit",
         Screen::Overview => "Tab switch | 1-6 views | r refresh | s sync | ? help | q quit",
         Screen::Composer => "Tab fields | F5 refresh | Ctrl+Enter preflight | Ctrl+S save | Ctrl+M model | Ctrl+R effort | Ctrl+D drafts | Ctrl+C quit | q outside text entry",
@@ -1777,6 +1786,10 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState, theme: Theme
 }
 
 fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, theme: Theme) {
+    if *overlay == Overlay::TaskDetail {
+        task_usage::draw_task_detail(frame, state, theme);
+        return;
+    }
     if matches!(
         overlay,
         Overlay::ExecutionConfirm | Overlay::ExecutionApproval | Overlay::ExecutionExitConfirm
@@ -1821,7 +1834,8 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
                 "f/a (Sessions)         Archive filter / active runtime".to_owned(),
                 "L                      Load selected session; no prompt or turn".to_owned(),
                 "F                      Confirm before cloning a session history".to_owned(),
-                "m (token history) / w scope / t token-quota".to_owned(),
+                "m (token/tasks) / w scope / t token-task-quota".to_owned(),
+                "Task details: j/k scroll | n/p page | Home/End | Esc close".to_owned(),
                 "c (Sessions)           Open Composer for selected local session".to_owned(),
                 "Composer: Ctrl+Enter preflight | Ctrl+S explicit draft save".to_owned(),
                 "Composer: Ctrl+M model | Ctrl+R effort | Ctrl+D draft library".to_owned(),
@@ -1858,6 +1872,7 @@ fn draw_overlay(frame: &mut Frame<'_>, overlay: &Overlay, state: &AppState, them
         Overlay::ModelDetail => ("Model details", model_detail_lines(state)),
         Overlay::ProjectDetail => ("Project details", project_detail_lines(state)),
         Overlay::EvidenceDetail => ("Evidence details", evidence_detail_lines(state)),
+        Overlay::TaskDetail => unreachable!("task details rendered above"),
         Overlay::ExecutionRecovery => ("CODEX METER — EXECUTION RECOVERY", recovery_lines(state)),
         Overlay::ExecutionConfirm
         | Overlay::ExecutionView

@@ -603,6 +603,16 @@ impl SqliteReadStore {
         reporting::token_statistics(&mut self.connection, query)
     }
 
+    /// Interrupt a long read when its owner shuts down. No evidence is changed.
+    pub(crate) fn cancel_reporting_when(
+        &self,
+        cancelled: impl FnMut() -> bool + Send + 'static,
+    ) -> Result<(), StorageError> {
+        self.connection
+            .progress_handler(1000, Some(cancelled))
+            .map_err(StorageError::sqlite)
+    }
+
     pub fn task_usage(&mut self, query: &TaskUsageQuery) -> Result<TaskUsageReport, StorageError> {
         reporting::task_usage(&mut self.connection, query)
     }

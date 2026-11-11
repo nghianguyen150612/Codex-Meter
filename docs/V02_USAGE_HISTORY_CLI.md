@@ -167,3 +167,12 @@ P033 may add a future TUI or plugin adapter over the reusable typed reporting
 repositories. Project metadata remains a separately authorized adapter; P032
 does not derive project names from local paths. Task quota attribution requires
 separate verified baseline, window, stabilization, and reconciliation evidence.
+
+## Interactive task history (P040)
+
+`codex-meter tui` exposes the same typed P039 report in History (`5`, then `t`).
+The TUI loads the top 200 tasks and navigates that bounded list in 50-row pages;
+`has_more` is a truncation notice, never a database cursor. For a larger report,
+use `codex-meter tasks --all --limit 1000`. The task overlay shows full composite
+identity and per-counter coverage. No task quota percentage or App Server ID
+mapping is inferred. See [TUI navigation and details](V02_TUI_DASHBOARD.md#task-usage-p040).

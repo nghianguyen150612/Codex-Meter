@@ -91,6 +91,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "time",
+ "unicode-width 0.2.0",
  "vt100",
  "windows-sys 0.61.2",
 ]

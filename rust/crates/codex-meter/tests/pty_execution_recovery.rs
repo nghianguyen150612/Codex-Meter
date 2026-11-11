@@ -552,6 +552,103 @@ fn temp_file(path: &std::path::Path) {
 }
 
 #[test]
+fn compiled_task_history_is_readonly_resizes_and_never_submits_a_turn() {
+    let _serial = serialize_pty_test();
+    let paths = TestPaths::new();
+    let codex_home = paths.root.join("synthetic-codex-home");
+    let sessions = codex_home.join("sessions/2026/10/03");
+    fs::create_dir_all(&sessions).unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../fixtures/codex-rollout/v0.157.1");
+    let stream = [
+        "session-meta.json",
+        "thread-settings-applied.json",
+        "turn-context.json",
+        "task-started.json",
+        "token-usage-record.json",
+        "task-complete.json",
+    ]
+    .into_iter()
+    .map(|file| {
+        fs::read_to_string(fixtures.join(file))
+            .unwrap()
+            .trim()
+            .to_owned()
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+        + "\n";
+    fs::write(sessions.join("rollout.jsonl"), stream).unwrap();
+    #[cfg(target_os = "macos")]
+    let database = paths
+        .root
+        .join("Library/Application Support/codex-meter/codex-meter.sqlite3");
+    #[cfg(not(target_os = "macos"))]
+    let database = paths.data.join("codex-meter/codex-meter.sqlite3");
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    let sync = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+        .arg("sync")
+        .arg("--codex-home")
+        .arg(&codex_home)
+        .arg("--database")
+        .arg(&database)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(sync.status.success());
+    let report = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+        .arg("tasks")
+        .arg("--all")
+        .arg("--database")
+        .arg(&database)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(report.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&report.stdout).unwrap();
+    assert_eq!(report["usage"]["task_count"], 1);
+    let before = fs::read(&database).unwrap();
+    let mut pty = PtyHarness::new(paths);
+    pty.spawn("tui", "success");
+    pty.assert_text("Overview");
+    assert!(pty
+        .paths
+        .wait_for_request_count("thread/list", 2, Duration::from_secs(5)));
+    pty.key(b'5');
+    pty.key(b't');
+    pty.assert_text("Task usage");
+    pty.assert_text("Unattributed");
+    pty.key(b'\r');
+    pty.assert_text("Task details | read only");
+    pty.assert_text("Canonical responses: 1");
+    pty.resize(16, 8);
+    pty.assert_text("Esc close");
+    pty.resize(120, 40);
+    pty.assert_text("Task details | read only");
+    pty.key(27);
+    pty.key(b'r');
+    pty.assert_text("Task usage");
+    pty.resize(16, 8);
+    pty.assert_text("Task usage:");
+    pty.resize(120, 40);
+    pty.assert_text("Unattributed");
+    pty.key(b'q');
+    assert!(pty.wait_for_exit().success());
+    pty.assert_terminal_restored();
+    assert_eq!(fs::read(&database).unwrap(), before);
+    for method in [
+        "thread/start",
+        "thread/resume",
+        "turn/start",
+        "turn/interrupt",
+    ] {
+        assert_eq!(pty.paths.request_count(method), 0);
+    }
+    // The existing startup session query reads both archived scopes once.
+    assert_eq!(pty.paths.request_count("thread/list"), 2);
+}
+
+#[test]
 fn compiled_tui_executes_unicode_prompt_and_restores_the_terminal() {
     let _serial = serialize_pty_test();
     let paths = TestPaths::new();

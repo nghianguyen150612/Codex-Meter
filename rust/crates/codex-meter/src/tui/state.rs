@@ -4,7 +4,10 @@ use crate::codex_app_server::{
     ApprovalView, ArchiveFilter, ExecutionPhase, ExecutionPreflight, ExecutionRecoveryRecord,
     ModelCatalog, ProjectSummary, SessionDetail, SessionMetadata,
 };
-use crate::storage::{EvidenceDetail, QuotaHistoryPage, TokenHistoryCursor, TokenHistoryPage};
+use crate::storage::{
+    EvidenceDetail, QuotaHistoryPage, TaskUsageReport, TaskUsageSummary, TokenHistoryCursor,
+    TokenHistoryPage,
+};
 
 use super::backend::OverviewData;
 use super::composer::{
@@ -14,6 +17,7 @@ use super::composer::{
 use super::drafts::{DraftListing, DraftSummary};
 
 pub const LIST_PAGE_SIZE: usize = 50;
+pub const TASK_RESULT_LIMIT: u32 = 200;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Screen {
@@ -132,7 +136,18 @@ impl HistoryScope {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoryMode {
     Tokens,
+    Tasks,
     Quota,
+}
+
+impl HistoryMode {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Tokens => Self::Tasks,
+            Self::Tasks => Self::Quota,
+            Self::Quota => Self::Tokens,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,6 +172,7 @@ pub enum Overlay {
     ModelDetail,
     ProjectDetail,
     EvidenceDetail,
+    TaskDetail,
     ComposerModelPicker,
     ComposerReasoningPicker,
     ComposerTargetPicker,
@@ -324,6 +340,13 @@ pub struct AppState {
     pub models: Resource<ModelCatalog>,
     pub history: Resource<TokenHistoryPage>,
     pub quota_history: Resource<QuotaHistoryPage>,
+    pub tasks: Resource<TaskUsageReport>,
+    pub task_page: usize,
+    pub selected_task: usize,
+    pub task_detail: Option<TaskUsageSummary>,
+    pub task_detail_lines: Vec<String>,
+    pub task_detail_scroll: u16,
+    pub task_detail_max_scroll: u16,
     pub evidence_detail: Resource<EvidenceDetail>,
     pub composer: ComposerState,
     pub execution: ExecutionUiState,
@@ -369,6 +392,13 @@ impl Default for AppState {
             models: Resource::default(),
             history: Resource::default(),
             quota_history: Resource::default(),
+            tasks: Resource::default(),
+            task_page: 0,
+            selected_task: 0,
+            task_detail: None,
+            task_detail_lines: Vec::new(),
+            task_detail_scroll: 0,
+            task_detail_max_scroll: 0,
             evidence_detail: Resource::default(),
             composer: ComposerState::default(),
             execution: ExecutionUiState::default(),
@@ -548,6 +578,52 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    pub fn visible_tasks(&self) -> Vec<&TaskUsageSummary> {
+        let needle = self
+            .searches
+            .get(&Screen::History)
+            .map(String::as_str)
+            .unwrap_or("");
+        self.tasks
+            .value
+            .as_ref()
+            .map(|report| {
+                report
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        needle.is_empty()
+                            || contains(&task.task_id, needle)
+                            || contains(&task.session_id, needle)
+                            || contains(&task.source_id, needle)
+                            || task.configurations.iter().any(|config| {
+                                config
+                                    .model
+                                    .as_deref()
+                                    .is_some_and(|model| contains(model, needle))
+                            })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn visible_tasks_page(&self) -> Vec<&TaskUsageSummary> {
+        page_slice(&self.visible_tasks(), self.task_page)
+    }
+
+    pub fn selected_task_summary(&self) -> Option<&TaskUsageSummary> {
+        self.visible_tasks_page().get(self.selected_task).copied()
+    }
+
+    pub fn change_task_page(&mut self, delta: isize) {
+        self.task_page = clamp_page(
+            self.task_page.saturating_add_signed(delta),
+            self.visible_tasks().len(),
+        );
+        self.selected_task = 0;
+    }
+
     pub fn selected_session_metadata(&self) -> Option<&SessionMetadata> {
         self.visible_sessions_page()
             .get(self.selected_session)
@@ -565,6 +641,15 @@ impl AppState {
     }
 
     pub fn move_selection(&mut self, delta: isize) {
+        if self.active == Screen::History && self.history_mode == HistoryMode::Tasks {
+            let length = self.visible_tasks_page().len();
+            self.selected_task = if length == 0 {
+                0
+            } else {
+                (self.selected_task as isize + delta).rem_euclid(length as isize) as usize
+            };
+            return;
+        }
         let length = match self.active {
             Screen::Overview | Screen::Composer => return,
             Screen::Sessions => self.visible_sessions_page().len(),
@@ -594,6 +679,10 @@ impl AppState {
     }
 
     pub fn clamp_selection(&mut self) {
+        self.task_page = clamp_page(self.task_page, self.visible_tasks().len());
+        self.selected_task = self
+            .selected_task
+            .min(self.visible_tasks_page().len().saturating_sub(1));
         self.session_page = clamp_page(self.session_page, self.visible_sessions().len());
         self.project_page = clamp_page(self.project_page, self.visible_projects().len());
         self.model_page = clamp_page(self.model_page, self.visible_models().len());
@@ -683,6 +772,34 @@ mod tests {
     use crate::codex_app_server::{
         HistoryAvailability, RuntimeStatus, SessionOrigin, UsageLinkAvailability,
     };
+
+    #[test]
+    fn task_modes_cycle_and_local_pages_are_bounded() {
+        let mut state = AppState::default();
+        assert_eq!(HistoryMode::Tokens.next(), HistoryMode::Tasks);
+        assert_eq!(HistoryMode::Tasks.next(), HistoryMode::Quota);
+        assert_eq!(HistoryMode::Quota.next(), HistoryMode::Tokens);
+        state.active = Screen::History;
+        state.history_mode = HistoryMode::Tasks;
+        state.tasks.value = Some(super::super::test_support::report(103));
+        assert_eq!(state.visible_tasks_page().len(), 50);
+        state.move_selection(-1);
+        assert_eq!(state.selected_task, 49);
+        state.change_task_page(1);
+        state.change_task_page(1);
+        assert_eq!(state.visible_tasks_page().len(), 3);
+        state.change_task_page(1);
+        assert_eq!(state.task_page, 2);
+        state.change_task_page(-10);
+        assert_eq!(state.task_page, 0);
+        state
+            .searches
+            .insert(Screen::History, "no-such-task".into());
+        state.clamp_selection();
+        state.move_selection(1);
+        assert_eq!(state.selected_task, 0);
+        assert!(state.selected_task_summary().is_none());
+    }
 
     #[test]
     fn screen_tabs_wrap_and_keep_stable_numbering() {

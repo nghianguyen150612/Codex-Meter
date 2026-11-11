@@ -62,6 +62,14 @@ A task sample is eligible when all of these conditions hold:
 - token quality is A, B, or C; and
 - `raw_total` is a present positive integer.
 
+The P043 local recorder does not currently establish exhaustive per-task token
+coverage from the supported rollout format. Its new terminal Observations keep
+`token_validity=incomplete`, even when they contain directly observed positive
+raw totals. They remain excluded by this P022 rule. Five-hour or weekly quota
+snapshots that lack P012-qualified task-specific before/after evidence cannot
+produce capacity deltas or improve that meter's readiness. Existing immutable
+Observations are not upgraded by a later sync.
+
 Quality is a categorical eligibility decision. P022 never multiplies task
 sizes by P019's A=10, B=8, or C=3 capacity-aggregation weights. A- and
 B-quality tasks are eligible. C-quality tasks are also eligible, and the

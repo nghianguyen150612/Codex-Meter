@@ -106,6 +106,24 @@ does not establish a task's quota cost. P031 does not invent before/after quota
 samples or task deltas. Task-completion Observations can therefore contain
 observed token evidence while both quota domains remain unavailable/incomplete.
 
+P043 hardens this existing recorder. A task-complete marker records only an
+observed terminal event; the rollout contract does not prove that every
+per-response event has been flushed and read. Newly recorded Observations
+therefore retain `token_validity=incomplete` even when all currently observed
+response rows have raw totals. Those totals remain directly observed and are
+not zero-filled or reconstructed. The first observed task start timestamp is
+now checkpointed and included when it is ordered before the terminal event.
+Missing or out-of-order starts remain unavailable. Repeated/conflicting
+terminal markers, missing starts, and token events after terminal transitions
+produce sanitized coverage diagnostics.
+
+The recorder passes no historical quota samples to P012 because P031 has no
+validated task-specific before/after pairing contract. This yields unavailable
+meter evidence and no delta. Five-hour and weekly snapshots stay independent,
+and no proximity pairing or provider polling is performed. Unknown external
+usage remains C quality evidence; local task uniqueness does not establish
+isolation. P017 terminal Observations remain immutable on replay.
+
 ## Replay, checkpoints, and history
 
 P031 adds SQLite migration 5, `0005_usage_evidence.sql`. It creates typed
@@ -172,7 +190,9 @@ an extra paid request for validation.
 P031 provides durable token history and directly observed quota snapshots. It
 does not provide continuous tracking, authenticated quota acquisition,
 automatic quota stabilization, or estimator-ready per-task quota evidence.
-Those remain later work. P032 should build history and token inspection over
+P043 also cannot establish complete per-task token coverage or estimator-ready
+quota deltas from the audited source. Those remain unavailable until source
+coverage and qualified meter pairing can be proven. P032 should build history and token inspection over
 this typed ledger, preserve its raw/snapshot distinction, and only add task
 quota attribution after valid baseline, time-window, stabilization, and
 reconciliation evidence exists.

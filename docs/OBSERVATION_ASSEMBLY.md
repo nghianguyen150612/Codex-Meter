@@ -37,6 +37,16 @@ complete. Incomplete streams receive `incomplete / D` and
 `process_interrupted`. Optional source capability missingness is not treated as
 stream truncation.
 
+The P031 rollout reader currently cannot prove exhaustive per-task response
+coverage at a terminal marker. It can encounter unsupported records, incomplete
+source coverage, later appended records, or source-generation changes, and the
+format does not provide a validated flush/coverage watermark. Therefore the
+recorder passes `Incomplete` for every newly built task Observation, including
+tasks with a `task_complete` marker and fully populated observed raw totals.
+Directly observed counters remain present, but P022 eligibility stays false
+until token completeness is independently established. The generic P013 builder
+still accepts `Complete` for a caller that can prove that guarantee.
+
 ## Configuration and plans
 
 One consistent effective task configuration is preserved from attributed token
@@ -123,3 +133,32 @@ P014 may assume:
 
 P014 begins **Phase D — SQLite storage, migrations, and durable runtime state**.
 P014 owns database design and migration bootstrap. P013 does not begin that work.
+
+## P031 recorder evidence boundary
+
+The existing sync recorder feeds P013 rather than maintaining a parallel
+Observation model. Its terminal marker supplies an observed end timestamp;
+the first actual start marker supplies `started_at`, retained in versioned
+runtime checkpoint state. The Observation carries the normalized source
+instance derived from the current source generation, even when no token event
+exists. A missing start remains missing. A repeated terminal
+marker, conflicting terminal outcome, post-terminal token event, missing start,
+start-after-terminal marker, or start-after-end ordering is retained as
+incomplete coverage evidence and is emitted as a sanitized diagnostic where
+the source record is available.
+
+Terminal task evidence, token completeness, P012 quota reconciliation,
+Observation lifecycle, and P022 capacity eligibility are distinct. P031's
+empty-sample P012 invocation only yields unavailable meter states; it generates
+no task-specific delta. Stored account snapshots are not paired by timestamp
+proximity. A terminal Observation can therefore retain raw tokens and real
+start/end evidence while remaining incomplete with both quota meters
+unavailable. Unknown external usage remains quality C context and cannot earn
+A/B isolation grades.
+
+The P017 v1 Observation schema does not encode whether the task terminal event
+was successful, failed, or aborted, nor a set of lifecycle anomalies. P043 does
+not rewrite that immutable schema or infer success. The typed P009 checkpoint
+state and privacy-safe ingestion diagnostics retain those distinctions where
+available; expanding terminal outcome in Observations requires a separately
+versioned contract.

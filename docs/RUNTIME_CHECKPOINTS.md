@@ -35,10 +35,11 @@ generation.
 
 ## Runtime payload
 
-The dedicated typed JSON envelope is `PersistedRuntimeStateV1`. It contains:
+The dedicated typed JSON envelope contains:
 
 - P009 `TelemetryState`, including session and thread configuration, task
-  lifecycle, root-task evidence, terminal evidence, anomalies, overrides,
+  lifecycle, observed first start and terminal timestamps, root-task evidence,
+  terminal evidence, anomalies, overrides,
   token-configuration fingerprints, and consistency state;
 - P011 `QuotaTrackingState`, independently for `five_hour` and `weekly`,
   including current windows, last samples, and private seen-sample replay IDs;
@@ -50,11 +51,13 @@ fields. P012 policy durations use exact `{seconds, nanoseconds}` values rather
 than floating-point seconds. Restored policies pass `ReconciliationPolicy::validate`
 and domain-owned recovery validation before becoming runtime state.
 
-`state_format_version = 1` is an internal checkpoint format version. It is
-separate from the SQLite migration version (`4`) and public JSON contract
-versions such as `schema_version = 1.0.0`. The format is present in both the
-row metadata and the typed payload envelope. A newer or unsupported format is
-rejected rather than decoded as version 1.
+`state_format_version = 2` is the current internal checkpoint format version.
+The version 2 reader accepts version 1 payloads and defaults the newly added
+task start/terminal timestamps to unavailable. New checkpoints use version 2.
+This is separate from the SQLite migration version (`4`) and public JSON
+contract versions such as `schema_version = 1.0.0`. The format is present in
+both the row metadata and the typed payload envelope. A newer or unsupported
+format is rejected rather than decoded as the current version.
 
 P015 retains terminal reconciliation state in the active-reconciliation map
 when the caller has not yet handed its completed measurement to P016. This is a

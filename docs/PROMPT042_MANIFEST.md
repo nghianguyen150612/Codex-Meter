@@ -27,12 +27,14 @@ It never calls a globally selected dataset ready. Unknown configuration values
 remain unknown; no unbounded list of configurations or source records is emitted.
 
 P031/P039 records establish directly observed response tokens and local opaque
-task attribution. They do not establish terminal P017 Observation lifecycle,
-quality, exact five-dimensional configuration, or task-specific quota deltas.
-P039 tasks therefore cannot automatically become P022 samples. `sync` collects
-audited P031 rollout evidence; it does **not** integrate complete qualified
-P017 Observation generation. The next step may require a future milestone,
-not a command that guarantees forecast availability.
+task attribution. At P042, `sync` did not create P017 Observations; P043 adds
+terminal Observation recording through P013. The recorder retains observed
+start/end timestamps and conservative token completeness, so those rows remain
+ineligible for P022 unless the source can prove exhaustive token coverage.
+Task-specific quota deltas likewise remain unavailable without validated P012
+before/after evidence. P039 task summaries are not promoted to P017 samples.
+Readiness still depends on P020/P022 eligibility and is not satisfied by row
+existence.
 
 Scoped readiness validates AnalyticsRequest v1 before database access. Each
 requested meter is evaluated through P041's existing worker operation and Rust
@@ -114,10 +116,11 @@ eight schemas and positive/negative fixtures, installed-worker readiness and
 inventory, Linux PTY, Windows ConPTY, both macOS architectures and four-platform
 release candidates. Inherited G4/G5 remain unverified regardless of CI success.
 
-P043 should narrowly integrate an explicitly evidenced P017 lifecycle collection
-path, with real start/end and quality provenance and separately validated quota
-samples. It must preserve unknown boundaries and never synthesize complete
-Observations from task counts or account-wide quota causality assumptions.
+P043's current rollout format does not prove full token coverage, task-specific
+quota causality, or external-usage isolation. These remain unavailable pending
+better source coverage evidence and P012-qualified quota pairs. The recorder
+does not synthesize complete token evidence from terminal markers or attach
+account-wide samples to tasks.
 
 ## Delivery evidence
 

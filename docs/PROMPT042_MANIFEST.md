@@ -118,3 +118,29 @@ P043 should narrowly integrate an explicitly evidenced P017 lifecycle collection
 path, with real start/end and quality provenance and separately validated quota
 samples. It must preserve unknown boundaries and never synthesize complete
 Observations from task counts or account-wide quota causality assumptions.
+
+## Delivery evidence
+
+Draft PR: [#37](https://github.com/nghianguyen150612/Codex-Meter/pull/37).
+Implementation commit: `a6d35dee1251e47287bc99dfa95581a27891136e`.
+Local qualification of these source files passed:
+
+- Rust format check and all-target/all-feature Clippy with warnings denied.
+- Workspace/all-target tests: 532 passed; all-feature mode: 523 passed.
+- Python: 677 passed; Ruff lint and format passed.
+- Contracts: 8 schemas, 19 positive and 7 negative fixtures passed.
+- Installed-worker smoke passed, including both readiness modes and read-only
+  database checks; inherited Linux interactive controlling-terminal PTY passed.
+
+An earlier concurrent local run observed the existing App Server malformed
+transport fixture returning process-exit instead of malformed-response; complete
+subsequent Rust runs passed. The installed-runtime smoke temporarily moves the
+Python source tree for isolation testing and must complete before taking a
+worktree snapshot or committing.
+
+Final delivery qualification is recorded against the final branch HEAD in the
+[PR checks](https://github.com/nghianguyen150612/Codex-Meter/pull/37/checks)
+and PR description, including exact CI/release workflow run URLs and SHAs.
+Cross-platform and release candidate success is not inferred from local tests
+or from P041. This manifest's documentation-only delivery commit follows the
+implementation commit; final-head workflow verification remains required.

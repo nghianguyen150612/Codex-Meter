@@ -147,6 +147,12 @@ start-after-terminal marker, or start-after-end ordering is retained as
 incomplete coverage evidence and is emitted as a sanitized diagnostic where
 the source record is available.
 
+Because this rollout version cannot certify exhaustive per-task response
+coverage, every observed terminal task also records the existing
+`data_coverage_incomplete` diagnostic. The lack of a qualified task-specific
+P012 sample pair is recorded as `quota_evidence_incomplete`; these diagnostics
+do not change the Observation's token or quota validity.
+
 Terminal task evidence, token completeness, P012 quota reconciliation,
 Observation lifecycle, and P022 capacity eligibility are distinct. P031's
 empty-sample P012 invocation only yields unavailable meter states; it generates

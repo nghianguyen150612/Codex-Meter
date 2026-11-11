@@ -113,9 +113,10 @@ therefore retain `token_validity=incomplete` even when all currently observed
 response rows have raw totals. Those totals remain directly observed and are
 not zero-filled or reconstructed. The first observed task start timestamp is
 now checkpointed and included when it is ordered before the terminal event.
-Missing or out-of-order starts remain unavailable. Repeated/conflicting
-terminal markers, missing starts, and token events after terminal transitions
-produce sanitized coverage diagnostics.
+Missing or out-of-order starts remain unavailable. Every terminal task records
+sanitized `data_coverage_incomplete` and `quota_evidence_incomplete`
+diagnostics; repeated/conflicting markers, missing starts, and token events
+after terminal transitions remain visible as coverage evidence as well.
 
 The recorder passes no historical quota samples to P012 because P031 has no
 validated task-specific before/after pairing contract. This yields unavailable

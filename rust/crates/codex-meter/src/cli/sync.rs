@@ -119,6 +119,7 @@ struct SourceCounts {
     snapshots_added: usize,
     quota_snapshots_added: usize,
     observations_added: usize,
+    terminal_evidence_seen: bool,
     skipped_records: usize,
     source_processed: bool,
     source_warning: Option<SyncWarning>,
@@ -210,6 +211,13 @@ pub(super) fn run(arguments: SyncArguments) -> Result<String, CliError> {
                 }
             }
             warnings.insert(warning);
+        }
+        if counts.terminal_evidence_seen {
+            // Terminal P017 rows currently have observed tokens but no source
+            // guarantee of complete per-task coverage or task-specific quota
+            // samples. Keep both evidence gaps visible in the sync result.
+            warnings.insert(SyncWarning::DataCoverageIncomplete);
+            warnings.insert(SyncWarning::QuotaEvidenceIncomplete);
         }
     }
 
@@ -545,6 +553,19 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                         continue;
                     }
                 };
+            let terminal_task_observed = assembled.outputs.iter().any(|output| {
+                matches!(
+                    output,
+                    AssembledOutput::TaskLifecycle(transition)
+                        if transition.task_id.is_some()
+                            && matches!(
+                                transition.transition,
+                                TaskLifecycleTransitionKind::Completed
+                                    | TaskLifecycleTransitionKind::Failed
+                                    | TaskLifecycleTransitionKind::Aborted
+                            )
+                )
+            });
             let lifecycle_anomaly = assembled.outputs.iter().any(|output| {
                 let AssembledOutput::TaskLifecycle(transition) = output else {
                     return false;
@@ -573,7 +594,7 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                         !timestamp_not_after(started_at, &transition.event_at)
                     })
             });
-            if lifecycle_anomaly {
+            if lifecycle_anomaly && !terminal_task_observed {
                 diagnostics.push(make_diagnostic(
                     &rollout.source,
                     item,
@@ -598,7 +619,7 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                         })
                     })
             });
-            if token_after_terminal {
+            if token_after_terminal || terminal_task_observed {
                 diagnostics.push(make_diagnostic(
                     &rollout.source,
                     item,
@@ -606,6 +627,16 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                     timestamp.clone(),
                     semantic,
                     IngestionDiagnosticCode::DataCoverageIncomplete,
+                ));
+            }
+            if terminal_task_observed {
+                diagnostics.push(make_diagnostic(
+                    &rollout.source,
+                    item,
+                    source_id(&rollout.source),
+                    timestamp.clone(),
+                    semantic,
+                    IngestionDiagnosticCode::QuotaEvidenceIncomplete,
                 ));
             }
             for output in &assembled.outputs {
@@ -924,6 +955,7 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
                 counts.snapshots_added += inserted.snapshots;
                 counts.quota_snapshots_added += inserted.quota_samples;
                 counts.observations_added += inserted.observations;
+                counts.terminal_evidence_seen |= !terminal_tasks.is_empty();
                 state = next_state;
                 cursor = saved.cursor.clone();
                 boundary_hash = next_boundary.last_line_sha256;
@@ -1606,7 +1638,9 @@ fn warning_label(warning: SyncWarning) -> &'static str {
         SyncWarning::SourceReadLimited => "a source reached the per-sync processing limit",
         SyncWarning::SourceReadFailed => "a source could not be read completely",
         SyncWarning::SourceTransactionConflict => "a source batch was not committed",
-        SyncWarning::QuotaEvidenceIncomplete => "supported local quota snapshots were unavailable",
+        SyncWarning::QuotaEvidenceIncomplete => {
+            "task-specific quota evidence is unavailable or incomplete"
+        }
         SyncWarning::DataCoverageIncomplete => "history coverage is incomplete",
         SyncWarning::DiagnosticWriteFailed => "a sanitized ingestion diagnostic could not be saved",
     }

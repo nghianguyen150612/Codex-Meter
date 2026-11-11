@@ -476,6 +476,15 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
     assert_eq!(first["observations_added"], 1);
     assert!(first["five_hour_meter"].is_null());
     assert!(first["weekly_meter"].is_null());
+    for warning in ["data_coverage_incomplete", "quota_evidence_incomplete"] {
+        assert!(first["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == warning));
+    }
+    assert_eq!(diagnostic_count(&database, "data_coverage_incomplete"), 1);
+    assert_eq!(diagnostic_count(&database, "quota_evidence_incomplete"), 1);
     let connection = Connection::open(&database).unwrap();
     let (lifecycle, started_at, ended_at, token_validity, raw_total, five_hour_validity, weekly_validity, payload): (
         String,
@@ -520,6 +529,13 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
     assert!(second_output.status.success());
     assert_eq!(second["responses_added"], 0);
     assert_eq!(second["observations_added"], 0);
+    for warning in ["data_coverage_incomplete", "quota_evidence_incomplete"] {
+        assert!(second["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == warning));
+    }
     let connection = Connection::open(&database).unwrap();
     let observation_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
@@ -528,6 +544,33 @@ fn explicit_task_completion_saves_incomplete_observation_without_quota_delta() {
         observation_count, 1,
         "repeated terminal must not fork identity"
     );
+    assert_eq!(diagnostic_count(&database, "data_coverage_incomplete"), 2);
+    assert_eq!(diagnostic_count(&database, "quota_evidence_incomplete"), 2);
+
+    #[cfg(not(feature = "release-artifact"))]
+    {
+        let readiness = Command::new(env!("CARGO_BIN_EXE_codex-meter"))
+            .args(["readiness", "--database"])
+            .arg(&database)
+            .args(["--generated-at", "2026-10-16T07:00:00Z", "--json"])
+            .output()
+            .expect("readiness process should start");
+        assert!(
+            readiness.status.success(),
+            "readiness failed: {}",
+            String::from_utf8_lossy(&readiness.stderr)
+        );
+        let readiness: Value = serde_json::from_slice(&readiness.stdout).unwrap();
+        assert_eq!(readiness["partial"], true);
+        assert_eq!(
+            readiness["ledger_coverage"]["diagnostics"]["data_coverage_incomplete"],
+            2
+        );
+        assert_eq!(
+            readiness["ledger_coverage"]["diagnostics"]["quota_evidence_incomplete"],
+            2
+        );
+    }
 }
 
 #[test]

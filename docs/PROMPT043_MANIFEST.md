@@ -51,6 +51,10 @@ P013 Observation → P016 SQLite commit with evidence and source checkpoint
   recorder currently passes no samples into P012 reconciliation; resulting
   meter evidence is unavailable and no quota delta is generated. No nearby
   sample, inferred reset, provider poll, or causal estimate is substituted.
+- Each newly observed terminal task also records the existing sanitized
+  `data_coverage_incomplete` and `quota_evidence_incomplete` diagnostics. The
+  `sync` summary reports both gaps when it processes terminal task evidence;
+  readiness includes the persisted diagnostics in its coverage report.
 - Observation finalization and capacity eligibility are separate. P016
   terminal rows are immutable, and P022 accepts only token-valid rows with its
   existing quality and positive-raw-total requirements. P041/P042 readiness
@@ -112,8 +116,10 @@ The deterministic lifecycle fixtures cover a completion without a start, a
 normal start timestamp, duplicate terminal evidence, and start-after-terminal
 ordering. The CLI sync fixture asserts that a completion with a real start
 preserves both timestamps, preserves the directly observed raw total, records
-token validity as incomplete, and leaves both quota meters unavailable. Exact
-sync replay adds no second Observation. Local validation passed:
+token validity as incomplete, and leaves both quota meters unavailable. It also
+checks fixed coverage diagnostics, readiness reporting, and idempotence across
+a repeated terminal event. Exact sync replay adds no second Observation. Local
+validation passed:
 
 - `cargo fmt --all -- --check` and workspace/all-target/all-feature Clippy with
   warnings denied.

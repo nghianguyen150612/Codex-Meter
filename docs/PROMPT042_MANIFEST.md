@@ -33,8 +33,10 @@ start/end timestamps and conservative token completeness, so those rows remain
 ineligible for P022 unless the source can prove exhaustive token coverage.
 Task-specific quota deltas likewise remain unavailable without validated P012
 before/after evidence. P039 task summaries are not promoted to P017 samples.
-Readiness still depends on P020/P022 eligibility and is not satisfied by row
-existence.
+P043 records sanitized `data_coverage_incomplete` and
+`quota_evidence_incomplete` diagnostics on terminal task evidence so inventory
+can expose these gaps. Readiness still depends on P020/P022 eligibility and is
+not satisfied by row existence.
 
 Scoped readiness validates AnalyticsRequest v1 before database access. Each
 requested meter is evaluated through P041's existing worker operation and Rust

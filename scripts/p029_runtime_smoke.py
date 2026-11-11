@@ -437,6 +437,36 @@ def main() -> None:
             raise AssertionError(
                 "installed worker returned a fabricated or incompatible workload result"
             )
+        readiness_command = cli_command(
+            relocated_binary, python, database, request, operation="readiness"
+        )
+        readiness_output = invoke(
+            readiness_command, cwd=caller_directory, env=shadow_environment
+        )
+        if readiness_output.returncode:
+            raise AssertionError("installed readiness worker failed")
+        readiness = json.loads(readiness_output.stdout)
+        if (
+            readiness["analysis_type"] != "forecast_readiness"
+            or readiness["scoped_coverage"]["accounting"] != distribution["accounting"]
+            or readiness["per_meter_readiness"][0]["status"]
+            != workload["meter_predictions"][0]["status"]
+        ):
+            raise AssertionError("installed readiness disagrees with P041")
+        inventory_command = readiness_command.copy()
+        index = inventory_command.index("--request")
+        del inventory_command[index : index + 2]
+        # Inventory has no selected meter and rejects unscoped manual positions.
+        index = inventory_command.index("--five-hour-used-percent")
+        del inventory_command[index : index + 2]
+        inventory_output = invoke(
+            inventory_command, cwd=caller_directory, env=shadow_environment
+        )
+        if (
+            inventory_output.returncode
+            or json.loads(inventory_output.stdout)["status"] != "selection_required"
+        ):
+            raise AssertionError("installed inventory failed")
         estimate = result["quota_capacity_estimates"][0]
         full_capacity = estimate["estimated_full_capacity_raw_tokens"]
         used_capacity = estimate["estimated_used_raw_tokens"]

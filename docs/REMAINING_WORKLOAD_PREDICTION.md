@@ -261,3 +261,17 @@ exact five-dimension configuration, P020-valid capacity evidence, or an
 App Server turn association. Therefore the workload CLI does not convert or
 consume P039 task rows. A database with no eligible terminal P017 Observations
 correctly returns P022 insufficiency, even if P039 task usage is present.
+
+## Readiness diagnostics (P042)
+
+Run `codex-meter readiness --json` for a bounded, read-only evidence inventory.
+It is not a forecast or a global readiness claim. Supply `--request FILE` to
+check exact AnalyticsRequest v1 selection and requested meters using P041.
+Optional manual percentages remain unverified; missing positions are never
+filled from stored quota snapshots. Each meter retains independent readiness,
+capacity reasons/confidence, and history insufficiency.
+
+P031 response evidence and P039 attribution do not provide P017 lifecycle or
+quality metadata. `sync` cannot guarantee qualified forecasting samples.
+See [the P042 manifest](PROMPT042_MANIFEST.md) for result states, limits,
+source warnings, privacy and next-action meanings.

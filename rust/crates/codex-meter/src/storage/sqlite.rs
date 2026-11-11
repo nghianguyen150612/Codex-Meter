@@ -637,6 +637,12 @@ impl SqliteReadStore {
         reporting::inspect(&mut self.connection, evidence_id)
     }
 
+    pub fn readiness_coverage(
+        &mut self,
+    ) -> Result<super::reporting::ReadinessLedgerCoverage, StorageError> {
+        reporting::readiness_coverage(&mut self.connection)
+    }
+
     pub fn evidence_quality(&mut self) -> Result<EvidenceQualitySummary, StorageError> {
         reporting::evidence_quality(&mut self.connection)
     }

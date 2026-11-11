@@ -17,6 +17,10 @@ SCHEMA_DIR = ROOT / "schemas" / "v1"
 FIXTURE_DIR = ROOT / "fixtures" / "contracts" / "v1"
 
 FIXTURES = {
+    "invalid/readiness-negative-coverage.json": "readiness-result.schema.json",
+    "readiness-inventory-empty.json": "readiness-result.schema.json",
+    "readiness-scoped-insufficient.json": "readiness-result.schema.json",
+    "invalid/readiness-unknown-field.json": "readiness-result.schema.json",
     "analytics-estimate-request.json": "analytics-request.schema.json",
     "analytics-result-insufficient.json": "analytics-result.schema.json",
     "analytics-result-success.json": "analytics-result.schema.json",
@@ -69,7 +73,7 @@ def main() -> int:
     expected_schemas = set(schemas)
     mapped_schemas = set(FIXTURES.values())
     if expected_schemas != mapped_schemas | {"common.schema.json"}:
-        failures.append("fixture inventory does not cover exactly the seven v1 schemas")
+        failures.append("fixture inventory does not cover all v1 schemas")
 
     for name, schema in schemas.items():
         try:

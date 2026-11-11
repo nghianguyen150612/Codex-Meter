@@ -1,0 +1,480 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "analysis_type",
+    "mode",
+    "generated_at",
+    "request_id",
+    "status",
+    "database_present",
+    "source_compatibility",
+    "observation_coverage",
+    "ledger_coverage",
+    "scoped_coverage",
+    "per_meter_readiness",
+    "diagnostics",
+    "next_action_codes",
+    "partial",
+    "requested_selection"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "analysis_type": {
+      "const": "forecast_readiness"
+    },
+    "mode": {
+      "enum": [
+        "inventory",
+        "scoped"
+      ]
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "selection_required",
+        "unavailable",
+        "ready",
+        "insufficient_evidence"
+      ]
+    },
+    "database_present": {
+      "type": "boolean"
+    },
+    "source_compatibility": {
+      "enum": [
+        "unavailable",
+        "unsupported_source",
+        "supported_recorded_schema"
+      ]
+    },
+    "observation_coverage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidate_terminal_count",
+            "scan_limit_reached",
+            "raw_total_available",
+            "raw_total_missing",
+            "token_validity",
+            "token_quality",
+            "known_configuration_dimensions"
+          ],
+          "properties": {
+            "candidate_terminal_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "scan_limit_reached": {
+              "type": "boolean"
+            },
+            "raw_total_available": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "raw_total_missing": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "token_validity": {
+              "type": "object",
+              "propertyNames": {
+                "enum": [
+                  "valid",
+                  "incomplete",
+                  "invalid",
+                  "unavailable"
+                ]
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            },
+            "token_quality": {
+              "type": "object",
+              "propertyNames": {
+                "enum": [
+                  "A",
+                  "B",
+                  "C",
+                  "D",
+                  "X"
+                ]
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            },
+            "known_configuration_dimensions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "plan",
+                "model",
+                "reasoning_level",
+                "speed_mode",
+                "codex_version"
+              ],
+              "properties": {
+                "plan": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "model": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "reasoning_level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "speed_mode": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "codex_version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ledger_coverage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonical_response_count",
+            "attributed_response_count",
+            "unattributed_response_count",
+            "raw_total_available",
+            "raw_total_missing",
+            "quota_snapshot_count",
+            "diagnostics",
+            "scan_limit_reached"
+          ],
+          "properties": {
+            "canonical_response_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "attributed_response_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "unattributed_response_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "raw_total_available": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "raw_total_missing": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "quota_snapshot_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "diagnostics": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            },
+            "scan_limit_reached": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scoped_coverage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "configuration",
+            "accounting",
+            "history_status",
+            "exclusion_reasons"
+          ],
+          "properties": {
+            "configuration": {
+              "$ref": "common.schema.json#/$defs/configurationIdentity"
+            },
+            "accounting": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "candidate_observations",
+                "eligible_observations",
+                "excluded_observations",
+                "c_quality_observations"
+              ],
+              "properties": {
+                "candidate_observations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                "eligible_observations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                "excluded_observations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                "c_quality_observations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                }
+              }
+            },
+            "history_status": {
+              "enum": [
+                "available",
+                "insufficient"
+              ]
+            },
+            "exclusion_reasons": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "per_meter_readiness": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "meter_type",
+          "status",
+          "insufficiency_reasons",
+          "capacity_reason_codes",
+          "capacity_confidence",
+          "manual_position_present",
+          "capacity_sample_accounting"
+        ],
+        "properties": {
+          "meter_type": {
+            "enum": [
+              "five_hour",
+              "weekly"
+            ]
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "insufficient_task_history",
+              "insufficient_capacity",
+              "insufficient_task_history_and_capacity",
+              "unavailable"
+            ]
+          },
+          "insufficiency_reasons": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "capacity_reason_codes": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "capacity_confidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "insufficient",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual_position_present": {
+            "type": "boolean"
+          },
+          "capacity_sample_accounting": {
+            "anyOf": [
+              {
+                "$ref": "analytics-result.schema.json#/properties/quota_capacity_estimates/items/properties/sample_accounting"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      }
+    },
+    "next_action_codes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "enum": [
+          "select_existing_database",
+          "select_configuration_and_meters",
+          "qualified_observation_integration_required",
+          "supply_manual_meter_position"
+        ]
+      }
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "requested_selection": {
+      "anyOf": [
+        {
+          "$ref": "analytics-request.schema.json#/properties/dataset_selector"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "inventory"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "request_id": {
+            "type": "null"
+          },
+          "requested_selection": {
+            "type": "null"
+          },
+          "scoped_coverage": {
+            "type": "null"
+          },
+          "per_meter_readiness": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "scoped"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "requested_selection": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

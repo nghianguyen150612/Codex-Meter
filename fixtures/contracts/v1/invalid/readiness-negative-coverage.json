@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0.0",
+  "analysis_type": "forecast_readiness",
+  "mode": "inventory",
+  "generated_at": "2026-10-16T07:00:00Z",
+  "request_id": null,
+  "requested_selection": null,
+  "status": "selection_required",
+  "database_present": true,
+  "source_compatibility": "supported_recorded_schema",
+  "observation_coverage": {
+    "candidate_terminal_count": -1,
+    "scan_limit_reached": false,
+    "raw_total_available": 0,
+    "raw_total_missing": 0,
+    "known_configuration_dimensions": {
+      "codex_version": 0,
+      "model": 0,
+      "plan": 0,
+      "reasoning_level": 0,
+      "speed_mode": 0
+    },
+    "token_validity": {},
+    "token_quality": {}
+  },
+  "ledger_coverage": {
+    "canonical_response_count": 0,
+    "attributed_response_count": 0,
+    "unattributed_response_count": 0,
+    "raw_total_available": 0,
+    "raw_total_missing": 0,
+    "quota_snapshot_count": 0,
+    "diagnostics": {},
+    "scan_limit_reached": false
+  },
+  "scoped_coverage": null,
+  "per_meter_readiness": [],
+  "diagnostics": [
+    "qualified_observations_absent",
+    "quota_snapshots_absent",
+    "response_evidence_absent"
+  ],
+  "next_action_codes": [
+    "select_configuration_and_meters"
+  ],
+  "partial": false
+}

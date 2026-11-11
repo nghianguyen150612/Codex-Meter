@@ -103,3 +103,8 @@ wheel installation, installed-worker selection, and runtime compatibility covera
 - [Roadmap completion audit](docs/ROADMAP_COMPLETION_AUDIT.md)
 - [Remaining-workload prediction](docs/REMAINING_WORKLOAD_PREDICTION.md)
 - [CLI analytics integration](docs/CLI_ANALYTICS_INTEGRATION.md)
+
+Forecast evidence diagnostics: `codex-meter readiness` inventories an existing
+local database without modifying evidence. `codex-meter readiness --request
+REQUEST.json --json` checks the selected configuration and meters through the
+existing forecasting pipeline. See [P042 readiness](docs/PROMPT042_MANIFEST.md).

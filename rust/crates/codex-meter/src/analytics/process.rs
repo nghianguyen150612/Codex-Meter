@@ -32,6 +32,7 @@ pub enum PythonWorkerMode {
 pub enum WorkerOperation {
     Estimate,
     Workload,
+    Inventory,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,6 +139,9 @@ pub fn invoke_worker_with_mode(
         .arg(ANALYTICS_PROCESS_PROTOCOL_VERSION)
         .arg("--generated-at")
         .arg(invocation.generated_at);
+    if invocation.operation == WorkerOperation::Inventory {
+        command.arg("--operation").arg("inventory");
+    }
     if invocation.operation == WorkerOperation::Workload {
         command.arg("--operation").arg("workload");
     }

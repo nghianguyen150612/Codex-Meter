@@ -447,6 +447,44 @@ def execute_workload_request(raw: bytes, context: LocalExecutionContext) -> str:
     return json.dumps(body, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
+def execute_inventory(context: LocalExecutionContext) -> str:
+    """P017-owned bounded terminal coverage; no global eligibility inference."""
+    _validate_context(context)
+    try:
+        with ObservationDatabase.open(context.database_path) as database:
+            dataset = database.load_inventory()
+    except MigrationDriftError as exc:
+        raise WorkerError("migration_checksum_drift", "migration checksums incompatible") from exc
+    except StorageCompatibilityError as exc:
+        raise WorkerError("database_schema_incompatible", "schema incompatible") from exc
+    except ObservationCorruptError as exc:
+        raise WorkerError("corrupt_observation", "corrupt observation") from exc
+    except AnalyticsDataError as exc:
+        raise WorkerError("database_read_failed", "database unavailable") from exc
+    rows = dataset.observations
+    return json.dumps(
+        {
+            "candidate_terminal_count": len(rows),
+            "scan_limit_reached": len(rows) == 1000,
+            "raw_total_available": sum(row.raw_total is not None for row in rows),
+            "raw_total_missing": sum(row.raw_total is None for row in rows),
+            "known_configuration_dimensions": {
+                name: sum(getattr(row.configuration, name) is not None for row in rows)
+                for name in _CONFIGURATION_FIELDS
+            },
+            "token_validity": {
+                value: sum(row.token_validity.value == value for row in rows)
+                for value in sorted({row.token_validity.value for row in rows})
+            },
+            "token_quality": {
+                value: sum(row.token_quality.value == value for row in rows)
+                for value in sorted({row.token_quality.value for row in rows})
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
 def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m codex_meter.integration.worker")
     parser.add_argument("--database", required=True)
@@ -454,7 +492,9 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--generated-at", required=True)
     parser.add_argument("--five-hour-used-percent", type=float)
     parser.add_argument("--weekly-used-percent", type=float)
-    parser.add_argument("--operation", choices=("estimate", "workload"), default="estimate")
+    parser.add_argument(
+        "--operation", choices=("estimate", "workload", "inventory"), default="estimate"
+    )
     return parser.parse_args(argv)
 
 
@@ -470,7 +510,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         raw = sys.stdin.buffer.read(MAXIMUM_REQUEST_BYTES + 1)
         output = (
-            execute_workload_request(raw, context)
+            execute_inventory(context)
+            if arguments.operation == "inventory"
+            else execute_workload_request(raw, context)
             if arguments.operation == "workload"
             else execute_request(raw, context)
         )

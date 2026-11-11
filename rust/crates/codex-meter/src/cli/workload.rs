@@ -33,7 +33,14 @@ pub fn run(arguments: WorkloadArguments) -> Result<String, CliError> {
         }
     }
     let request_bytes = read_bounded_request(&arguments.request)?;
-    let request = AnalyticsRequest::parse(&request_bytes).map_err(|reason| CliError {
+    run_request(arguments, &request_bytes)
+}
+
+pub(super) fn run_request(
+    arguments: WorkloadArguments,
+    request_bytes: &[u8],
+) -> Result<String, CliError> {
+    let request = AnalyticsRequest::parse(request_bytes).map_err(|reason| CliError {
         code: reason.code,
         message: reason.message.to_owned(),
     })?;
@@ -64,7 +71,7 @@ pub fn run(arguments: WorkloadArguments) -> Result<String, CliError> {
             weekly_used_percent: arguments.weekly_used_percent,
             operation: WorkerOperation::Workload,
         },
-        &request_bytes,
+        request_bytes,
         ProcessLimits::default(),
     )
     .map_err(|reason| CliError {
@@ -98,7 +105,7 @@ pub fn run(arguments: WorkloadArguments) -> Result<String, CliError> {
     }
 }
 
-fn read_bounded_request(path: &Path) -> Result<Vec<u8>, CliError> {
+pub(super) fn read_bounded_request(path: &Path) -> Result<Vec<u8>, CliError> {
     let file =
         File::open(path).map_err(|_| error("invalid_request", "request file could not be read"))?;
     let mut bytes = Vec::new();

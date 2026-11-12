@@ -46,10 +46,13 @@ historical terminal records.
 `telemetry::coverage` separates reported source continuity from task coverage.
 It assesses identity, boundary presence, lifecycle anomalies, mixed configuration,
 and canonical event identity and duplicate conflicts. Its status distinguishes
-unavailable, partial, continuous but unproven, and conflicting evidence. A
-reserved verified-complete state has no production construction path: there is
-no audited closure contract or synthetic proof interface yet. Even a constructed
-assessment cannot promote P013 completeness. Continuity supplied by a caller is
+unavailable, partial, continuous but unproven, and conflicting evidence. Verified completeness requires a private, non-deserializable closure proof with
+a recognized contract and provenance, matching source generation, task and
+session identities, committed nonzero boundary, and exact canonical event-ID
+membership. Conflicts, missing evidence, and discontinuity fail closed. The
+only recognized authority is compiled exclusively into unit tests; production
+rollout ingestion cannot construct or supply a proof. Assessment fields are
+private so callers cannot fabricate a favorable result. Continuity supplied by a caller is
 not closure, and the recorder uses unknown continuity because a cursor alone
 cannot prove the whole task history. The boundary passed at assembly is a
 candidate committed atomically with the observation and checkpoint, not an
@@ -65,8 +68,20 @@ lifecycle conflicts, identity, duplicate replay and conflicting duplicate data.
 Existing sync and storage regression tests exercise the recorder, checkpoint
 replay, source replacement, incomplete tails and terminal immutability.
 
-This is a conservative first increment, not a complete authoritative proof
-framework. More tests and an audited, provenance-bound closure contract are
-needed before verified completeness could be supported. P044B must implement
+No production source has an audited closure adapter. The synthetic authority
+exercises the admission logic without changing this limitation. Dedicated tests
+cover matching and mismatched proof identities, membership, boundary and
+authority, duplicates, discontinuity and lifecycle conflicts. A sync regression
+checks a task across process restarts and later token evidence against immutable
+terminal JSON; the failed-transaction regression checks the checkpoint offset,
+revision and state checksum remain unchanged. P044B must implement
 explicit task-associated quota samples, P012 qualification, bounded sampling,
 and atomic durable pending reconciliation without upgrading terminal rows.
+
+
+## Closeout validation
+
+The implementation commit is the commit containing this manifest update; its
+exact SHA and final-head CI links are recorded in PR #39. The prior P044A
+baseline (`698160f5046517f8133320bf8e2ef9093aa268eb`) is not evidence for
+validation of this change. Overall P044 remains partial pending P044B.

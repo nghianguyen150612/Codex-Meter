@@ -1,7 +1,8 @@
 //! Conservative task coverage assessment. Continuity is not closure.
 //!
 //! No audited production source currently provides a completeness contract.
-//! This evaluator therefore never manufactures `Complete` from local evidence.
+//! Only an internal authoritative adapter can supply a closure proof; none is
+//! available for production rollout sources.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +41,7 @@ pub enum TaskCoverageReason {
     EventIdentityMismatch,
     ConflictingDuplicate,
     ClosureUnproven,
+    InvalidClosure,
 }
 
 /// All identifiers must already be privacy-safe normalized identities. The boundary
@@ -58,23 +60,77 @@ pub struct TaskCoverageEvidence<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskCoverageAssessment {
-    pub contract_version: u32,
-    pub continuity: SourceContinuity,
-    pub status: TaskCoverageStatus,
-    pub canonical_event_count: usize,
-    pub reasons: BTreeSet<TaskCoverageReason>,
+    contract_version: u32,
+    continuity: SourceContinuity,
+    status: TaskCoverageStatus,
+    canonical_event_count: usize,
+    reasons: BTreeSet<TaskCoverageReason>,
+}
+
+// Private and non-deserializable: no production adapter currently constructs this.
+// A future adapter must audit the source contract before creating this value.
+struct TrustedTaskClosure {
+    contract: ClosureContract,
+    source_instance_id: String,
+    task_id: String,
+    session_id: String,
+    committed_boundary: u64,
+    response_ids: BTreeSet<String>,
+    provenance: ClosureProvenance,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ClosureContract {
+    #[cfg(test)]
+    SyntheticV1,
+    // No audited production contract is registered.
+    #[allow(dead_code)]
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ClosureProvenance {
+    #[cfg(test)]
+    SyntheticAuthority,
+    #[allow(dead_code)]
+    Unavailable,
 }
 
 impl TaskCoverageAssessment {
+    pub fn status(&self) -> TaskCoverageStatus {
+        self.status
+    }
+    pub fn reasons(&self) -> &BTreeSet<TaskCoverageReason> {
+        &self.reasons
+    }
+    pub fn canonical_event_count(&self) -> usize {
+        self.canonical_event_count
+    }
+    pub fn continuity(&self) -> SourceContinuity {
+        self.continuity
+    }
+    pub fn contract_version(&self) -> u32 {
+        self.contract_version
+    }
+
     /// P013 remains authoritative for checked token arithmetic and validity.
     pub fn token_completeness(&self) -> TokenTelemetryCompleteness {
-        // No production closure contract has been audited. Keep this fail closed
-        // even if future changes accidentally construct an assessment directly.
-        TokenTelemetryCompleteness::Incomplete
+        if self.status == TaskCoverageStatus::VerifiedComplete {
+            TokenTelemetryCompleteness::Complete
+        } else {
+            TokenTelemetryCompleteness::Incomplete
+        }
     }
 }
 
 pub fn assess_task_coverage(e: &TaskCoverageEvidence<'_>) -> TaskCoverageAssessment {
+    assess_with_closure(e, None)
+}
+
+fn assess_with_closure(
+    e: &TaskCoverageEvidence<'_>,
+    closure: Option<&TrustedTaskClosure>,
+) -> TaskCoverageAssessment {
     use TaskCoverageReason as R;
     let mut reasons = BTreeSet::new();
     if e.task_id.is_empty()
@@ -137,12 +193,36 @@ pub fn assess_task_coverage(e: &TaskCoverageEvidence<'_>) -> TaskCoverageAssessm
             }
         }
     }
-    reasons.insert(R::ClosureUnproven);
+    match closure {
+        None => {
+            reasons.insert(R::ClosureUnproven);
+        }
+        Some(proof) => {
+            let authorized = match (proof.contract, proof.provenance) {
+                #[cfg(test)]
+                (ClosureContract::SyntheticV1, ClosureProvenance::SyntheticAuthority) => true,
+                _ => false,
+            };
+            let observed: BTreeSet<_> = events.keys().map(|id| (*id).to_owned()).collect();
+            if !authorized
+                || proof.source_instance_id != e.source_instance_id
+                || proof.task_id != e.task_id
+                || Some(proof.session_id.as_str()) != e.session_id
+                || proof.committed_boundary == 0
+                || Some(proof.committed_boundary) != e.boundary
+                || proof.response_ids != observed
+                || proof.response_ids.iter().any(String::is_empty)
+            {
+                reasons.insert(R::InvalidClosure);
+            }
+        }
+    }
     let conflict = [
         R::SourceDiscontinuous,
         R::LifecycleConflict,
         R::EventIdentityMismatch,
         R::ConflictingDuplicate,
+        R::InvalidClosure,
     ]
     .iter()
     .any(|r| reasons.contains(r));
@@ -150,6 +230,8 @@ pub fn assess_task_coverage(e: &TaskCoverageEvidence<'_>) -> TaskCoverageAssessm
         TaskCoverageStatus::Conflicting
     } else if reasons.contains(&R::MissingIdentity) {
         TaskCoverageStatus::Unavailable
+    } else if reasons.is_empty() && closure.is_some() {
+        TaskCoverageStatus::VerifiedComplete
     } else if reasons.len() == 1 && e.continuity == SourceContinuity::Continuous {
         TaskCoverageStatus::ContinuousButUnproven
     } else {
@@ -311,5 +393,112 @@ mod tests {
         assert!(a
             .reasons
             .contains(&TaskCoverageReason::EventIdentityMismatch));
+    }
+    // This fixture is compiled only in tests and is not an adapter for rollout data.
+    fn synthetic_closure(ids: &[&str]) -> TrustedTaskClosure {
+        TrustedTaskClosure {
+            contract: ClosureContract::SyntheticV1,
+            source_instance_id: "source".into(),
+            task_id: "task".into(),
+            session_id: "session".into(),
+            committed_boundary: 20,
+            response_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+            provenance: ClosureProvenance::SyntheticAuthority,
+        }
+    }
+    #[test]
+    fn synthetic_closure_admits_only_matching_exhaustive_evidence() {
+        let t = task();
+        let events = vec![event("one", 5), event("two", 0), event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one", "two"]);
+        let a = assess_with_closure(&e, Some(&proof));
+        assert_eq!(a.status(), TaskCoverageStatus::VerifiedComplete);
+        assert_eq!(a.canonical_event_count(), 2);
+        assert_eq!(a.token_completeness(), TokenTelemetryCompleteness::Complete);
+        assert_eq!(
+            assess_task_coverage(&e).token_completeness(),
+            TokenTelemetryCompleteness::Incomplete
+        );
+    }
+    #[test]
+    fn mismatched_proofs_fail_closed() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let mut proofs = Vec::new();
+        let mut p = synthetic_closure(&["one"]);
+        p.source_instance_id = "replacement".into();
+        proofs.push(p);
+        let mut p = synthetic_closure(&["one"]);
+        p.session_id = "other".into();
+        proofs.push(p);
+        let mut p = synthetic_closure(&["one"]);
+        p.task_id = "other".into();
+        proofs.push(p);
+        proofs.push(synthetic_closure(&["one", "missing"]));
+        proofs.push(synthetic_closure(&[]));
+        let mut p = synthetic_closure(&["one"]);
+        p.committed_boundary = 19;
+        proofs.push(p);
+        let mut p = synthetic_closure(&["one"]);
+        p.committed_boundary = 0;
+        proofs.push(p);
+        let mut p = synthetic_closure(&["one"]);
+        p.contract = ClosureContract::Unavailable;
+        proofs.push(p);
+        let mut p = synthetic_closure(&["one"]);
+        p.provenance = ClosureProvenance::Unavailable;
+        proofs.push(p);
+        for proof in &proofs {
+            let a = assess_with_closure(&e, Some(proof));
+            assert_eq!(a.status(), TaskCoverageStatus::Conflicting);
+            assert!(a.reasons().contains(&TaskCoverageReason::InvalidClosure));
+            assert_eq!(
+                a.token_completeness(),
+                TokenTelemetryCompleteness::Incomplete
+            );
+        }
+        e.boundary = None;
+        assert_ne!(
+            assess_with_closure(&e, Some(&synthetic_closure(&["one"]))).status(),
+            TaskCoverageStatus::VerifiedComplete
+        );
+    }
+    #[test]
+    fn closure_never_overrides_conflicts_or_unknown_continuity() {
+        let mut t = task();
+        let proof = synthetic_closure(&["one"]);
+        let events = vec![event("one", 5), event("one", 6)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        assert_eq!(
+            assess_with_closure(&e, Some(&proof)).status(),
+            TaskCoverageStatus::Conflicting
+        );
+        let events = vec![event("one", 5)];
+        e.events = &events;
+        e.continuity = SourceContinuity::Discontinuous;
+        assert_eq!(
+            assess_with_closure(&e, Some(&proof)).status(),
+            TaskCoverageStatus::Conflicting
+        );
+        e.continuity = SourceContinuity::Unknown;
+        assert_ne!(
+            assess_with_closure(&e, Some(&proof)).status(),
+            TaskCoverageStatus::VerifiedComplete
+        );
+        t.anomalies
+            .insert(crate::telemetry::TaskAnomaly::ConflictingTerminalEvidence);
+        t.anomalies
+            .insert(crate::telemetry::TaskAnomaly::TokenAfterTerminal);
+        let mut e = evidence(&t);
+        e.events = &events;
+        assert_eq!(
+            assess_with_closure(&e, Some(&proof)).status(),
+            TaskCoverageStatus::Conflicting
+        );
     }
 }

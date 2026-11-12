@@ -78,10 +78,48 @@ revision and state checksum remain unchanged. P044B must implement
 explicit task-associated quota samples, P012 qualification, bounded sampling,
 and atomic durable pending reconciliation without upgrading terminal rows.
 
+### Trusted closure contract and authority
+
+The trusted closure implementation was introduced in commit
+`c497818650fda1eb31eae50e9a24b55dfaa2a9a0`. Its private proof carries the
+contract version (encoded by the private contract variant), source generation,
+task and session identity, committed boundary, exact canonical response-ID set,
+and provenance. The only constructor is internal. The synthetic authoritative
+fixture is compiled only for unit tests and is not reachable through
+`codex-meter sync`, runtime flags, or input JSON. Production rollout assessment
+always enters without a proof and remains incomplete.
+
+`VerifiedComplete` requires a recognized contract/provenance pair; a matching
+source generation, task, session, and nonzero committed boundary; exact response
+membership; continuous source evidence; complete task lifecycle evidence; and
+no identity, configuration, duplicate, or lifecycle conflicts. Missing proof
+remains unproven. Malformed proof, mismatched membership/boundary/identity,
+source discontinuity, and lifecycle conflict fail closed. Only an assessment
+created by this validation can map token completeness to `Complete`.
+
+The focused closure suite covers valid synthetic proof; missing proof; wrong
+generation, session, and task; missing expected and extra observed responses;
+identical and conflicting duplicates; candidate/committed boundary mismatch;
+discontinuity; conflicting lifecycle and post-terminal tokens; malformed
+authority; and production rollout inability to promote coverage. Recovery
+regressions cover an incomplete record recovered in a later batch, checkpointed
+task state across process restarts, idempotent repeated sync, rollback of cursor
+state after transaction failure, and immutable terminal observations after
+later token evidence.
+
 
 ## Closeout validation
 
-The implementation commit is the commit containing this manifest update; its
-exact SHA and final-head CI links are recorded in PR #39. The prior P044A
-baseline (`698160f5046517f8133320bf8e2ef9093aa268eb`) is not evidence for
-validation of this change. Overall P044 remains partial pending P044B.
+Commit `c497818650fda1eb31eae50e9a24b55dfaa2a9a0` changes Rust source and this
+manifest beyond the prior P044A baseline
+(`698160f5046517f8133320bf8e2ef9093aa268eb`). Final-head CI and release
+validation links and results are recorded in PR #39. At `c497818`, push CI
+([run 43181901696](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/43181901696)),
+PR CI
+([run 43181910298](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/43181910298)),
+and four-platform release candidate validation
+([run 43181924544](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/43181924544))
+passed. The local Rust, Python, contract, installed-worker, and Linux PTY results
+for the follow-up regression additions are recorded with their final-head checks
+in PR #39. The earlier baseline CI at `698160f` is not evidence for validating
+this implementation. Overall P044 remains partial pending P044B.

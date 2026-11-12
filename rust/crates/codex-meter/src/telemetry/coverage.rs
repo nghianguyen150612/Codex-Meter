@@ -406,6 +406,168 @@ mod tests {
             provenance: ClosureProvenance::SyntheticAuthority,
         }
     }
+
+    fn assert_invalid_closure(e: &TaskCoverageEvidence<'_>, proof: &TrustedTaskClosure) {
+        let assessment = assess_with_closure(e, Some(proof));
+        assert_eq!(assessment.status(), TaskCoverageStatus::Conflicting);
+        assert!(assessment
+            .reasons()
+            .contains(&TaskCoverageReason::InvalidClosure));
+        assert_eq!(
+            assessment.token_completeness(),
+            TokenTelemetryCompleteness::Incomplete
+        );
+    }
+
+    #[test]
+    fn missing_trusted_closure_stays_unproven() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let assessment = assess_task_coverage(&e);
+        assert_eq!(
+            assessment.status(),
+            TaskCoverageStatus::ContinuousButUnproven
+        );
+        assert!(assessment
+            .reasons()
+            .contains(&TaskCoverageReason::ClosureUnproven));
+        assert_eq!(
+            assessment.token_completeness(),
+            TokenTelemetryCompleteness::Incomplete
+        );
+    }
+
+    #[test]
+    fn production_rollout_assessment_cannot_promote_coverage() {
+        let t = task();
+        let events = vec![event("one", 5), event("two", 8)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let assessment = assess_task_coverage(&e);
+        assert_eq!(assessment.canonical_event_count(), 2);
+        assert_ne!(assessment.status(), TaskCoverageStatus::VerifiedComplete);
+        assert_eq!(
+            assessment.token_completeness(),
+            TokenTelemetryCompleteness::Incomplete
+        );
+    }
+
+    #[test]
+    fn closure_rejects_wrong_source_generation() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let mut proof = synthetic_closure(&["one"]);
+        proof.source_instance_id = "replacement-generation".into();
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn closure_rejects_wrong_session() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let mut proof = synthetic_closure(&["one"]);
+        proof.session_id = "other-session".into();
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn closure_rejects_wrong_task() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let mut proof = synthetic_closure(&["one"]);
+        proof.task_id = "other-task".into();
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn closure_rejects_missing_expected_response() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one", "missing"]);
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn closure_rejects_unexpected_additional_response() {
+        let t = task();
+        let events = vec![event("one", 5), event("extra", 8)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one"]);
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn candidate_boundary_does_not_match_committed_boundary() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one"]);
+        e.boundary = Some(21);
+        assert_invalid_closure(&e, &proof);
+    }
+
+    #[test]
+    fn discontinuous_source_fails_even_with_matching_closure() {
+        let t = task();
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        e.continuity = SourceContinuity::Discontinuous;
+        let proof = synthetic_closure(&["one"]);
+        let assessment = assess_with_closure(&e, Some(&proof));
+        assert_eq!(assessment.status(), TaskCoverageStatus::Conflicting);
+        assert!(assessment
+            .reasons()
+            .contains(&TaskCoverageReason::SourceDiscontinuous));
+        assert_eq!(
+            assessment.token_completeness(),
+            TokenTelemetryCompleteness::Incomplete
+        );
+    }
+
+    #[test]
+    fn conflicting_lifecycle_evidence_fails_with_matching_closure() {
+        let mut t = task();
+        t.anomalies
+            .insert(crate::telemetry::TaskAnomaly::ConflictingTerminalEvidence);
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one"]);
+        let assessment = assess_with_closure(&e, Some(&proof));
+        assert_eq!(assessment.status(), TaskCoverageStatus::Conflicting);
+        assert!(assessment
+            .reasons()
+            .contains(&TaskCoverageReason::LifecycleConflict));
+    }
+
+    #[test]
+    fn post_terminal_token_evidence_fails_with_matching_closure() {
+        let mut t = task();
+        t.anomalies
+            .insert(crate::telemetry::TaskAnomaly::TokenAfterTerminal);
+        let events = vec![event("one", 5)];
+        let mut e = evidence(&t);
+        e.events = &events;
+        let proof = synthetic_closure(&["one"]);
+        let assessment = assess_with_closure(&e, Some(&proof));
+        assert_eq!(assessment.status(), TaskCoverageStatus::Conflicting);
+        assert!(assessment
+            .reasons()
+            .contains(&TaskCoverageReason::LifecycleConflict));
+    }
     #[test]
     fn synthetic_closure_admits_only_matching_exhaustive_evidence() {
         let t = task();

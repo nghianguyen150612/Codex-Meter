@@ -2,6 +2,7 @@
 
 pub mod assembly;
 pub mod codex_rollout;
+pub mod coverage;
 pub(crate) mod identity;
 pub mod incremental_jsonl;
 pub mod normalized;

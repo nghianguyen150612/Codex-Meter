@@ -41,7 +41,7 @@ The P031 rollout reader currently cannot prove exhaustive per-task response
 coverage at a terminal marker. It can encounter unsupported records, incomplete
 source coverage, later appended records, or source-generation changes, and the
 format does not provide a validated flush/coverage watermark. Therefore the
-recorder passes `Incomplete` for every newly built task Observation, including
+recorder assesses coverage with `telemetry::coverage` and passes `Incomplete` for every newly built task Observation, including
 tasks with a `task_complete` marker and fully populated observed raw totals.
 Directly observed counters remain present, but P022 eligibility stays false
 until token completeness is independently established. The generic P013 builder

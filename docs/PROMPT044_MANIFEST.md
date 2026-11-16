@@ -1,8 +1,10 @@
-# P044 manifest: P044A in progress
+# P044 manifest: P044A complete, P044B1 implemented
 
-P044 remains incomplete. P044A introduces a conservative coverage assessment;
-P044B quota sampling, reconciliation integration, and its durable lifecycle are
-not implemented.
+P044A is COMPLETE. P044B1 implements the in-memory qualified quota sampling
+coordinator described below. P044B2 durable lifecycle integration is NOT STARTED.
+Overall P044 remains PARTIAL. Final-head hosted acceptance for P044B1 is tracked
+in the dedicated section of Draft PR #39; source implementation alone does not
+substitute for those checks.
 
 ## Pinned source evidence
 
@@ -123,3 +125,80 @@ passed. The local Rust, Python, contract, installed-worker, and Linux PTY result
 for the follow-up regression additions are recorded with their final-head checks
 in PR #39. The earlier baseline CI at `698160f` is not evidence for validating
 this implementation. Overall P044 remains partial pending P044B.
+
+
+## P044B1: qualified in-memory quota sampling
+
+Continues `feat/p044-task-coverage-quota-evidence` from
+`6798fe1962f06782d2765bf245bce40f28645dd1`, preserving all P044A commits.
+`telemetry::task_quota_sampling` adds `TaskQuotaSampling` with typed registration,
+before-sample admission, initialization, explicit-time advancement, read-only
+P012 batches (states, outputs and pending actions), and completion inspection.
+Admissions distinguish accepted evidence from replay; failures return typed
+rejections. Registration binds contract version, normalized task/session and
+source generation, observed lifecycle interval, full validated policy identity,
+authority contract and phase. The full policy value is its identity, rather than
+an unverified caller-selected policy name.
+
+`AssociationClaim` is untrusted data. `AssociationCredential` and
+`QualifiedQuotaEvent` have private fields, no public constructors, and no serde
+implementation. Only the private unit-test synthetic provider issues them.
+Recognition of the synthetic authority is itself compiled out of production;
+production builds recognize no authority. Rollout imports, timestamps, task IDs,
+JSON, flags and environment variables cannot create a capability or promote an
+account snapshot. A separate integration test links the production library and
+verifies uncredentialed registration remains unavailable; compile-fail doctests
+check private construction and JSON deserialization boundaries. Synthetic
+fixture samples are not real provider observations.
+
+The coordinator forwards admitted baselines to
+`begin_task_quota_reconciliation` and acquisition attempts to
+`reconcile_task_quota_at`. P012/P011 remain the only baseline selection, tracking,
+delta, reset, stability, confirmation and deadline engines. There is no clock
+read, polling loop, thread, provider adapter or independent delta calculation.
+Batch ordering is P012's existing ordering contract; streaming late arrivals
+retain P012's out-of-order behavior. Evaluation time cannot move backwards.
+Identical evidence is forwarded to P012's deduplication (including future
+samples replayed at a later evaluation time). A meter-scoped identity ledger
+adds only payload/provenance conflict detection, which P011/P012's seen-ID sets
+do not provide. Validation and P012 errors leave the entire batch uncommitted.
+New evidence targeting a terminal meter is explicitly rejected; identical
+terminal replay remains idempotent. Read-only reconciliation access prevents
+callers from changing established results.
+
+Five-hour and weekly baselines, windows, outcomes and missingness stay
+independent. Verified stable zero remains zero; unavailable evidence is never
+manufactured as zero. Known local overlap is preserved without allocating
+account movement between tasks. `NoKnownLocalOverlap` proves no account-wide
+isolation; external clients and cloud usage remain unproven. No isolation grade
+A or B is awarded, and a positive delta is not exclusive task consumption.
+
+### Dedicated and regression validation
+
+The 32 dedicated unit tests cover valid and missing authority, unsupported
+production authority/contract/version, task/session/generation/policy/interval
+mismatch, phase and meter mismatch, baseline selection/missing start/staleness,
+positive and zero deltas, independent availability/reset/failure/timeout,
+plan discontinuity, instability, threshold/confirmation rules, explicit
+deadlines, replay/conflict handling, terminal updates, equivalent batch orders,
+streaming stale/future samples, atomic rejection, overlap and external
+uncertainty. The production boundary integration adds one test; three
+compile-fail doctests exercise capability construction/deserialization.
+
+Local validation includes Rust format and Clippy (all targets/features, warnings
+as errors), default and all-feature workspace tests, Python pytest (677 tests),
+Ruff lint/format (35 files), contract validation (8 schemas, 19 positive and
+7 negative fixtures), installed-worker runtime smoke, and Linux PTY regressions.
+Exact workspace totals, final-head SHA, push/PR CI and four-platform release
+validation URLs and acceptance status are recorded in PR #39. Earlier P044A
+workflow runs are not validation evidence for this new source.
+
+### P044B2 boundary and hardware gates
+
+No checkpoint format, SQLite migration, Observation lifecycle, CLI or Python
+estimator is changed. P044B2 must integrate durable association and pending
+reconciliation checkpoints, transactional SQLite persistence, provisional to
+terminal Observation ordering, and crash/replay recovery without rewriting
+historical terminal Observations. There is still no live production sampling
+authority. P045 is not started. P038 G4/G5 remain UNVERIFIED. PR #39 remains
+Draft and unmerged on the existing P043 base; overall P044 remains PARTIAL.

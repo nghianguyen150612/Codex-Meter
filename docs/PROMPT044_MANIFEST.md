@@ -1,7 +1,8 @@
 # P044 manifest: P044A complete, P044B1 implemented
 
 P044A is COMPLETE. P044B1 implements the in-memory qualified quota sampling
-coordinator described below. P044B2 durable lifecycle integration is NOT STARTED.
+coordinator described below. P044B2 has a partial format-3 durable metadata
+increment; workflow recovery and Observation finalization remain incomplete.
 Overall P044 remains PARTIAL. Final-head hosted acceptance for P044B1 is tracked
 in the dedicated section of Draft PR #39; source implementation alone does not
 substitute for those checks.
@@ -193,12 +194,39 @@ Exact workspace totals, final-head SHA, push/PR CI and four-platform release
 validation URLs and acceptance status are recorded in PR #39. Earlier P044A
 workflow runs are not validation evidence for this new source.
 
-### P044B2 boundary and hardware gates
+### P044B2 durable checkpoint increment (partial)
 
-No checkpoint format, SQLite migration, Observation lifecycle, CLI or Python
-estimator is changed. P044B2 must integrate durable association and pending
-reconciliation checkpoints, transactional SQLite persistence, provisional to
-terminal Observation ordering, and crash/replay recovery without rewriting
-historical terminal Observations. There is still no live production sampling
-authority. P045 is not started. P038 G4/G5 remain UNVERIFIED. PR #39 remains
-Draft and unmerged on the existing P043 base; overall P044 remains PARTIAL.
+Checkpoint state format 3 adds a bounded `qualified_sampling` metadata map to
+`RuntimeRecoveryState`. It records source-generation, task/session and interval
+identity, contract label, phase, validated policy, original deadline, explicit
+evaluation time, and a bounded sample identity/digest ledger. The workflow key
+hashes the whole source/task/session/interval association. The existing active
+P012 reconciliation and policy remain the sole persisted P012 state; initialized
+sampling metadata must match that state exactly. The payload has a 4 MiB cap,
+128-workflow cap, 512-digest-per-workflow cap, and 256-byte identifier cap.
+
+Version 1 and 2 checkpoint decoding remains supported. Missing legacy sampling
+metadata is unavailable, and older formats cannot contain or promote qualified
+metadata. The row format and embedded format must agree. Checksum validation,
+revision CAS, and exact source-generation binding remain in force. File-backed
+SQLite recovery tests exercise v3 close/reopen; source-generation mismatch is
+rejected. A serialized `authority_contract` is descriptive metadata only: no
+credential is serializable or restored, and production still has no issuer.
+
+This increment does not yet make `TaskQuotaSampling` resumable: it does not
+persist baseline sample payloads or restore the private coordinator evidence
+ledger after a crash. It does not provide a durable workflow service, P013
+terminal assembly, P044 provisional Observation ordering, or P044 atomic
+terminal commit/cleanup. The existing P016 atomic Observation/checkpoint API is
+unchanged, and historical terminal rows remain immutable. These gaps leave
+P044B2 and overall P044 PARTIAL. P045 is not started; P038 G4/G5 remain
+UNVERIFIED. PR #39 remains Draft and unmerged on the existing P043 base.
+
+Focused checkpoint validation passed locally with Rust 1.100.0:
+`cargo test --manifest-path rust/Cargo.toml -p codex-meter --lib
+storage::checkpoints::tests` (15 tests), file-backed recovery included. The
+workspace default and all-feature Rust test commands, workspace Clippy,
+`cargo fmt --check`, Python pytest (677 tests), Ruff check/format, contract
+validation (8 schemas, 19 positive and 7 negative fixtures), P029 installed
+worker smoke, and Linux PTY recovery tests passed locally. Hosted final-head
+CI, Windows ConPTY, macOS, and four-platform release validation remain pending.

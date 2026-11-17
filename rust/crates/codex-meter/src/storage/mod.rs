@@ -8,7 +8,8 @@ mod sqlite;
 mod usage_evidence;
 
 pub use checkpoints::{
-    ActiveReconciliationCheckpoint, RuntimeCheckpoint, RuntimeRecoveryState, STATE_FORMAT_VERSION,
+    ActiveReconciliationCheckpoint, QualifiedSamplingCheckpoint, QualifiedSamplingPhase,
+    RuntimeCheckpoint, RuntimeRecoveryState, STATE_FORMAT_VERSION,
 };
 pub use observations::{
     ObservationPage, ObservationPageCursor, ObservationQuery, StoredObservation,

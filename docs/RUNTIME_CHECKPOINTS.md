@@ -51,13 +51,31 @@ fields. P012 policy durations use exact `{seconds, nanoseconds}` values rather
 than floating-point seconds. Restored policies pass `ReconciliationPolicy::validate`
 and domain-owned recovery validation before becoming runtime state.
 
-`state_format_version = 2` is the current internal checkpoint format version.
-The version 2 reader accepts version 1 payloads and defaults the newly added
-task start/terminal timestamps to unavailable. New checkpoints use version 2.
-This is separate from the SQLite migration version (`4`) and public JSON
-contract versions such as `schema_version = 1.0.0`. The format is present in
-both the row metadata and the typed payload envelope. A newer or unsupported
-format is rejected rather than decoded as the current version.
+`state_format_version = 3` is the current internal checkpoint format version.
+The version 3 reader accepts version 1 and version 2 payloads; missing task
+start/terminal timestamps and sampling metadata remain unavailable. New
+checkpoints use version 3. Version 3 adds a bounded `qualified_sampling` map
+containing the exact source generation, task/session, verified interval,
+contract label, sampling phase, validated policy, original deadline, explicit
+evaluation timestamp, and sample identity digests. Its key hashes the full
+association identity, so equal task IDs with different sessions or intervals
+do not merge.
+
+The `qualified_sampling` record is metadata only. An authority contract string,
+checksum, and structurally valid JSON do not issue or restore a P044B1
+`AssociationCredential`. A recovered record still requires fresh validation
+from an approved source authority before qualified events may be accepted.
+There is no approved production issuer. Legacy v1/v2 entries have no qualified
+association provenance and are never promoted. Version 3 metadata is not yet a
+complete resumable P044B2 coordinator snapshot: baseline event payloads and the
+coordinator's private provenance ledger are not reconstructed by this format.
+
+The state payload is capped at 4 MiB, with at most 128 qualified workflow
+records, 512 sample digests per workflow, and 256-byte identifiers. The format
+is separate from SQLite migration version (`6`) and public JSON contract
+versions such as `schema_version = 1.0.0`. The format is present in both row
+metadata and the typed payload envelope; disagreement, newer formats, and
+unsupported formats fail closed.
 
 P015 retains terminal reconciliation state in the active-reconciliation map
 when the caller has not yet handed its completed measurement to P016. This is a
@@ -144,6 +162,8 @@ P016 may assume:
 - P009 telemetry state survives restart;
 - P011 replay/idempotency state survives restart;
 - active P012 reconciliation and stabilization can survive restart;
+- v3 qualified association metadata survives restart without restoring source
+  authority; and
 - no raw telemetry or content is persisted; and
 - no Observation table exists yet.
 

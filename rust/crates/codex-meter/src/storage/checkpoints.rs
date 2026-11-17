@@ -12,7 +12,13 @@ use crate::telemetry::{
 
 use super::sqlite::StorageError;
 
-pub const STATE_FORMAT_VERSION: u32 = 2;
+/// Version 3 adds non-authoritative sampling association metadata. Versions 1 and
+/// 2 remain readable; absent metadata is always treated as unavailable.
+pub const STATE_FORMAT_VERSION: u32 = 3;
+const MAX_RUNTIME_STATE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_QUALIFIED_WORKFLOWS: usize = 128;
+const MAX_SAMPLES_PER_WORKFLOW: usize = 512;
+const MAX_CHECKPOINT_IDENTIFIER_BYTES: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeCheckpoint {
@@ -27,6 +33,61 @@ pub struct RuntimeRecoveryState {
     pub telemetry_state: TelemetryState,
     pub quota_tracking_state: QuotaTrackingState,
     pub active_reconciliations: BTreeMap<String, ActiveReconciliationCheckpoint>,
+    /// Persisted association and replay metadata only. This never represents a
+    /// source credential; recovery requires a fresh live authority check.
+    pub qualified_sampling: BTreeMap<String, QualifiedSamplingCheckpoint>,
+}
+
+/// Privacy-safe durable metadata for one qualified sampling workflow. Sample
+/// payloads and authority capabilities are intentionally excluded.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualifiedSamplingCheckpoint {
+    pub source_generation_id: String,
+    pub task_id: String,
+    pub session_id: Option<String>,
+    pub started_at: String,
+    pub ended_at: String,
+    pub contract_version: u32,
+    pub authority_contract: String,
+    pub phase: QualifiedSamplingPhase,
+    #[serde(with = "reconciliation_policy_serde")]
+    pub policy: ReconciliationPolicy,
+    pub original_deadline_at: String,
+    pub last_evaluation_at: Option<String>,
+    /// Keys are `meter:sample-id`; values are lowercase SHA-256 payload digests.
+    pub accepted_sample_digests: BTreeMap<String, String>,
+    /// True when `active_reconciliations[task_id]` contains the P012 state.
+    pub reconciliation_initialized: bool,
+}
+
+impl QualifiedSamplingCheckpoint {
+    /// Stable, collision resistant workflow key preserving task, session,
+    /// interval and source-generation identity.
+    pub fn workflow_id(&self) -> String {
+        let identity = serde_json::to_vec(&(
+            self.contract_version,
+            &self.source_generation_id,
+            &self.task_id,
+            &self.session_id,
+            &self.started_at,
+            &self.ended_at,
+        ))
+        .expect("serializing a tuple of strings cannot fail");
+        Sha256::digest(identity)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualifiedSamplingPhase {
+    Association,
+    BeforeTask,
+    Reconciling,
+    Terminal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +103,8 @@ struct PersistedRuntimeState {
     telemetry_state: TelemetryState,
     quota_tracking_state: QuotaTrackingState,
     active_reconciliations: BTreeMap<String, PersistedActiveReconciliationV1>,
+    #[serde(default)]
+    qualified_sampling: BTreeMap<String, QualifiedSamplingCheckpoint>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -59,6 +122,27 @@ struct PersistedReconciliationPolicyV1 {
     stabilization_not_before: PersistedDurationV1,
     required_stable_confirmations: usize,
     deadline: PersistedDurationV1,
+}
+
+mod reconciliation_policy_serde {
+    use super::{PersistedReconciliationPolicyV1, ReconciliationPolicy};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &ReconciliationPolicy, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        PersistedReconciliationPolicyV1::from(value).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ReconciliationPolicy, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        PersistedReconciliationPolicyV1::deserialize(deserializer)?
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("invalid reconciliation policy"))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -144,6 +228,7 @@ impl From<&RuntimeRecoveryState> for PersistedRuntimeState {
                     )
                 })
                 .collect(),
+            qualified_sampling: value.qualified_sampling.clone(),
         }
     }
 }
@@ -160,6 +245,9 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
         }
         if value.state_format_version == 0 {
             return Err(StorageError::CheckpointFormatUnsupported { found: 0 });
+        }
+        if value.state_format_version < 3 && !value.qualified_sampling.is_empty() {
+            return Err(StorageError::CheckpointStateInvalid);
         }
         let mut active_reconciliations = BTreeMap::new();
         for (task_id, persisted) in value.active_reconciliations {
@@ -180,6 +268,7 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
                 },
             );
         }
+        validate_qualified_sampling(&value.qualified_sampling, &active_reconciliations)?;
         validate_telemetry(&value.telemetry_state)?;
         value
             .quota_tracking_state
@@ -195,6 +284,7 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
             telemetry_state: value.telemetry_state,
             quota_tracking_state: value.quota_tracking_state,
             active_reconciliations,
+            qualified_sampling: value.qualified_sampling,
         })
     }
 }
@@ -220,6 +310,9 @@ pub(crate) fn encode_state(state: &RuntimeRecoveryState) -> Result<(String, Stri
     validate_runtime_state(state)?;
     let dto = PersistedRuntimeState::from(state);
     let bytes = serde_json::to_vec(&dto).map_err(|_| StorageError::CheckpointDecode)?;
+    if bytes.len() > MAX_RUNTIME_STATE_BYTES {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
     let json = String::from_utf8(bytes).map_err(|_| StorageError::CheckpointDecode)?;
     let checksum = Sha256::digest(json.as_bytes())
         .iter()
@@ -249,10 +342,154 @@ fn validate_runtime_state(state: &RuntimeRecoveryState) -> Result<(), StorageErr
             .validate_recovered(&active.policy)
             .map_err(|_| StorageError::CheckpointStateInvalid)?;
     }
+    validate_qualified_sampling(&state.qualified_sampling, &state.active_reconciliations)?;
+    Ok(())
+}
+
+fn validate_qualified_sampling(
+    workflows: &BTreeMap<String, QualifiedSamplingCheckpoint>,
+    reconciliations: &BTreeMap<String, ActiveReconciliationCheckpoint>,
+) -> Result<(), StorageError> {
+    if workflows.len() > MAX_QUALIFIED_WORKFLOWS {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
+    for (workflow_id, workflow) in workflows {
+        if workflow_id.is_empty()
+            || workflow_id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+            || workflow.task_id.is_empty()
+            || workflow.task_id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+            || workflow.source_generation_id.is_empty()
+            || workflow.source_generation_id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+            || workflow.authority_contract.is_empty()
+            || workflow.authority_contract.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+            || workflow.contract_version != 1
+            || workflow
+                .session_id
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES)
+            || workflow.accepted_sample_digests.len() > MAX_SAMPLES_PER_WORKFLOW
+            || workflow_id != &workflow.workflow_id()
+        {
+            return Err(StorageError::CheckpointStateInvalid);
+        }
+        workflow
+            .policy
+            .validate()
+            .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        validate_checkpoint_timestamp(&workflow.started_at)?;
+        validate_checkpoint_timestamp(&workflow.ended_at)?;
+        validate_checkpoint_timestamp(&workflow.original_deadline_at)?;
+        let ended_at = time::OffsetDateTime::parse(
+            &workflow.ended_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        let deadline = ended_at
+            .checked_add(workflow.policy.deadline)
+            .ok_or(StorageError::CheckpointStateInvalid)?;
+        let stored_deadline = time::OffsetDateTime::parse(
+            &workflow.original_deadline_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        if deadline != stored_deadline {
+            return Err(StorageError::CheckpointStateInvalid);
+        }
+        let started_at = time::OffsetDateTime::parse(
+            &workflow.started_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        if started_at > ended_at {
+            return Err(StorageError::CheckpointStateInvalid);
+        }
+        if let Some(timestamp) = &workflow.last_evaluation_at {
+            validate_checkpoint_timestamp(timestamp)?;
+            let evaluated_at = time::OffsetDateTime::parse(
+                timestamp,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .map_err(|_| StorageError::CheckpointStateInvalid)?;
+            if evaluated_at < ended_at {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+        }
+        match workflow.phase {
+            QualifiedSamplingPhase::Association
+                if !workflow.accepted_sample_digests.is_empty()
+                    || workflow.reconciliation_initialized
+                    || workflow.last_evaluation_at.is_some() =>
+            {
+                return Err(StorageError::CheckpointStateInvalid)
+            }
+            QualifiedSamplingPhase::BeforeTask
+                if workflow.reconciliation_initialized || workflow.last_evaluation_at.is_some() =>
+            {
+                return Err(StorageError::CheckpointStateInvalid)
+            }
+            QualifiedSamplingPhase::Reconciling | QualifiedSamplingPhase::Terminal
+                if !workflow.reconciliation_initialized
+                    || workflow.last_evaluation_at.is_none() =>
+            {
+                return Err(StorageError::CheckpointStateInvalid)
+            }
+            _ => {}
+        }
+        if workflow.reconciliation_initialized {
+            let Some(active) = reconciliations.get(&workflow.task_id) else {
+                return Err(StorageError::CheckpointStateInvalid);
+            };
+            if active.policy != workflow.policy
+                || active.reconciliation.task.task_id != workflow.task_id
+                || active.reconciliation.task.session_id != workflow.session_id
+                || active.reconciliation.task.started_at.as_deref() != Some(&workflow.started_at)
+                || active.reconciliation.task.ended_at.as_deref() != Some(&workflow.ended_at)
+            {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+        }
+        for (identity, digest) in &workflow.accepted_sample_digests {
+            if identity.is_empty()
+                || identity.len() > 2 * MAX_CHECKPOINT_IDENTIFIER_BYTES
+                || !(identity.starts_with("five_hour:") || identity.starts_with("weekly:"))
+                || digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_binding(
+    state: &RuntimeRecoveryState,
+    source: &SourceIdentity,
+) -> Result<(), StorageError> {
+    if state
+        .qualified_sampling
+        .values()
+        .any(|workflow| workflow.source_generation_id != source.source_generation())
+    {
+        return Err(StorageError::CheckpointSourceMismatch);
+    }
+    Ok(())
+}
+
+fn validate_checkpoint_timestamp(value: &str) -> Result<(), StorageError> {
+    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+    if value.len() > 64 || OffsetDateTime::parse(value, &Rfc3339).is_err() {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
     Ok(())
 }
 
 fn decode_state(json: &str, checksum: &str) -> Result<RuntimeRecoveryState, StorageError> {
+    if json.len() > MAX_RUNTIME_STATE_BYTES {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
     let calculated = Sha256::digest(json.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -263,6 +500,24 @@ fn decode_state(json: &str, checksum: &str) -> Result<RuntimeRecoveryState, Stor
     let dto: PersistedRuntimeState =
         serde_json::from_str(json).map_err(|_| StorageError::CheckpointDecode)?;
     dto.try_into()
+}
+
+fn decode_state_with_format(
+    json: &str,
+    checksum: &str,
+    column_format: u32,
+) -> Result<RuntimeRecoveryState, StorageError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| StorageError::CheckpointDecode)?;
+    let embedded = value
+        .get("state_format_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .ok_or(StorageError::CheckpointDecode)?;
+    if embedded != column_format {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
+    decode_state(json, checksum)
 }
 
 pub(crate) fn load_runtime_checkpoint(
@@ -309,7 +564,8 @@ pub(crate) fn load_runtime_checkpoint(
     if format == 0 {
         return Err(StorageError::CheckpointFormatUnsupported { found: format });
     }
-    let state = decode_state(&json, &checksum)?;
+    let state = decode_state_with_format(&json, &checksum, format)?;
+    validate_source_binding(&state, requested_source)?;
     let cursor = RolloutCursor::from_checkpoint(&source, committed_offset, last_ordinal);
     if source != *requested_source {
         return Err(StorageError::CheckpointSourceMismatch);
@@ -334,6 +590,7 @@ pub(crate) fn save_runtime_checkpoint(
     {
         return Err(StorageError::CheckpointSourceMismatch);
     }
+    validate_source_binding(state, source)?;
     let (state_json, state_sha256) = encode_state(state)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -370,6 +627,7 @@ pub(crate) fn save_in_transaction(
     {
         return Err(StorageError::CheckpointSourceMismatch);
     }
+    validate_source_binding(state, source)?;
     let actual_revision = transaction
         .query_row(
             "SELECT checkpoint_revision FROM runtime_checkpoints WHERE rollout_id = ?1 AND source_generation = ?2",
@@ -498,7 +756,7 @@ pub(crate) fn save_in_transaction_idempotent(
         if format == 0 {
             return Err(StorageError::CheckpointFormatUnsupported { found: format });
         }
-        let existing_state = decode_state(&existing_json, &existing_sha256)?;
+        let existing_state = decode_state_with_format(&existing_json, &existing_sha256, format)?;
         let existing_cursor =
             RolloutCursor::from_checkpoint(&existing_source, committed_offset, last_ordinal);
         if existing_source == *source
@@ -605,6 +863,108 @@ mod tests {
         let loaded = store.load_runtime_checkpoint(&source).unwrap().unwrap();
         assert_eq!(loaded.cursor, cursor);
         assert_eq!(loaded.state, RuntimeRecoveryState::default());
+    }
+
+    #[test]
+    fn format_v3_round_trips_non_authoritative_sampling_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-meter-qualified-checkpoint-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let source = source("generation-1");
+        let policy = ReconciliationPolicy {
+            max_before_sample_age: Duration::minutes(30),
+            post_task_sample_offsets: vec![Duration::seconds(10), Duration::seconds(20)],
+            stabilization_not_before: Duration::seconds(10),
+            required_stable_confirmations: 2,
+            deadline: Duration::seconds(30),
+        };
+        let workflow = QualifiedSamplingCheckpoint {
+            source_generation_id: "generation-1".to_owned(),
+            task_id: "task-qualified-1".to_owned(),
+            session_id: Some("session-qualified-1".to_owned()),
+            started_at: "2026-10-04T10:00:00Z".to_owned(),
+            ended_at: "2026-10-04T10:01:00Z".to_owned(),
+            contract_version: 1,
+            authority_contract: "synthetic-task-quota/v1".to_owned(),
+            phase: QualifiedSamplingPhase::BeforeTask,
+            policy,
+            original_deadline_at: "2026-10-04T10:01:30Z".to_owned(),
+            last_evaluation_at: None,
+            accepted_sample_digests: [("five_hour:sample-a".to_owned(), "a".repeat(64))]
+                .into_iter()
+                .collect(),
+            reconciliation_initialized: false,
+        };
+        let workflow_id = workflow.workflow_id();
+        let state = RuntimeRecoveryState {
+            qualified_sampling: [(workflow_id.clone(), workflow.clone())]
+                .into_iter()
+                .collect(),
+            ..RuntimeRecoveryState::default()
+        };
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            store
+                .save_runtime_checkpoint(&source, &RolloutCursor::at_start(&source), &state, None)
+                .unwrap();
+        }
+        // Reopening a file-backed database exercises process-independent recovery.
+        let store = SqliteStore::open(&path).unwrap();
+        let recovered = store.load_runtime_checkpoint(&source).unwrap().unwrap();
+        assert_eq!(recovered.state.qualified_sampling[&workflow_id], workflow);
+
+        // Persisted authority labels remain descriptive metadata and are not
+        // converted into an AssociationCredential during checkpoint recovery.
+        assert_eq!(
+            recovered.state.qualified_sampling[&workflow_id].authority_contract,
+            "synthetic-task-quota/v1"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn qualified_sampling_metadata_is_bound_to_source_generation() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let wrong_source = source("generation-2");
+        let workflow = QualifiedSamplingCheckpoint {
+            source_generation_id: "generation-1".to_owned(),
+            task_id: "task-1".to_owned(),
+            session_id: None,
+            started_at: "2026-10-04T10:00:00Z".to_owned(),
+            ended_at: "2026-10-04T10:01:00Z".to_owned(),
+            contract_version: 1,
+            authority_contract: "unknown/v1".to_owned(),
+            phase: QualifiedSamplingPhase::Association,
+            policy: ReconciliationPolicy {
+                max_before_sample_age: Duration::minutes(30),
+                post_task_sample_offsets: vec![Duration::seconds(10)],
+                stabilization_not_before: Duration::seconds(10),
+                required_stable_confirmations: 1,
+                deadline: Duration::seconds(10),
+            },
+            original_deadline_at: "2026-10-04T10:01:10Z".to_owned(),
+            last_evaluation_at: None,
+            accepted_sample_digests: BTreeMap::new(),
+            reconciliation_initialized: false,
+        };
+        let state = RuntimeRecoveryState {
+            qualified_sampling: [(workflow.workflow_id(), workflow)].into_iter().collect(),
+            ..RuntimeRecoveryState::default()
+        };
+        assert!(matches!(
+            store.save_runtime_checkpoint(
+                &wrong_source,
+                &RolloutCursor::at_start(&wrong_source),
+                &state,
+                None
+            ),
+            Err(StorageError::CheckpointSourceMismatch)
+        ));
     }
 
     #[test]
@@ -728,6 +1088,31 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_row_and_payload_versions_must_match() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        let source = source("generation-1");
+        store
+            .save_runtime_checkpoint(
+                &source,
+                &RolloutCursor::at_start(&source),
+                &RuntimeRecoveryState::default(),
+                None,
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "UPDATE runtime_checkpoints SET state_format_version = 2",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.load_runtime_checkpoint(&source),
+            Err(StorageError::CheckpointStateInvalid)
+        ));
+    }
+
+    #[test]
     fn format_and_unknown_payloads_are_rejected() {
         let mut store = SqliteStore::open_in_memory().unwrap();
         let source = source("generation-1");
@@ -788,7 +1173,7 @@ mod tests {
             store.load_runtime_checkpoint(&source),
             Err(StorageError::CheckpointFormatTooNew { found: 999, .. })
         ));
-        let (json, checksum): (String, String) = store
+        let (json, _checksum): (String, String) = store
             .connection()
             .query_row(
                 "SELECT state_json, state_sha256 FROM runtime_checkpoints",
@@ -796,6 +1181,13 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
+        let mut state_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        state_json["state_format_version"] = serde_json::json!(1);
+        let json = serde_json::to_string(&state_json).unwrap();
+        let checksum = Sha256::digest(json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         store
             .connection()
             .execute("DROP TABLE runtime_checkpoints", [])
@@ -826,12 +1218,15 @@ mod tests {
     }
 
     #[test]
-    fn fixed_default_state_checksum_is_stable() {
-        let (_, checksum) = encode_state(&RuntimeRecoveryState::default()).unwrap();
-        assert_eq!(
-            checksum,
-            "f1f52d1ee7859a0b97305dcc5a64265f390eae92b7b600259dfb845f149035ac"
-        );
+    fn default_v3_state_checksum_matches_canonical_payload() {
+        let (json, checksum) = encode_state(&RuntimeRecoveryState::default()).unwrap();
+        let digest = Sha256::digest(json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(checksum, digest);
+        assert!(json.contains("\"state_format_version\":3"));
+        assert!(json.contains("\"qualified_sampling\":{}"));
     }
 
     #[test]
@@ -871,6 +1266,21 @@ mod tests {
         let task = recovered.telemetry_state.tasks.get("task-1").unwrap();
         assert_eq!(task.started_at, None);
         assert_eq!(task.terminal_at, None);
+    }
+
+    #[test]
+    fn checkpoint_v2_without_sampling_metadata_remains_compatible() {
+        let (encoded, _) = encode_state(&RuntimeRecoveryState::default()).unwrap();
+        let mut old: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        old["state_format_version"] = serde_json::json!(2);
+        old.as_object_mut().unwrap().remove("qualified_sampling");
+        let old_json = serde_json::to_string(&old).unwrap();
+        let checksum = Sha256::digest(old_json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let recovered = decode_state_with_format(&old_json, &checksum, 2).unwrap();
+        assert!(recovered.qualified_sampling.is_empty());
     }
 
     #[test]

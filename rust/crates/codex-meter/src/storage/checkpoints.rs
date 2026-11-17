@@ -1,13 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::Duration;
 
+use crate::telemetry::task_quota_sampling::StoredSamplingEvent;
 use crate::telemetry::{
-    QuotaTrackingState, ReconciliationPolicy, RolloutCursor, SourceIdentity,
-    TaskQuotaReconciliation, TelemetryState,
+    begin_task_quota_reconciliation, reconcile_task_quota_at, NormalizedQuotaSample,
+    QuotaAcquisitionResult, QuotaTrackingState, ReconciliationPolicy, RolloutCursor,
+    SourceIdentity, TaskQuotaReconciliation, TaskReconciliationTarget, TelemetryState,
 };
 
 use super::sqlite::StorageError;
@@ -59,6 +61,14 @@ pub struct QualifiedSamplingCheckpoint {
     pub accepted_sample_digests: BTreeMap<String, String>,
     /// True when `active_reconciliations[task_id]` contains the P012 state.
     pub reconciliation_initialized: bool,
+    /// Normalized pre-task evidence retained until P012 chooses each baseline.
+    #[serde(default)]
+    pub baseline_samples: Vec<NormalizedQuotaSample>,
+    /// Accepted normalized events, including events P012 has not yet been able to apply.
+    #[serde(default)]
+    pub accepted_events: Vec<StoredSamplingEvent>,
+    #[serde(default)]
+    pub known_overlapping_task_ids: std::collections::BTreeSet<String>,
 }
 
 impl QualifiedSamplingCheckpoint {
@@ -368,6 +378,14 @@ fn validate_qualified_sampling(
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES)
             || workflow.accepted_sample_digests.len() > MAX_SAMPLES_PER_WORKFLOW
+            || workflow.accepted_events.len() > MAX_SAMPLES_PER_WORKFLOW
+            || workflow.baseline_samples.len() > MAX_SAMPLES_PER_WORKFLOW
+            || workflow
+                .accepted_events
+                .len()
+                .saturating_add(workflow.baseline_samples.len())
+                > MAX_SAMPLES_PER_WORKFLOW
+            || workflow.known_overlapping_task_ids.len() > MAX_SAMPLES_PER_WORKFLOW
             || workflow_id != &workflow.workflow_id()
         {
             return Err(StorageError::CheckpointStateInvalid);
@@ -376,6 +394,13 @@ fn validate_qualified_sampling(
             .policy
             .validate()
             .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        if workflow
+            .known_overlapping_task_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES)
+        {
+            return Err(StorageError::CheckpointStateInvalid);
+        }
         validate_checkpoint_timestamp(&workflow.started_at)?;
         validate_checkpoint_timestamp(&workflow.ended_at)?;
         validate_checkpoint_timestamp(&workflow.original_deadline_at)?;
@@ -417,13 +442,20 @@ fn validate_qualified_sampling(
         match workflow.phase {
             QualifiedSamplingPhase::Association
                 if !workflow.accepted_sample_digests.is_empty()
+                    || !workflow.accepted_events.is_empty()
+                    || !workflow.baseline_samples.is_empty()
                     || workflow.reconciliation_initialized
                     || workflow.last_evaluation_at.is_some() =>
             {
                 return Err(StorageError::CheckpointStateInvalid)
             }
             QualifiedSamplingPhase::BeforeTask
-                if workflow.reconciliation_initialized || workflow.last_evaluation_at.is_some() =>
+                if workflow.reconciliation_initialized
+                    || workflow.last_evaluation_at.is_some()
+                    || workflow.accepted_events.iter().any(|event| {
+                        event.phase
+                            == crate::telemetry::task_quota_sampling::SamplingPhase::AfterTask
+                    }) =>
             {
                 return Err(StorageError::CheckpointStateInvalid)
             }
@@ -447,6 +479,118 @@ fn validate_qualified_sampling(
             {
                 return Err(StorageError::CheckpointStateInvalid);
             }
+            if active.reconciliation.task.known_overlapping_task_ids
+                != workflow.known_overlapping_task_ids
+            {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+            let at = workflow
+                .last_evaluation_at
+                .as_deref()
+                .ok_or(StorageError::CheckpointStateInvalid)?;
+            let inputs: Vec<_> = workflow
+                .accepted_events
+                .iter()
+                .filter(|event| {
+                    event.phase == crate::telemetry::task_quota_sampling::SamplingPhase::AfterTask
+                })
+                .map(|event| event.attempt.clone())
+                .collect();
+            let batch =
+                reconcile_task_quota_at(&active.reconciliation, &inputs, &workflow.policy, at)
+                    .map_err(|_| StorageError::CheckpointStateInvalid)?;
+            let terminal = batch
+                .actions
+                .contains(&crate::telemetry::ReconciliationAction::ReconciliationComplete);
+            if terminal != (workflow.phase == QualifiedSamplingPhase::Terminal) {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+        }
+        if !workflow.baseline_samples.is_empty() {
+            let target = TaskReconciliationTarget {
+                task_id: workflow.task_id.clone(),
+                session_id: workflow.session_id.clone(),
+                started_at: Some(workflow.started_at.clone()),
+                ended_at: Some(workflow.ended_at.clone()),
+                known_overlapping_task_ids: workflow.known_overlapping_task_ids.clone(),
+            };
+            begin_task_quota_reconciliation(target, &workflow.baseline_samples, &workflow.policy)
+                .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        }
+        if !workflow.accepted_events.is_empty() || !workflow.baseline_samples.is_empty() {
+            let mut digests = BTreeMap::new();
+            let mut identities = BTreeSet::new();
+            for sample in &workflow.baseline_samples {
+                if sample.sample_id.is_empty()
+                    || sample.sample_id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+                    || sample.sampled_at.len() > 64
+                {
+                    return Err(StorageError::CheckpointStateInvalid);
+                }
+                let bytes =
+                    serde_json::to_vec(sample).map_err(|_| StorageError::CheckpointStateInvalid)?;
+                if bytes.len() > 16 * 1024 {
+                    return Err(StorageError::CheckpointStateInvalid);
+                }
+                let digest = Sha256::digest(bytes)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                let key = format!("{}:sample:{}", sample.meter_type.as_str(), sample.sample_id);
+                if !identities.insert(key.clone()) {
+                    return Err(StorageError::CheckpointStateInvalid);
+                }
+                digests.insert(key, digest);
+            }
+            for event in &workflow.accepted_events {
+                if event.phase != crate::telemetry::task_quota_sampling::SamplingPhase::AfterTask {
+                    return Err(StorageError::CheckpointStateInvalid);
+                }
+                let id = match &event.attempt.result {
+                    QuotaAcquisitionResult::Sample(sample) => {
+                        if sample.sample_id.is_empty()
+                            || sample.sample_id.len() > MAX_CHECKPOINT_IDENTIFIER_BYTES
+                            || sample.meter_type != event.attempt.meter_type
+                            || event.attempt.sampled_at != sample.sampled_at
+                        {
+                            return Err(StorageError::CheckpointStateInvalid);
+                        }
+                        let bytes = serde_json::to_vec(sample)
+                            .map_err(|_| StorageError::CheckpointStateInvalid)?;
+                        if bytes.len() > 16 * 1024 || sample.sampled_at.len() > 64 {
+                            return Err(StorageError::CheckpointStateInvalid);
+                        }
+                        let digest = Sha256::digest(bytes)
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>();
+                        let key = format!(
+                            "{}:sample:{}",
+                            event.attempt.meter_type.as_str(),
+                            sample.sample_id
+                        );
+                        digests.insert(key.clone(), digest);
+                        key
+                    }
+                    QuotaAcquisitionResult::Failed { reason } => {
+                        format!(
+                            "{}:failure:{}:{reason:?}",
+                            event.attempt.meter_type.as_str(),
+                            event.attempt.sampled_at
+                        )
+                    }
+                };
+                if id.len() > 2 * MAX_CHECKPOINT_IDENTIFIER_BYTES || !identities.insert(id) {
+                    return Err(StorageError::CheckpointStateInvalid);
+                }
+            }
+            if digests != workflow.accepted_sample_digests {
+                return Err(StorageError::CheckpointStateInvalid);
+            }
+        } else if !workflow.accepted_sample_digests.is_empty()
+            && workflow.baseline_samples.len() > workflow.accepted_sample_digests.len()
+        {
+            return Err(StorageError::CheckpointStateInvalid);
         }
         for (identity, digest) in &workflow.accepted_sample_digests {
             if identity.is_empty()
@@ -896,6 +1040,9 @@ mod tests {
                 .into_iter()
                 .collect(),
             reconciliation_initialized: false,
+            baseline_samples: Vec::new(),
+            accepted_events: Vec::new(),
+            known_overlapping_task_ids: Default::default(),
         };
         let workflow_id = workflow.workflow_id();
         let state = RuntimeRecoveryState {
@@ -928,6 +1075,205 @@ mod tests {
     }
 
     #[test]
+    fn file_backed_sampling_state_resumes_from_registered_to_initialized() {
+        use crate::telemetry::task_quota_sampling::tests::synthetic;
+        use crate::telemetry::task_quota_sampling::{
+            SamplingPhase, SamplingSnapshot, TaskQuotaSampling,
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "codex-meter-sampling-resume-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let credential = synthetic::credential();
+        let source = source(&synthetic::source_generation(&credential));
+        let mut coordinator = TaskQuotaSampling::default();
+        coordinator
+            .register(&synthetic::claim(&credential), Some(&credential))
+            .unwrap();
+        let registered = coordinator.snapshot().unwrap();
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            let committed = store
+                .save_sampling_snapshot(&source, &registered, None)
+                .unwrap();
+            // Simulate a process restart after commit but before acknowledgment.
+            let replay = store
+                .save_sampling_snapshot(&source, &registered, None)
+                .unwrap();
+            assert_eq!(replay.revision, committed.revision);
+        }
+
+        let loaded = {
+            let store = SqliteStore::open(&path).unwrap();
+            store.load_runtime_checkpoint(&source).unwrap().unwrap()
+        };
+        assert_eq!(loaded.cursor.committed_offset(), 0);
+        let checkpoint = loaded
+            .state
+            .qualified_sampling
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let mut coordinator = TaskQuotaSampling::recover(SamplingSnapshot {
+            checkpoint,
+            reconciliation: None,
+        })
+        .unwrap()
+        .reauthorize(&credential)
+        .unwrap();
+        let before = [
+            synthetic::sample(
+                &credential,
+                SamplingPhase::BeforeTask,
+                QuotaMeterType::FiveHour,
+                "baseline-5h",
+                "2026-10-04T09:59:00Z",
+                20.0,
+            ),
+            synthetic::sample(
+                &credential,
+                SamplingPhase::BeforeTask,
+                QuotaMeterType::Weekly,
+                "baseline-week",
+                "2026-10-04T09:59:00Z",
+                30.0,
+            ),
+        ];
+        coordinator.admit_before(&before).unwrap();
+        let baseline_snapshot = coordinator.snapshot().unwrap();
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            store
+                .save_sampling_snapshot(&source, &baseline_snapshot, Some(loaded.revision))
+                .unwrap();
+        }
+
+        let loaded = {
+            let store = SqliteStore::open(&path).unwrap();
+            store.load_runtime_checkpoint(&source).unwrap().unwrap()
+        };
+        let checkpoint = loaded
+            .state
+            .qualified_sampling
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let mut coordinator = TaskQuotaSampling::recover(SamplingSnapshot {
+            checkpoint,
+            reconciliation: None,
+        })
+        .unwrap()
+        .reauthorize(&credential)
+        .unwrap();
+        assert_eq!(
+            coordinator
+                .snapshot()
+                .unwrap()
+                .checkpoint
+                .baseline_samples
+                .len(),
+            2
+        );
+        coordinator.initialize("2026-10-04T10:05:00Z").unwrap();
+        let initialized = coordinator.snapshot().unwrap();
+        {
+            let mut store = SqliteStore::open(&path).unwrap();
+            store
+                .save_sampling_snapshot(&source, &initialized, Some(loaded.revision))
+                .unwrap();
+        }
+
+        let mut store = SqliteStore::open(&path).unwrap();
+        let loaded = store.load_runtime_checkpoint(&source).unwrap().unwrap();
+        assert_eq!(loaded.revision, 3);
+        assert_eq!(loaded.cursor.committed_offset(), 0);
+        let checkpoint = loaded
+            .state
+            .qualified_sampling
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let reconciliation = loaded
+            .state
+            .active_reconciliations
+            .get(&checkpoint.task_id)
+            .unwrap()
+            .clone();
+        let mut restored = TaskQuotaSampling::recover(SamplingSnapshot {
+            checkpoint,
+            reconciliation: Some(reconciliation),
+        })
+        .unwrap()
+        .reauthorize(&credential)
+        .unwrap();
+        assert_eq!(
+            restored.batch().unwrap().next_state,
+            coordinator.batch().unwrap().next_state
+        );
+        let post = synthetic::sample(
+            &credential,
+            SamplingPhase::AfterTask,
+            QuotaMeterType::FiveHour,
+            "post-restart-sample",
+            "2026-10-04T10:05:15Z",
+            25.0,
+        );
+        assert_eq!(
+            restored
+                .advance(std::slice::from_ref(&post), "2026-10-04T10:05:15Z")
+                .unwrap(),
+            vec![crate::telemetry::task_quota_sampling::Admission::Accepted]
+        );
+        let post_snapshot = restored.snapshot().unwrap();
+        let post_checkpoint = store
+            .save_sampling_snapshot(&source, &post_snapshot, Some(loaded.revision))
+            .unwrap();
+        drop(store);
+
+        let store = SqliteStore::open(&path).unwrap();
+        let loaded = store.load_runtime_checkpoint(&source).unwrap().unwrap();
+        assert_eq!(loaded.revision, post_checkpoint.revision);
+        let workflow = loaded
+            .state
+            .qualified_sampling
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let reconciliation = loaded
+            .state
+            .active_reconciliations
+            .get(&workflow.task_id)
+            .unwrap()
+            .clone();
+        let mut restored = TaskQuotaSampling::recover(SamplingSnapshot {
+            checkpoint: workflow,
+            reconciliation: Some(reconciliation),
+        })
+        .unwrap()
+        .reauthorize(&credential)
+        .unwrap();
+        assert_eq!(restored.snapshot().unwrap(), post_snapshot);
+        assert_eq!(
+            restored.advance(&[post], "2026-10-04T10:05:30Z").unwrap(),
+            vec![crate::telemetry::task_quota_sampling::Admission::Replay]
+        );
+        let state = &restored.batch().unwrap().next_state.five_hour.state;
+        assert!(
+            matches!(state, crate::telemetry::MeterReconciliationState::Reconciling { candidate: Some(candidate) } if candidate.consecutive_confirmations == 1)
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
     fn qualified_sampling_metadata_is_bound_to_source_generation() {
         let mut store = SqliteStore::open_in_memory().unwrap();
         let wrong_source = source("generation-2");
@@ -951,6 +1297,9 @@ mod tests {
             last_evaluation_at: None,
             accepted_sample_digests: BTreeMap::new(),
             reconciliation_initialized: false,
+            baseline_samples: Vec::new(),
+            accepted_events: Vec::new(),
+            known_overlapping_task_ids: Default::default(),
         };
         let state = RuntimeRecoveryState {
             qualified_sampling: [(workflow.workflow_id(), workflow)].into_iter().collect(),

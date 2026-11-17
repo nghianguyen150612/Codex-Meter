@@ -232,6 +232,8 @@ pub struct QuotaAcquisitionAttempt {
     pub result: QuotaAcquisitionResult,
 }
 
+impl Eq for QuotaAcquisitionAttempt {}
+
 pub type ReconciliationInput = QuotaAcquisitionAttempt;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -241,6 +243,8 @@ pub enum QuotaAcquisitionResult {
     Sample(NormalizedQuotaSample),
     Failed { reason: AcquisitionFailureReason },
 }
+
+impl Eq for QuotaAcquisitionResult {}
 
 /// State machine for one independent meter.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

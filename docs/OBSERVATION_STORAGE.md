@@ -146,10 +146,14 @@ first terminal timestamp for deterministic Observation identity. The
 Observation uses the real start timestamp only when it does not follow that
 terminal timestamp.
 
-P044B2 checkpoint format 3 adds bounded qualified-sampling association
-metadata, but this is not an authority capability and does not restore a
-sampling coordinator. No P044-specific service currently assembles a terminal
-Observation from recovered qualified sampling state. The existing atomic
+P044B2-R1 checkpoint format 3 stores bounded normalized baselines, accepted
+sample payloads, replay digests, and the existing P012 reconciliation state.
+Checkpoint recovery produces unauthorized data; a freshly recognized source
+association is required before sampling can resume. Durable sampling updates
+use checkpoint revision CAS and preserve the rollout cursor and source
+boundaries. The checkpoint never carries an authority capability. P044B2-R2
+still needs to assemble the terminal Observation from recovered sampling and
+commit terminal Observation/checkpoint cleanup atomically. The existing atomic
 Observation/checkpoint primitive remains available; historical terminal rows
 remain immutable under its normal conflict rules.
 

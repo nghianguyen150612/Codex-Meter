@@ -1,9 +1,11 @@
 //! This integration test links the production library (without cfg(test)).
+use codex_meter::storage::{QualifiedSamplingCheckpoint, QualifiedSamplingPhase};
 use codex_meter::telemetry::quota_reconciliation::{
     ReconciliationPolicy, TaskReconciliationTarget,
 };
 use codex_meter::telemetry::task_quota_sampling::{
-    AssociationClaim, SamplingPhase, SamplingRejection, SamplingStage, TaskQuotaSampling,
+    AssociationClaim, RecoveredTaskQuotaSampling, SamplingPhase, SamplingRejection,
+    SamplingSnapshot, SamplingStage, TaskQuotaSampling,
 };
 use time::Duration;
 
@@ -37,4 +39,40 @@ fn production_claims_cannot_issue_authority_or_initialize_sampling() {
         SamplingRejection::NotRegistered
     );
     assert_eq!(coordinator.batch(), None);
+}
+
+#[test]
+fn checkpoint_json_recovers_only_unauthorized_sampling_data() {
+    let json = r#"{
+        "source_generation_id":"generation-json",
+        "task_id":"task-json",
+        "session_id":"session-json",
+        "started_at":"2026-10-04T10:00:00Z",
+        "ended_at":"2026-10-04T10:05:00Z",
+        "contract_version":1,
+        "authority_contract":"synthetic-task-quota/v1",
+        "phase":"association",
+        "policy":{
+            "max_before_sample_age":{"seconds":3600,"nanoseconds":0},
+            "post_task_sample_offsets":[{"seconds":15,"nanoseconds":0}],
+            "stabilization_not_before":{"seconds":0,"nanoseconds":0},
+            "required_stable_confirmations":1,
+            "deadline":{"seconds":60,"nanoseconds":0}
+        },
+        "original_deadline_at":"2026-10-04T10:06:00Z",
+        "last_evaluation_at":null,
+        "accepted_sample_digests":{},
+        "reconciliation_initialized":false
+    }"#;
+    let checkpoint: QualifiedSamplingCheckpoint = serde_json::from_str(json).unwrap();
+    let recovered = TaskQuotaSampling::recover(SamplingSnapshot {
+        checkpoint,
+        reconciliation: None,
+    })
+    .unwrap();
+    let _: &RecoveredTaskQuotaSampling = &recovered;
+    assert_eq!(
+        recovered.checkpoint().phase,
+        QualifiedSamplingPhase::Association
+    );
 }

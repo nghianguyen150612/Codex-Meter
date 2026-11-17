@@ -63,15 +63,33 @@ do not merge.
 
 The `qualified_sampling` record is metadata only. An authority contract string,
 checksum, and structurally valid JSON do not issue or restore a P044B1
-`AssociationCredential`. A recovered record still requires fresh validation
-from an approved source authority before qualified events may be accepted.
-There is no approved production issuer. Legacy v1/v2 entries have no qualified
-association provenance and are never promoted. Version 3 metadata is not yet a
-complete resumable P044B2 coordinator snapshot: baseline event payloads and the
-coordinator's private provenance ledger are not reconstructed by this format.
+`AssociationCredential`. Recovery first produces an inspectable unauthorized
+value. A fresh recognized credential must match authority contract, contract
+version, source generation, task/session, interval, policy, and workflow identity
+before sampling resumes. Production recognizes no authority. Legacy v1/v2
+entries have no qualified association provenance and are never promoted.
+
+The format-3 record now includes only normalized baseline samples and a bounded
+accepted-event ledger. Event payloads are retained because an event admitted by
+the coordinator can be later than P012's evaluation time; it remains pending
+until an evaluation reaches its timestamp. Each subsequent evaluation replays
+eligible accepted events through P012, whose existing identity handling makes
+that replay idempotent. Payload digests are checked against those normalized
+samples; absent payloads for a nonempty digest ledger fail recovery closed.
+Initialized workflows reuse `active_reconciliations` for the complete P012
+state, including both meter states, stability evidence, deadlines, and pending
+actions. No quota delta is independently reconstructed.
+
+`TaskQuotaSampling::transition_and_persist` persists a validated transition
+with the existing checkpoint revision CAS. It preserves the rollout cursor and
+committed boundaries, updates checkpoint state in one SQLite transaction, and
+commits the caller's in-memory coordinator only after SQLite succeeds. An
+identical snapshot is idempotent. P012 remains keyed by task ID; if another
+workflow with the same task ID would collide in that map, persistence returns
+an identity conflict without overwriting either workflow.
 
 The state payload is capped at 4 MiB, with at most 128 qualified workflow
-records, 512 sample digests per workflow, and 256-byte identifiers. The format
+records, 512 sample identities/events per workflow, and 256-byte identifiers. The format
 is separate from SQLite migration version (`6`) and public JSON contract
 versions such as `schema_version = 1.0.0`. The format is present in both row
 metadata and the typed payload envelope; disagreement, newer formats, and

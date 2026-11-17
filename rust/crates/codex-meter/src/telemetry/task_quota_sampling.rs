@@ -4,7 +4,7 @@
 //! credentials. The only issuer lives in this module's `cfg(test)` fixtures.
 //! Nothing here proves account-wide isolation or exclusive task consumption.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -13,6 +13,9 @@ use super::quota_reconciliation::{
     begin_task_quota_reconciliation, reconcile_task_quota_at, MeterReconciliationState,
     QuotaAcquisitionAttempt, QuotaAcquisitionResult, ReconciliationAction, ReconciliationBatch,
     ReconciliationError, ReconciliationPolicy, TaskQuotaReconciliation, TaskReconciliationTarget,
+};
+use crate::storage::{
+    ActiveReconciliationCheckpoint, QualifiedSamplingCheckpoint, QualifiedSamplingPhase,
 };
 
 /// Untrusted association data. Possession of this value grants no authority.
@@ -26,7 +29,8 @@ pub struct AssociationClaim {
     pub phase: SamplingPhase,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SamplingPhase {
     TaskAssociation,
     BeforeTask,
@@ -94,6 +98,7 @@ pub enum SamplingRejection {
     TerminalMeter,
     EvaluationTimeReversed,
     Reconciliation(ReconciliationError),
+    InvalidSnapshot,
 }
 
 impl From<ReconciliationError> for SamplingRejection {
@@ -109,7 +114,7 @@ pub enum SamplingStage {
     Reconciling,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum State {
     Uninitialized,
     Qualified {
@@ -122,7 +127,7 @@ enum State {
 
 type Evidence = BTreeMap<(String, String), QualifiedQuotaEvent>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Active {
     association: AssociationCredential,
     evidence: Evidence,
@@ -131,7 +136,7 @@ struct Active {
 }
 
 /// One immutable task association and independent P012 meter results.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TaskQuotaSampling {
     state: State,
 }
@@ -145,6 +150,140 @@ impl Default for TaskQuotaSampling {
 }
 
 impl TaskQuotaSampling {
+    /// Apply a coordinator transition and commit its snapshot with revision CAS.
+    /// The live coordinator changes only after the SQLite transaction succeeds.
+    pub fn transition_and_persist<T>(
+        &mut self,
+        store: &mut crate::storage::SqliteStore,
+        source: &super::SourceIdentity,
+        expected_revision: Option<u64>,
+        transition: impl FnOnce(&mut Self) -> Result<T, SamplingRejection>,
+    ) -> Result<(T, crate::storage::RuntimeCheckpoint), DurableSamplingError> {
+        let mut next = self.clone();
+        let result = transition(&mut next).map_err(DurableSamplingError::Sampling)?;
+        let snapshot = next.snapshot().map_err(DurableSamplingError::Sampling)?;
+        let checkpoint = store
+            .save_sampling_snapshot(source, &snapshot, expected_revision)
+            .map_err(DurableSamplingError::Storage)?;
+        *self = next;
+        Ok((result, checkpoint))
+    }
+
+    /// Export normalized, bounded recovery material. This snapshot is data only;
+    /// it never contains the opaque authority credential.
+    pub fn snapshot(&self) -> Result<SamplingSnapshot, SamplingRejection> {
+        let (association, before, evidence, phase, batch, evaluated_at) = match &self.state {
+            State::Uninitialized => return Err(SamplingRejection::NotRegistered),
+            State::Qualified {
+                association,
+                before,
+                evidence,
+            } => (
+                association.as_ref(),
+                before.as_slice(),
+                evidence,
+                if before.is_empty() && evidence.is_empty() {
+                    QualifiedSamplingPhase::Association
+                } else {
+                    QualifiedSamplingPhase::BeforeTask
+                },
+                None,
+                None,
+            ),
+            State::Active(active) => (
+                &active.association,
+                &[][..],
+                &active.evidence,
+                if self.is_complete() {
+                    QualifiedSamplingPhase::Terminal
+                } else {
+                    QualifiedSamplingPhase::Reconciling
+                },
+                Some(active.batch.next_state.clone()),
+                Some(active.evaluated_at),
+            ),
+        };
+        let binding = &association.binding;
+        let task = &binding.task;
+        let (started_at, ended_at) = match (&task.started_at, &task.ended_at) {
+            (Some(start), Some(end)) => (start.clone(), end.clone()),
+            _ => return Err(SamplingRejection::InvalidIdentity),
+        };
+        let deadline = evaluation_time(&ended_at)?
+            .checked_add(binding.policy.deadline)
+            .ok_or(SamplingRejection::InvalidSnapshot)?;
+        let mut accepted_sample_digests = BTreeMap::new();
+        for ((meter, identity), event) in evidence {
+            let QuotaAcquisitionResult::Sample(sample) = &event.attempt.result else {
+                continue;
+            };
+            accepted_sample_digests.insert(format!("{meter}:{identity}"), sample_digest(sample)?);
+        }
+        let baseline_samples = evidence
+            .values()
+            .filter(|event| event.phase == SamplingPhase::BeforeTask)
+            .filter_map(|event| match &event.attempt.result {
+                QuotaAcquisitionResult::Sample(sample) => Some(sample.clone()),
+                QuotaAcquisitionResult::Failed { .. } => None,
+            })
+            .collect();
+        let events = evidence
+            .values()
+            .filter(|event| event.phase == SamplingPhase::AfterTask)
+            .map(|event| StoredSamplingEvent {
+                phase: event.phase,
+                attempt: event.attempt.clone(),
+            })
+            .collect();
+        let checkpoint = QualifiedSamplingCheckpoint {
+            source_generation_id: binding.source_generation_id.clone(),
+            task_id: task.task_id.clone(),
+            session_id: task.session_id.clone(),
+            started_at,
+            ended_at,
+            contract_version: binding.contract_version,
+            authority_contract: association.authority_contract.to_owned(),
+            phase,
+            policy: binding.policy.clone(),
+            original_deadline_at: deadline
+                .format(&Rfc3339)
+                .map_err(|_| SamplingRejection::InvalidSnapshot)?,
+            last_evaluation_at: evaluated_at
+                .map(|value| value.format(&Rfc3339))
+                .transpose()
+                .map_err(|_| SamplingRejection::InvalidSnapshot)?,
+            accepted_sample_digests,
+            reconciliation_initialized: batch.is_some(),
+            baseline_samples: if batch.is_some() {
+                baseline_samples
+            } else {
+                before.to_vec()
+            },
+            accepted_events: events,
+            known_overlapping_task_ids: task.known_overlapping_task_ids.clone(),
+        };
+        if checkpoint.accepted_events.len() > 512 {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        let reconciliation = batch.map(|reconciliation| ActiveReconciliationCheckpoint {
+            policy: binding.policy.clone(),
+            reconciliation,
+        });
+        let snapshot = SamplingSnapshot {
+            checkpoint,
+            reconciliation,
+        };
+        validate_snapshot(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Decode validated checkpoint data into an inspectable but unauthorized value.
+    pub fn recover(
+        snapshot: SamplingSnapshot,
+    ) -> Result<RecoveredTaskQuotaSampling, SamplingRejection> {
+        validate_snapshot(&snapshot)?;
+        Ok(RecoveredTaskQuotaSampling { snapshot })
+    }
     /// Register a claim only with a matching sealed capability. Raw rollout input
     /// must enter without a credential and cannot promote itself to trusted data.
     pub fn register(
@@ -259,10 +398,18 @@ impl TaskQuotaSampling {
             SamplingPhase::AfterTask,
             Some(&active.batch.next_state),
         )?;
-        let inputs: Vec<_> = events.iter().map(|event| event.attempt.clone()).collect();
+        let mut eligible = Vec::new();
+        for event in evidence
+            .values()
+            .filter(|event| event.phase == SamplingPhase::AfterTask)
+        {
+            if evaluation_time(&event.attempt.sampled_at)? <= evaluated_at {
+                eligible.push(event.attempt.clone());
+            }
+        }
         let batch = reconcile_task_quota_at(
             &active.batch.next_state,
-            &inputs,
+            &eligible,
             &active.association.binding.policy,
             evaluate_at,
         )?;
@@ -295,6 +442,298 @@ impl TaskQuotaSampling {
                 .contains(&ReconciliationAction::ReconciliationComplete)
         })
     }
+}
+
+#[derive(Debug)]
+pub enum DurableSamplingError {
+    Sampling(SamplingRejection),
+    Storage(crate::storage::StorageError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct StoredSamplingEvent {
+    pub phase: SamplingPhase,
+    pub attempt: QuotaAcquisitionAttempt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SamplingSnapshot {
+    pub checkpoint: QualifiedSamplingCheckpoint,
+    pub reconciliation: Option<ActiveReconciliationCheckpoint>,
+}
+
+/// Data recovered from disk cannot sample until a recognized live credential is supplied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveredTaskQuotaSampling {
+    snapshot: SamplingSnapshot,
+}
+
+impl RecoveredTaskQuotaSampling {
+    pub fn checkpoint(&self) -> &QualifiedSamplingCheckpoint {
+        &self.snapshot.checkpoint
+    }
+
+    pub fn reauthorize(
+        self,
+        credential: &AssociationCredential,
+    ) -> Result<TaskQuotaSampling, SamplingRejection> {
+        validate_credential(credential)?;
+        let checkpoint = &self.snapshot.checkpoint;
+        let claim = &credential.binding;
+        if credential.authority_contract != checkpoint.authority_contract {
+            return Err(SamplingRejection::UnsupportedAuthority);
+        }
+        if claim.contract_version != checkpoint.contract_version {
+            return Err(SamplingRejection::UnsupportedContractVersion);
+        }
+        if claim.source_generation_id != checkpoint.source_generation_id {
+            return Err(SamplingRejection::WrongSourceGeneration);
+        }
+        if claim.task.task_id != checkpoint.task_id {
+            return Err(SamplingRejection::WrongTask);
+        }
+        if claim.task.session_id != checkpoint.session_id {
+            return Err(SamplingRejection::WrongSession);
+        }
+        if claim.task.started_at.as_deref() != Some(checkpoint.started_at.as_str())
+            || claim.task.ended_at.as_deref() != Some(checkpoint.ended_at.as_str())
+            || claim.task.known_overlapping_task_ids != checkpoint.known_overlapping_task_ids
+        {
+            return Err(SamplingRejection::ConflictingAssociation);
+        }
+        if claim.policy != checkpoint.policy {
+            return Err(SamplingRejection::WrongPolicy);
+        }
+        let mut evidence = BTreeMap::new();
+        for stored in &checkpoint.accepted_events {
+            let event = QualifiedQuotaEvent {
+                credential: credential.clone(),
+                phase: stored.phase,
+                attempt: stored.attempt.clone(),
+            };
+            let identity = match &event.attempt.result {
+                QuotaAcquisitionResult::Sample(sample) => format!("sample:{}", sample.sample_id),
+                QuotaAcquisitionResult::Failed { reason } => {
+                    format!("failure:{}:{reason:?}", event.attempt.sampled_at)
+                }
+            };
+            evidence.insert(
+                (event.attempt.meter_type.as_str().to_owned(), identity),
+                event,
+            );
+        }
+        for sample in &checkpoint.baseline_samples {
+            let event = QualifiedQuotaEvent {
+                credential: credential.clone(),
+                phase: SamplingPhase::BeforeTask,
+                attempt: QuotaAcquisitionAttempt {
+                    sampled_at: sample.sampled_at.clone(),
+                    meter_type: sample.meter_type,
+                    result: QuotaAcquisitionResult::Sample(sample.clone()),
+                },
+            };
+            evidence.insert(
+                (
+                    event.attempt.meter_type.as_str().to_owned(),
+                    format!("sample:{}", sample.sample_id),
+                ),
+                event,
+            );
+        }
+        if !checkpoint.reconciliation_initialized {
+            return Ok(TaskQuotaSampling {
+                state: State::Qualified {
+                    association: Box::new(credential.clone()),
+                    before: checkpoint.baseline_samples.clone(),
+                    evidence,
+                },
+            });
+        }
+        let active = self
+            .snapshot
+            .reconciliation
+            .ok_or(SamplingRejection::InvalidSnapshot)?;
+        let at = checkpoint
+            .last_evaluation_at
+            .as_deref()
+            .ok_or(SamplingRejection::InvalidSnapshot)?;
+        let batch = reconcile_task_quota_at(&active.reconciliation, &[], &checkpoint.policy, at)?;
+        let evaluated_at = evaluation_time(at)?;
+        Ok(TaskQuotaSampling {
+            state: State::Active(Box::new(Active {
+                association: credential.clone(),
+                evidence,
+                batch,
+                evaluated_at,
+            })),
+        })
+    }
+}
+
+fn validate_snapshot(snapshot: &SamplingSnapshot) -> Result<(), SamplingRejection> {
+    let c = &snapshot.checkpoint;
+    if c.contract_version != 1
+        || c.accepted_events
+            .len()
+            .saturating_add(c.baseline_samples.len())
+            > 512
+        || c.accepted_sample_digests.len() > 512
+        || c.workflow_id().is_empty()
+        || c.task_id.is_empty()
+        || c.task_id.len() > 256
+        || c.source_generation_id.is_empty()
+        || c.source_generation_id.len() > 256
+        || c.authority_contract.is_empty()
+        || c.authority_contract.len() > 256
+        || c.session_id
+            .as_ref()
+            .is_some_and(|s| s.is_empty() || s.len() > 256)
+    {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    c.policy.validate()?;
+    let end = evaluation_time(&c.ended_at)?;
+    let start = evaluation_time(&c.started_at)?;
+    if start > end
+        || c.known_overlapping_task_ids.len() > 512
+        || c.known_overlapping_task_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 256)
+    {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    let deadline = end
+        .checked_add(c.policy.deadline)
+        .ok_or(SamplingRejection::InvalidSnapshot)?;
+    if evaluation_time(&c.original_deadline_at)? != deadline {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    if c.reconciliation_initialized != snapshot.reconciliation.is_some() {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    if c.reconciliation_initialized
+        != matches!(
+            c.phase,
+            QualifiedSamplingPhase::Reconciling | QualifiedSamplingPhase::Terminal
+        )
+    {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    match c.phase {
+        QualifiedSamplingPhase::Association
+            if !c.accepted_events.is_empty()
+                || !c.accepted_sample_digests.is_empty()
+                || !c.baseline_samples.is_empty()
+                || c.last_evaluation_at.is_some() =>
+        {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        QualifiedSamplingPhase::BeforeTask
+            if c.reconciliation_initialized || c.last_evaluation_at.is_some() =>
+        {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        QualifiedSamplingPhase::Reconciling | QualifiedSamplingPhase::Terminal
+            if c.last_evaluation_at.is_none() =>
+        {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        _ => {}
+    }
+    if c.last_evaluation_at
+        .as_deref()
+        .is_some_and(|at| evaluation_time(at).is_ok_and(|value| value < end))
+    {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    if let Some(active) = &snapshot.reconciliation {
+        active.reconciliation.validate_recovered(&c.policy)?;
+        if active.policy != c.policy
+            || active.reconciliation.task.task_id != c.task_id
+            || active.reconciliation.task.session_id != c.session_id
+            || active.reconciliation.task.started_at.as_deref() != Some(c.started_at.as_str())
+            || active.reconciliation.task.ended_at.as_deref() != Some(c.ended_at.as_str())
+            || active.reconciliation.task.known_overlapping_task_ids != c.known_overlapping_task_ids
+        {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        let at = c
+            .last_evaluation_at
+            .as_deref()
+            .ok_or(SamplingRejection::InvalidSnapshot)?;
+        let batch = reconcile_task_quota_at(&active.reconciliation, &[], &c.policy, at)?;
+        let terminal = batch
+            .actions
+            .contains(&ReconciliationAction::ReconciliationComplete);
+        if terminal != (c.phase == QualifiedSamplingPhase::Terminal) {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut expected_digests = BTreeMap::new();
+    for sample in &c.baseline_samples {
+        if sample.sample_id.is_empty()
+            || sample.sample_id.len() > 256
+            || sample.sampled_at.len() > 64
+        {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        let identity = format!("{}:sample:{}", sample.meter_type.as_str(), sample.sample_id);
+        if !seen.insert(identity.clone()) {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        expected_digests.insert(identity, sample_digest(sample)?);
+    }
+    for event in &c.accepted_events {
+        if event.phase != SamplingPhase::AfterTask {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        let identity = match &event.attempt.result {
+            QuotaAcquisitionResult::Sample(s) => format!(
+                "{}:sample:{}",
+                event.attempt.meter_type.as_str(),
+                s.sample_id
+            ),
+            QuotaAcquisitionResult::Failed { reason } => format!(
+                "{}:failure:{}:{reason:?}",
+                event.attempt.meter_type.as_str(),
+                event.attempt.sampled_at
+            ),
+        };
+        if !seen.insert(identity.clone()) {
+            return Err(SamplingRejection::InvalidSnapshot);
+        }
+        if let QuotaAcquisitionResult::Sample(sample) = &event.attempt.result {
+            if sample.meter_type != event.attempt.meter_type
+                || sample.sample_id.is_empty()
+                || sample.sample_id.len() > 256
+                || sample.sampled_at != event.attempt.sampled_at
+            {
+                return Err(SamplingRejection::InvalidSnapshot);
+            }
+            expected_digests.insert(identity, sample_digest(sample)?);
+        }
+    }
+    if expected_digests != c.accepted_sample_digests {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    Ok(())
+}
+
+fn sample_digest(sample: &NormalizedQuotaSample) -> Result<String, SamplingRejection> {
+    let bytes = serde_json::to_vec(sample).map_err(|_| SamplingRejection::InvalidSnapshot)?;
+    if bytes.len() > 16 * 1024
+        || sample.sample_id.is_empty()
+        || sample.sample_id.len() > 256
+        || sample.sampled_at.len() > 64
+    {
+        return Err(SamplingRejection::InvalidSnapshot);
+    }
+    use sha2::Digest;
+    Ok(sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 fn evaluation_time(value: &str) -> Result<OffsetDateTime, SamplingRejection> {
@@ -435,4 +874,4 @@ fn admit_events(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

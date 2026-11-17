@@ -20,15 +20,16 @@ const END: &str = "2026-10-04T10:05:00Z";
 const BEFORE: &str = "2026-10-04T09:59:00Z";
 const FIRST: &str = "2026-10-04T10:05:15Z";
 const SECOND: &str = "2026-10-04T10:05:30Z";
+const THIRD: &str = "2026-10-04T10:05:45Z";
 const DEADLINE: &str = "2026-10-04T10:06:00Z";
 const RESET: &str = "2026-10-04T10:10:00Z";
 const METERS: [QuotaMeterType; 2] = [QuotaMeterType::FiveHour, QuotaMeterType::Weekly];
 
 /// Synthetic fixtures only: no live provider observations and no production issuer.
-mod synthetic {
+pub(crate) mod synthetic {
     use super::*;
 
-    pub(super) fn credential() -> AssociationCredential {
+    pub(crate) fn credential() -> AssociationCredential {
         let mut task = TaskReconciliationTarget::new(
             identity::task_id("task"),
             Some(START.to_owned()),
@@ -59,7 +60,15 @@ mod synthetic {
         }
     }
 
-    pub(super) fn sample(
+    pub(crate) fn claim(credential: &AssociationCredential) -> AssociationClaim {
+        credential.binding.clone()
+    }
+
+    pub(crate) fn source_generation(credential: &AssociationCredential) -> String {
+        credential.binding.source_generation_id.clone()
+    }
+
+    pub(crate) fn sample(
         credential: &AssociationCredential,
         phase: SamplingPhase,
         meter: QuotaMeterType,
@@ -234,6 +243,146 @@ fn missing_authority_cannot_promote_a_claim() {
         Err(SamplingRejection::MissingAuthority)
     );
     assert_eq!(coordinator.stage(), SamplingStage::Uninitialized);
+}
+
+#[test]
+fn snapshot_reauthorization_restores_baselines_and_pending_event_payload() {
+    let c = synthetic::credential();
+    let mut coordinator = initialized(&c, &METERS);
+    let pending = after(&c, QuotaMeterType::FiveHour, "pending", SECOND, 25.0);
+    coordinator.advance(&[pending], FIRST).unwrap();
+    let snapshot = coordinator.snapshot().unwrap();
+    assert_eq!(snapshot.checkpoint.baseline_samples.len(), 2);
+    assert_eq!(snapshot.checkpoint.accepted_events.len(), 1);
+    assert_eq!(
+        snapshot.checkpoint.last_evaluation_at.as_deref(),
+        Some(FIRST)
+    );
+
+    let recovered = TaskQuotaSampling::recover(snapshot.clone()).unwrap();
+    let restored = recovered.reauthorize(&c).unwrap();
+    assert_eq!(
+        restored.batch().unwrap().next_state,
+        coordinator.batch().unwrap().next_state
+    );
+    assert_eq!(restored.snapshot().unwrap(), snapshot);
+
+    let mut resumed = restored;
+    resumed.advance(&[], SECOND).unwrap();
+    let MeterReconciliationState::Reconciling {
+        candidate: Some(candidate),
+    } = &meter(&resumed, QuotaMeterType::FiveHour).state
+    else {
+        panic!("pending event should become eligible after restart")
+    };
+    assert_eq!(candidate.sample.sample_id, "pending");
+    assert_eq!(candidate.consecutive_confirmations, 1);
+
+    assert_eq!(
+        resumed.advance(
+            &[after(&c, QuotaMeterType::FiveHour, "pending", SECOND, 25.0)],
+            SECOND
+        ),
+        Ok(vec![Admission::Replay])
+    );
+    let before_conflict = resumed.snapshot().unwrap();
+    assert_eq!(
+        resumed.advance(
+            &[after(&c, QuotaMeterType::FiveHour, "pending", SECOND, 26.0)],
+            SECOND
+        ),
+        Err(SamplingRejection::ConflictingDuplicate)
+    );
+    assert_eq!(resumed.snapshot().unwrap(), before_conflict);
+    assert_eq!(
+        resumed.advance(
+            &[after(&c, QuotaMeterType::FiveHour, "next", THIRD, 25.0)],
+            THIRD
+        ),
+        Ok(vec![Admission::Accepted])
+    );
+    let MeterReconciliationState::Stable { evidence } =
+        &meter(&resumed, QuotaMeterType::FiveHour).state
+    else {
+        panic!("restored pending event and new qualified sample should stabilize")
+    };
+    assert_eq!(evidence.delta_percentage_points.value(), 5.0);
+    assert_eq!(evidence.stabilized_at, THIRD);
+    assert_eq!(evidence.acquisition_attempt_count, 2);
+}
+
+#[test]
+fn recovered_data_needs_exact_fresh_authority() {
+    let c = synthetic::credential();
+    let snapshot = registered(&c).snapshot().unwrap();
+    let recovered = TaskQuotaSampling::recover(snapshot).unwrap();
+    let mut wrong = c.clone();
+    wrong.binding.source_generation_id.push_str("-other");
+    assert!(matches!(
+        recovered.reauthorize(&wrong),
+        Err(SamplingRejection::WrongSourceGeneration)
+    ));
+}
+
+#[test]
+fn deadline_reached_during_downtime_is_applied_on_resumed_evaluation() {
+    let c = synthetic::credential();
+    let coordinator = initialized(&c, &METERS);
+    let snapshot = coordinator.snapshot().unwrap();
+    let deadline = snapshot.checkpoint.original_deadline_at.clone();
+    let mut resumed = TaskQuotaSampling::recover(snapshot)
+        .unwrap()
+        .reauthorize(&c)
+        .unwrap();
+    resumed.advance(&[], DEADLINE).unwrap();
+    assert_eq!(
+        resumed.snapshot().unwrap().checkpoint.original_deadline_at,
+        deadline
+    );
+    for which in METERS {
+        assert!(matches!(
+            meter(&resumed, which).state,
+            MeterReconciliationState::TimedOut { .. }
+                | MeterReconciliationState::AcquisitionFailed { .. }
+        ));
+    }
+    assert!(resumed.is_complete());
+}
+
+#[test]
+fn durable_transition_cas_failure_keeps_live_coordinator_unchanged() {
+    use crate::storage::{SqliteStore, StorageError};
+    use crate::telemetry::SourceIdentity;
+
+    let c = synthetic::credential();
+    let source = SourceIdentity::new("sampling-cas", synthetic::source_generation(&c)).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "codex-meter-sampling-cas-{}.sqlite",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut coordinator = registered(&c);
+    let initial_snapshot = coordinator.snapshot().unwrap();
+    let mut store = SqliteStore::open(&path).unwrap();
+    store
+        .save_sampling_snapshot(&source, &initial_snapshot, None)
+        .unwrap();
+    let result = coordinator.transition_and_persist(&mut store, &source, Some(0), |candidate| {
+        candidate
+            .admit_before(&[before(&c, QuotaMeterType::FiveHour)])
+            .map(|_| ())
+    });
+    assert!(matches!(
+        result,
+        Err(DurableSamplingError::Storage(
+            StorageError::CheckpointRevisionConflict { .. }
+        ))
+    ));
+    assert_eq!(coordinator.snapshot().unwrap(), initial_snapshot);
+    drop(store);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
 }
 
 #[test]

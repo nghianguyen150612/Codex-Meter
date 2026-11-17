@@ -228,5 +228,18 @@ storage::checkpoints::tests` (15 tests), file-backed recovery included. The
 workspace default and all-feature Rust test commands, workspace Clippy,
 `cargo fmt --check`, Python pytest (677 tests), Ruff check/format, contract
 validation (8 schemas, 19 positive and 7 negative fixtures), P029 installed
-worker smoke, and Linux PTY recovery tests passed locally. Hosted final-head
-CI, Windows ConPTY, macOS, and four-platform release validation remain pending.
+worker smoke, and Linux PTY recovery tests passed locally.
+
+Hosted validation passed at source SHA
+`d12da09bc2ee3ef46326548cf11259469e60f477`: push CI
+([run 44005529010](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44005529010)),
+PR CI
+([run 44005535586](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44005535586)),
+and four-platform release candidate validation
+([run 44005570561](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44005570561)).
+CI passed on Linux, Windows, macOS Intel and macOS ARM64, including ConPTY and
+the workspace default/all-feature suites. Release bundle generation, installed
+runtime smoke, aggregation, and checksum/provenance verification passed for
+Linux x86_64, Windows x86_64, macOS x86_64, and macOS ARM64. These runs validate
+the bounded metadata increment only; they do not close the P044B2 workflow
+integration gaps above.

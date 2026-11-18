@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::Duration;
 
-use crate::telemetry::task_quota_sampling::StoredSamplingEvent;
+use crate::telemetry::task_quota_sampling::{SamplingSnapshot, StoredSamplingEvent};
 use crate::telemetry::{
     begin_task_quota_reconciliation, reconcile_task_quota_at, NormalizedQuotaSample,
     QuotaAcquisitionResult, QuotaTrackingState, ReconciliationPolicy, RolloutCursor,
@@ -14,9 +14,9 @@ use crate::telemetry::{
 
 use super::sqlite::StorageError;
 
-/// Version 3 adds non-authoritative sampling association metadata. Versions 1 and
-/// 2 remain readable; absent metadata is always treated as unavailable.
-pub const STATE_FORMAT_VERSION: u32 = 3;
+/// Highest supported format. States without finalization receipts still write format 3.
+pub const STATE_FORMAT_VERSION: u32 = 4;
+const SAMPLING_STATE_FORMAT_VERSION: u32 = 3;
 const MAX_RUNTIME_STATE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUALIFIED_WORKFLOWS: usize = 128;
 const MAX_SAMPLES_PER_WORKFLOW: usize = 512;
@@ -38,6 +38,41 @@ pub struct RuntimeRecoveryState {
     /// Persisted association and replay metadata only. This never represents a
     /// source credential; recovery requires a fresh live authority check.
     pub qualified_sampling: BTreeMap<String, QualifiedSamplingCheckpoint>,
+    /// Immutable completion receipts. They cannot authorize sampling or recovery.
+    pub sampling_finalizations: BTreeMap<String, SamplingFinalizationReceipt>,
+}
+
+impl RuntimeRecoveryState {
+    fn format_version(&self) -> u32 {
+        if self.sampling_finalizations.is_empty() {
+            SAMPLING_STATE_FORMAT_VERSION
+        } else {
+            STATE_FORMAT_VERSION
+        }
+    }
+}
+
+/// Proof of the atomic transition from one exact snapshot to an immutable Observation.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplingFinalizationReceipt {
+    pub(super) workflow: QualifiedSamplingCheckpoint,
+    pub(super) reconciliation: TaskQuotaReconciliation,
+    pub(super) observation_sha256: String,
+    pub(super) checkpoint_expected_revision: u64,
+    pub(super) observation_expected_revision: Option<u64>,
+}
+
+impl SamplingFinalizationReceipt {
+    pub(super) fn snapshot(&self) -> SamplingSnapshot {
+        SamplingSnapshot {
+            checkpoint: self.workflow.clone(),
+            reconciliation: Some(ActiveReconciliationCheckpoint {
+                policy: self.workflow.policy.clone(),
+                reconciliation: self.reconciliation.clone(),
+            }),
+        }
+    }
 }
 
 /// Privacy-safe durable metadata for one qualified sampling workflow. Sample
@@ -115,6 +150,8 @@ struct PersistedRuntimeState {
     active_reconciliations: BTreeMap<String, PersistedActiveReconciliationV1>,
     #[serde(default)]
     qualified_sampling: BTreeMap<String, QualifiedSamplingCheckpoint>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sampling_finalizations: BTreeMap<String, SamplingFinalizationReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -222,7 +259,7 @@ impl TryFrom<PersistedReconciliationPolicyV1> for ReconciliationPolicy {
 impl From<&RuntimeRecoveryState> for PersistedRuntimeState {
     fn from(value: &RuntimeRecoveryState) -> Self {
         Self {
-            state_format_version: STATE_FORMAT_VERSION,
+            state_format_version: value.format_version(),
             telemetry_state: value.telemetry_state.clone(),
             quota_tracking_state: value.quota_tracking_state.clone(),
             active_reconciliations: value
@@ -239,6 +276,7 @@ impl From<&RuntimeRecoveryState> for PersistedRuntimeState {
                 })
                 .collect(),
             qualified_sampling: value.qualified_sampling.clone(),
+            sampling_finalizations: value.sampling_finalizations.clone(),
         }
     }
 }
@@ -256,7 +294,11 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
         if value.state_format_version == 0 {
             return Err(StorageError::CheckpointFormatUnsupported { found: 0 });
         }
-        if value.state_format_version < 3 && !value.qualified_sampling.is_empty() {
+        if (value.state_format_version < SAMPLING_STATE_FORMAT_VERSION
+            && !value.qualified_sampling.is_empty())
+            || (value.state_format_version < STATE_FORMAT_VERSION
+                && !value.sampling_finalizations.is_empty())
+        {
             return Err(StorageError::CheckpointStateInvalid);
         }
         let mut active_reconciliations = BTreeMap::new();
@@ -279,6 +321,7 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
             );
         }
         validate_qualified_sampling(&value.qualified_sampling, &active_reconciliations)?;
+        validate_sampling_finalizations(&value.qualified_sampling, &value.sampling_finalizations)?;
         validate_telemetry(&value.telemetry_state)?;
         value
             .quota_tracking_state
@@ -295,6 +338,7 @@ impl TryFrom<PersistedRuntimeState> for RuntimeRecoveryState {
             quota_tracking_state: value.quota_tracking_state,
             active_reconciliations,
             qualified_sampling: value.qualified_sampling,
+            sampling_finalizations: value.sampling_finalizations,
         })
     }
 }
@@ -353,6 +397,32 @@ fn validate_runtime_state(state: &RuntimeRecoveryState) -> Result<(), StorageErr
             .map_err(|_| StorageError::CheckpointStateInvalid)?;
     }
     validate_qualified_sampling(&state.qualified_sampling, &state.active_reconciliations)?;
+    validate_sampling_finalizations(&state.qualified_sampling, &state.sampling_finalizations)
+}
+
+fn validate_sampling_finalizations(
+    pending: &BTreeMap<String, QualifiedSamplingCheckpoint>,
+    receipts: &BTreeMap<String, SamplingFinalizationReceipt>,
+) -> Result<(), StorageError> {
+    fn is_hash(value: &str) -> bool {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }
+    if receipts.iter().any(|(workflow_id, receipt)| {
+        pending.contains_key(workflow_id)
+            || !is_hash(workflow_id)
+            || *workflow_id != receipt.workflow.workflow_id()
+            || receipt.workflow.phase != QualifiedSamplingPhase::Terminal
+            || !receipt.workflow.reconciliation_initialized
+            || receipt.workflow.last_evaluation_at.is_none()
+            || !is_hash(&receipt.observation_sha256)
+            || receipt.checkpoint_expected_revision == 0
+            || receipt.observation_expected_revision == Some(0)
+    }) {
+        return Err(StorageError::CheckpointStateInvalid);
+    }
     Ok(())
 }
 
@@ -615,6 +685,12 @@ fn validate_source_binding(
     if state
         .qualified_sampling
         .values()
+        .chain(
+            state
+                .sampling_finalizations
+                .values()
+                .map(|receipt| &receipt.workflow),
+        )
         .any(|workflow| workflow.source_generation_id != source.source_generation())
     {
         return Err(StorageError::CheckpointSourceMismatch);
@@ -772,15 +848,16 @@ pub(crate) fn save_in_transaction(
         return Err(StorageError::CheckpointSourceMismatch);
     }
     validate_source_binding(state, source)?;
-    let actual_revision = transaction
+    let current = transaction
         .query_row(
-            "SELECT checkpoint_revision FROM runtime_checkpoints WHERE rollout_id = ?1 AND source_generation = ?2",
+            "SELECT checkpoint_revision, state_format_version FROM runtime_checkpoints WHERE rollout_id = ?1 AND source_generation = ?2",
             params![source.rollout_id(), source.source_generation()],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, u32>(1)?)),
         )
         .optional()
-        .map_err(StorageError::sqlite)?
-        .map(|value| u64::try_from(value).map_err(|_| StorageError::CheckpointCorrupt))
+        .map_err(StorageError::sqlite)?;
+    let actual_revision = current
+        .map(|(revision, _)| u64::try_from(revision).map_err(|_| StorageError::CheckpointCorrupt))
         .transpose()?;
     let revision = match (expected_revision, actual_revision) {
         (None, Some(actual)) => {
@@ -800,6 +877,19 @@ pub(crate) fn save_in_transaction(
             .checked_add(1)
             .ok_or(StorageError::CheckpointRevisionOverflow)?,
     };
+    if current.is_some_and(|(_, format)| format >= STATE_FORMAT_VERSION) {
+        let previous =
+            load_runtime_checkpoint(transaction, source)?.ok_or(StorageError::CheckpointCorrupt)?;
+        if previous
+            .state
+            .sampling_finalizations
+            .iter()
+            .any(|(id, receipt)| state.sampling_finalizations.get(id) != Some(receipt))
+        {
+            return Err(StorageError::CheckpointIdentityConflict);
+        }
+    }
+    let format = state.format_version();
     let revision_i64 =
         i64::try_from(revision).map_err(|_| StorageError::CheckpointRevisionOverflow)?;
     let expected_revision_i64 = expected_revision
@@ -812,14 +902,14 @@ pub(crate) fn save_in_transaction(
         transaction
             .execute(
                 "INSERT INTO runtime_checkpoints (rollout_id, source_generation, committed_offset, last_ordinal, checkpoint_revision, state_format_version, state_json, state_sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![source.rollout_id(), source.source_generation(), offset, ordinal, revision_i64, STATE_FORMAT_VERSION, state_json, state_sha256],
+                params![source.rollout_id(), source.source_generation(), offset, ordinal, revision_i64, format, state_json, state_sha256],
             )
             .map_err(StorageError::sqlite)?;
     } else {
         let changed = transaction
             .execute(
                 "UPDATE runtime_checkpoints SET committed_offset = ?1, last_ordinal = ?2, checkpoint_revision = ?3, state_format_version = ?4, state_json = ?5, state_sha256 = ?6 WHERE rollout_id = ?7 AND source_generation = ?8 AND checkpoint_revision = ?9",
-                params![offset, ordinal, revision_i64, STATE_FORMAT_VERSION, state_json, state_sha256, source.rollout_id(), source.source_generation(), expected_revision_i64],
+                params![offset, ordinal, revision_i64, format, state_json, state_sha256, source.rollout_id(), source.source_generation(), expected_revision_i64],
             )
             .map_err(StorageError::sqlite)?;
         if changed != 1 {
@@ -905,7 +995,7 @@ pub(crate) fn save_in_transaction_idempotent(
             RolloutCursor::from_checkpoint(&existing_source, committed_offset, last_ordinal);
         if existing_source == *source
             && existing_cursor == *cursor
-            && format == STATE_FORMAT_VERSION
+            && format == state.format_version()
             && existing_json == state_json
             && existing_sha256 == state_sha256
         {

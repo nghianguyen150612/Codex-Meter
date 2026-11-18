@@ -270,7 +270,7 @@ pub struct StorageInfo {
 
 #[derive(Debug)]
 pub struct SqliteStore {
-    connection: Connection,
+    pub(super) connection: Connection,
     info: StorageInfo,
 }
 
@@ -341,6 +341,13 @@ impl SqliteStore {
         let workflow = snapshot.checkpoint.clone();
         let workflow_id = workflow.workflow_id();
         if let Some(checkpoint) = &existing {
+            if checkpoint
+                .state
+                .sampling_finalizations
+                .contains_key(&workflow_id)
+            {
+                return Err(StorageError::CheckpointIdentityConflict);
+            }
             if checkpoint.state.qualified_sampling.get(&workflow_id) == Some(&workflow)
                 && checkpoint
                     .state

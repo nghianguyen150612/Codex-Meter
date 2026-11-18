@@ -1,11 +1,10 @@
-# P044 manifest: P044A, P044B1, and P044B2-R1 implementation
+# P044 manifest
 
-P044A and P044B1 are COMPLETE. P044B2-R1 implements durable qualified sampling
-snapshots, source-authorized recovery, and CAS-protected SQLite transitions.
-P044B2-R2 Observation finalization remains incomplete, so overall P044 remains
-PARTIAL. Final-head hosted acceptance for P044B1 is tracked
-in the dedicated section of Draft PR #39; source implementation alone does not
-substitute for those checks.
+P044A, P044B1, and P044B2-R1 are implemented. P044B2-R2 implements the
+terminal Observation transaction and file-backed crash recovery. The
+[P044B2-R2 closeout in Draft PR #39](https://github.com/nghianguyen150612/Codex-Meter/pull/39)
+records the engineering status and exact-head hosted validation. Live-source
+qualification remains blocked, and P038 G4/G5 remain unverified.
 
 ## Pinned source evidence
 
@@ -231,10 +230,9 @@ failed validation or CAS leaves storage and the live coordinator unchanged via
 File-backed tests close and reopen between registration, accepted baselines,
 and initialized reconciliation. Coordinator tests cover a future accepted
 event becoming eligible after restart and fresh-authority revalidation.
-P044B2-R1 does not provide P013 terminal Observation assembly, provisional
-Observation ordering, or atomic terminal Observation/checkpoint cleanup; those
-remain P044B2-R2. P045 is not started; P038 G4/G5 remain UNVERIFIED. PR #39
-remains Draft and unmerged on the existing P043 base.
+The R2 handoff below covers terminal Observation assembly and atomic cleanup.
+P038 G4/G5 remain unverified. PR #39 remains Draft and unmerged on the P043
+base.
 
 R1 implementation validation is recorded with its tested commit and exact
 counts in the PR update. Earlier metadata-only P044B2 validation below does not
@@ -252,3 +250,63 @@ the workspace default/all-feature suites. Release bundle generation, installed
 runtime smoke, aggregation, and checksum/provenance verification passed for
 Linux x86_64, Windows x86_64, macOS x86_64, and macOS ARM64. These runs validate
 the bounded metadata increment only; they do not validate P044B2-R1 or R2.
+
+## P044B2-R2 terminal finalization
+
+`SqliteStore::finalize_sampling` takes an authorized coordinator and a
+`SamplingFinalizationRequest` with the expected normalized source, task,
+session, interval, workflow ID and SQLite revisions. The authorized policy
+and the original deadline must agree with the persisted workflow and P012
+state. P012 must have a terminal outcome for each meter and no remaining
+actions other than its completion marker.
+
+The finalizer supplies P012 state directly to P013. Five-hour and weekly
+evidence stay independent, including observed zero, reset, timeout and
+unavailable evidence. Normalized per-response events may supply observed token
+counts, but R2 has no P044A closure proof and keeps coverage incomplete or
+unavailable. Source fallback uses the independently validated normalized source
+association. Isolation is unknown and does not qualify for A or B.
+
+Pending work stays in the runtime checkpoint. The immediate transaction uses
+P016 to insert or legally advance the existing Observation under revision CAS.
+It replaces the pending workflow with a format-4 completion receipt, removes
+its active P012 state if unshared, and updates the checkpoint checksum and
+revision. The source cursor and boundary are preserved. An identical terminal
+Observation can be adopted at its current revision. A differing terminal
+payload or source generation produces a conflict, preserving both the existing
+Observation and the pending result.
+
+A stop before commit leaves the pending checkpoint. After commit, the
+checksummed receipt retains normalized terminal replay material and the
+Observation payload checksum. `recover_finalized_sampling` returns
+unauthorized replay data for the exact workflow. After reauthorization, the
+same evidence and the original or freshly loaded revisions can acknowledge
+the commit without another write. A missing pending entry alone, a missing
+Observation, mismatched evidence, and attempts to restore completed work fail
+closed. The receipt contains no credential.
+
+File-backed regressions exercise stable and zero deltas, asymmetric meter
+validity, reset, timeout, acquisition failure, pending and identity rejection,
+both revisions, provisional update rollback, cursor and boundary preservation,
+collision handling, immutable insertion replay, and restart before and after
+commit. The suite compares stored payloads, revisions and checksums.
+
+### macOS Intel baseline triage
+
+The original Intel push job on
+`648f124fc27d8b35e62097c296c1f26cd72f2ed8` failed with the reported
+Python-worker pipe-lifecycle error in the environment allowlist test. The
+equivalent PR job passed. The unchanged-head hosted Intel rerun passed the
+default and all-feature suites. [Original push job](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44015249012/job/133811500898)
+· [PR job](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44015255408/job/133811522254)
+· [Hosted Intel rerun](https://github.com/nghianguyen150612/Codex-Meter/actions/runs/44015249012/job/134531680578)
+
+The Actions log download was unavailable from this workspace. The hosted
+rerun did not reproduce the failure. Root cause remains unconfirmed.
+Final-head Intel CI explicitly runs the focused test with the original
+worker timeout, pipe checks, and security settings.
+
+The test-only synthetic issuer remains the sole qualified sampling authority.
+Production sync, statistical eligibility, and release/hardware qualification
+are unchanged. Final-head push CI, PR CI and four-platform release evidence
+are recorded by SHA in the Draft PR closeout.

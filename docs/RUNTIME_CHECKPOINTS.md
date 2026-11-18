@@ -51,10 +51,10 @@ fields. P012 policy durations use exact `{seconds, nanoseconds}` values rather
 than floating-point seconds. Restored policies pass `ReconciliationPolicy::validate`
 and domain-owned recovery validation before becoming runtime state.
 
-`state_format_version = 3` is the current internal checkpoint format version.
-The version 3 reader accepts version 1 and version 2 payloads; missing task
-start/terminal timestamps and sampling metadata remain unavailable. New
-checkpoints use version 3. Version 3 adds a bounded `qualified_sampling` map
+Format 4 is the highest supported runtime checkpoint format. The reader
+accepts formats 1 through 4. Missing legacy task start/terminal timestamps and
+sampling metadata remain unavailable. Checkpoints without completion receipts
+continue to write format 3. Version 3 adds a bounded `qualified_sampling` map
 containing the exact source generation, task/session, verified interval,
 contract label, sampling phase, validated policy, original deadline, explicit
 evaluation timestamp, and sample identity digests. Its key hashes the full
@@ -112,6 +112,33 @@ The checkpoint contains privacy-filtered P009/P011/P012 state only. It never
 stores raw rollout lines, prompts, responses, reasoning text, tool arguments or
 outputs, source paths, credentials, OAuth tokens, cookies, account IDs, or
 public contract event archives.
+
+## Qualified sampling completion receipts
+
+P044B2-R2 uses an immediate SQLite transaction to finalize an authorized
+workflow. It checks the current revision and exact pending association, policy,
+deadline, normalized replay material and P012 state. It removes the completed
+workflow from `qualified_sampling` and removes its P012 state from
+`active_reconciliations` when no other initialized workflow owns it. Other
+workflows, cursor offsets, ordinals and source boundary fingerprints are
+preserved.
+
+Format 4 records a completion receipt under the workflow key. It retains the
+normalized terminal replay snapshot, the canonical Observation SHA-256 and
+the original CAS revisions for acknowledgment after restart. It carries
+neither token response events nor authority capabilities. Receipts are covered
+by the existing checkpoint checksum and 4 MiB payload limit. Subsequent
+checkpoint saves must preserve existing receipts, and a receipt and pending
+entry cannot coexist for the same key. Format 3 terminal sampling metadata
+signifies reconciled meter outcomes. An Observation commit adds a format 4
+receipt.
+
+A failure before commit leaves the workflow pending. After commit,
+`recover_finalized_sampling` can reopen the replay snapshot without creating
+a credential. The caller supplies fresh authority and the same normalized
+token evidence, if any, to reproduce the request. The finalizer reloads both
+records and verifies the exact snapshot and Observation checksum before
+returning a read-only replay.
 
 ## Revision and transactions
 

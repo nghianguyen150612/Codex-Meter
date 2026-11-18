@@ -146,16 +146,28 @@ first terminal timestamp for deterministic Observation identity. The
 Observation uses the real start timestamp only when it does not follow that
 terminal timestamp.
 
-P044B2-R1 checkpoint format 3 stores bounded normalized baselines, accepted
-sample payloads, replay digests, and the existing P012 reconciliation state.
-Checkpoint recovery produces unauthorized data; a freshly recognized source
-association is required before sampling can resume. Durable sampling updates
-use checkpoint revision CAS and preserve the rollout cursor and source
-boundaries. The checkpoint never carries an authority capability. P044B2-R2
-still needs to assemble the terminal Observation from recovered sampling and
-commit terminal Observation/checkpoint cleanup atomically. The existing atomic
-Observation/checkpoint primitive remains available; historical terminal rows
-remain immutable under its normal conflict rules.
+### Qualified sampling finalization
+
+`SqliteStore::finalize_sampling` reuses P013 assembly and the P016
+Observation writer inside the same immediate transaction as the strict
+checkpoint writer. The in-transaction reads validate the current checkpoint,
+associated workflow and both expected revisions. Finalization updates the
+checkpoint once and writes the terminal Observation at revision 1, or advances
+a compatible existing provisional Observation by one revision. Sampling
+progress stays in the checkpoint and creates no provisional Observation.
+
+An identical preexisting terminal row can be adopted only at its current
+revision, with its existing payload, checksum and revision preserved. A
+different terminal payload conflicts. A different normalized source identity
+produces an identity conflict even if the P017 Observation ID is the same.
+These conflicts preserve the pending workflow and the existing row.
+
+The transaction writes the completion receipt, removes pending state and
+preserves the rollout cursor and boundary. A transaction error rolls back both
+writes. After a crash following commit, the exact receipt and matching
+checksum-verified Observation support acknowledgment without a write. A
+missing receipt or missing Observation cannot authorize acknowledgment.
+Production sync retains its existing terminal recording path.
 
 ## Privacy and read-only boundary
 

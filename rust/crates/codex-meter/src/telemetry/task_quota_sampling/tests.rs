@@ -1194,3 +1194,5 @@ fn no_known_local_overlap_does_not_prove_external_isolation() {
     );
     assert_stable(&coordinator, METERS[0], 5.0);
 }
+
+mod finalization;

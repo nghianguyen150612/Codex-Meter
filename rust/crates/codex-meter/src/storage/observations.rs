@@ -746,7 +746,7 @@ fn validate_quota(
     Ok(())
 }
 
-fn enforce_identity(
+pub(super) fn enforce_identity(
     existing: &NormalizedObservation,
     incoming: &NormalizedObservation,
 ) -> Result<(), StorageError> {
@@ -759,7 +759,7 @@ fn enforce_identity(
     Ok(())
 }
 
-fn is_terminal(lifecycle: ObservationLifecycle) -> bool {
+pub(super) fn is_terminal(lifecycle: ObservationLifecycle) -> bool {
     matches!(
         lifecycle,
         ObservationLifecycle::Finalized

@@ -41,7 +41,7 @@ The P031 rollout reader currently cannot prove exhaustive per-task response
 coverage at a terminal marker. It can encounter unsupported records, incomplete
 source coverage, later appended records, or source-generation changes, and the
 format does not provide a validated flush/coverage watermark. Therefore the
-recorder passes `Incomplete` for every newly built task Observation, including
+recorder assesses coverage with `telemetry::coverage` and passes `Incomplete` for every newly built task Observation, including
 tasks with a `task_complete` marker and fully populated observed raw totals.
 Directly observed counters remain present, but P022 eligibility stays false
 until token completeness is independently established. The generic P013 builder
@@ -168,3 +168,23 @@ not rewrite that immutable schema or infer success. The typed P009 checkpoint
 state and privacy-safe ingestion diagnostics retain those distinctions where
 available; expanding terminal outcome in Observations requires a separately
 versioned contract.
+
+## P044 qualified sampling handoff
+
+The qualified sampling finalizer calls `build_observation` with the authorized,
+recovered P012 task reconciliation and its durable evaluation timestamp. Both
+meters must have terminal outcomes. Awaiting samples and stabilization stay in
+checkpoint state. Stable, reset, unstable, plan discontinuity, timeout,
+acquisition failure and no baseline reach the existing P013 terminal evidence
+mapping independently for each meter.
+
+The finalizer checks any normalized token events against the exact task,
+session, source and interval before assembly. Without authoritative P044A
+closure, observed response counts remain incomplete and absent counts remain
+unavailable. Without token events, the validated normalized source association
+provides the Observation source instance ID. Source conflicts are rejected.
+
+The input carries unknown external usage. A qualified association establishes
+meter evidence for the task and gives no proof of exclusive account usage or
+quality A/B isolation. P013 retains its lifecycle and evidence rules, and
+P022 continues to require valid raw-token evidence for workload eligibility.

@@ -11,6 +11,7 @@ use crate::storage::{
     SourceBoundaryFingerprint, SqliteStore, StorageError, TokenRecordSemantic, TokenUsageEvidence,
     UsageEvidenceBatch, UsageHistorySummary,
 };
+use crate::telemetry::coverage::{assess_task_coverage, SourceContinuity, TaskCoverageEvidence};
 use crate::telemetry::source_discovery::{
     discover_local_rollouts, file_identity_sha256, open_verified_rollout,
     verify_committed_boundary, BoundaryCheck, DiscoveredRollout, DiscoveryResult, SourceOpenError,
@@ -23,8 +24,7 @@ use crate::telemetry::{
     ObservationInput, QuotaNormalizationOutcome, ReadBatch, ReadItem, ReadItemOutcome,
     ReconciliationPolicy, RejectedLineReason, RolloutCursor, RolloutRecordKind, SchemaVersion,
     SourceIdentity, TaskLifecycleTransitionKind, TaskReconciliationTarget, TokenEvidenceExtraction,
-    TokenMetric, TokenPayloadKind, TokenTelemetryCompleteness, TokenUsage,
-    COMPATIBILITY_CLI_VERSION,
+    TokenMetric, TokenPayloadKind, TokenUsage, COMPATIBILITY_CLI_VERSION,
 };
 
 use super::args::{CliError, SyncArguments};
@@ -930,6 +930,7 @@ fn ingest_rollout(store: &mut SqliteStore, rollout: &DiscoveredRollout) -> Sourc
             &terminal_tasks,
             &token_evidence,
             &next_state,
+            next_cursor.committed_offset(),
         ) {
             Ok(observations) => observations,
             Err(_) => {
@@ -1119,6 +1120,7 @@ fn build_terminal_observations(
     terminal_tasks: &[(String, String, TaskLifecycleTransitionKind)],
     current_tokens: &[TokenUsageEvidence],
     state: &RuntimeRecoveryState,
+    boundary: u64,
 ) -> Result<Vec<NormalizedObservation>, StorageError> {
     let mut observations = BTreeMap::new();
     let source_id = source_id(source);
@@ -1159,7 +1161,7 @@ fn build_terminal_observations(
                 .filter(|started_at| timestamp_not_after(started_at, ended_at)),
             Some(ended_at.clone()),
         );
-        target.session_id = session_id;
+        target.session_id = session_id.clone();
         let policy = ReconciliationPolicy {
             max_before_sample_age: time::Duration::seconds(0),
             post_task_sample_offsets: vec![time::Duration::seconds(1)],
@@ -1173,10 +1175,18 @@ fn build_terminal_observations(
             .values()
             .map(attributed_token_event)
             .collect::<Vec<_>>();
-        // The supported rollout records expose terminal task markers, but do not
-        // certify that every per-response token event has been flushed and read.
-        // Terminal lifecycle evidence therefore cannot prove token completeness.
-        let completeness = TokenTelemetryCompleteness::Incomplete;
+        let coverage = assess_task_coverage(&TaskCoverageEvidence {
+            task_id,
+            session_id: session_id.as_deref(),
+            source_instance_id: &source_id,
+            boundary: Some(boundary),
+            // Earlier batches can have gaps or unsupported records; a cursor alone
+            // does not prove continuity across the task's entire history.
+            continuity: SourceContinuity::Unknown,
+            task: state.telemetry_state.tasks.get(task_id),
+            events: &attributed,
+        });
+        let completeness = coverage.token_completeness();
         let mut observation = build_observation(&ObservationInput::new(
             reconciliation,
             attributed,

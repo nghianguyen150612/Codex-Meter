@@ -809,6 +809,13 @@ fn database_trigger_failure_rolls_back_evidence_and_cursor_for_safe_replay() {
         .write_all(format!("{second_response}\n").as_bytes())
         .unwrap();
     let connection = Connection::open(&database).unwrap();
+    let checkpoint_before: (String, i64, String) = connection
+        .query_row(
+            "SELECT committed_offset, checkpoint_revision, state_sha256 FROM runtime_checkpoints",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
     connection
         .execute_batch(
             "CREATE TRIGGER reject_usage_insert BEFORE INSERT ON token_usage_evidence BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
@@ -827,6 +834,14 @@ fn database_trigger_failure_rolls_back_evidence_and_cursor_for_safe_replay() {
         .any(|warning| warning == "source_transaction_conflict"));
 
     let connection = Connection::open(&database).unwrap();
+    let checkpoint_after: (String, i64, String) = connection
+        .query_row(
+            "SELECT committed_offset, checkpoint_revision, state_sha256 FROM runtime_checkpoints",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(checkpoint_before, checkpoint_after);
     connection
         .execute_batch("DROP TRIGGER reject_usage_insert;")
         .unwrap();
@@ -978,4 +993,74 @@ fn help_empty_source_and_malformed_source_states_are_actionable_and_private() {
     let db_text = String::from_utf8_lossy(&db);
     assert!(!db_text.contains("fake prompt must disappear"));
     assert!(!db_text.contains("provider-response-must-not-be-retained"));
+}
+
+#[test]
+fn checkpointed_task_replay_preserves_terminal_observation_after_later_token() {
+    let tree = TempTree::new();
+    let home = tree.path().join("Codex Home");
+    let database = tree.path().join("history.sqlite3");
+    let path = active_rollout(&home, "coverage-restart.jsonl");
+    fs::write(
+        &path,
+        format!(
+            "{}\n{}\n{}\n{}\n",
+            SESSION_META.trim(),
+            TASK_STARTED.trim(),
+            TURN_CONTEXT.trim(),
+            json_line_with_ordinal(TOKEN_USAGE, 12)
+        ),
+    )
+    .unwrap();
+    let (first_output, first) = run_sync(&home, &database);
+    assert!(first_output.status.success());
+    assert_eq!(first["responses_added"], 1);
+    assert_eq!(first["observations_added"], 0);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(format!("{}\n", TASK_COMPLETED.trim()).as_bytes())
+        .unwrap();
+    let (second_output, second) = run_sync(&home, &database);
+    assert!(second_output.status.success());
+    assert_eq!(second["observations_added"], 1);
+    let connection = Connection::open(&database).unwrap();
+    let before: (String, String, i64) = connection
+        .query_row(
+            "SELECT observation_json, token_validity, raw_total FROM observations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(before.1, "incomplete");
+    assert_eq!(before.2, 100);
+    drop(connection);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(format!("{}\n", json_line_with_ordinal(TOKEN_USAGE, 13)).as_bytes())
+        .unwrap();
+    let (third_output, third) = run_sync(&home, &database);
+    assert!(third_output.status.success());
+    assert_eq!(third["observations_added"], 0);
+    let connection = Connection::open(&database).unwrap();
+    let after: (String, String, i64) = connection
+        .query_row(
+            "SELECT observation_json, token_validity, raw_total FROM observations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+    drop(connection);
+    let (replay_output, replay) = run_sync(&home, &database);
+    assert!(replay_output.status.success());
+    assert_eq!(replay["responses_added"], 0);
+    assert_eq!(replay["observations_added"], 0);
+    assert_eq!(
+        replay["saved_response_events"],
+        third["saved_response_events"]
+    );
 }

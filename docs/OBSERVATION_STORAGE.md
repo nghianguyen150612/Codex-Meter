@@ -24,8 +24,8 @@ match every stored projection. P016 never repairs a corrupt row.
 ## Projections and schema
 
 Migration `0003_observations` creates one `STRICT` table named `observations`.
-SQLite migration version `4`, Observation schema version `1.0.0`, and checkpoint
-state format version `2` are independent version domains.
+SQLite migration version `6`, Observation schema version `1.0.0`, and checkpoint
+state format version `3` are independent version domains.
 
 The intentional application tables after migration 4 are exactly
 `schema_migrations`, `storage_metadata`, `runtime_checkpoints`, and
@@ -137,7 +137,7 @@ checkpoint available for deterministic replay; a crash after commit leaves both
 Observation and next checkpoint durable.
 
 P043 adds the first observed task start and terminal timestamps to serialized
-P009 telemetry checkpoint state format 2. These fields default to unavailable
+P009 telemetry checkpoint state. These fields default to unavailable
 when reading older version-1 checkpoint payloads, so existing cursor and
 checksum validation remains authoritative and no historical Observation is
 modified. These timestamps are persisted atomically with the source cursor and
@@ -145,6 +145,29 @@ any Observation created by that batch. Repeated terminal markers retain the
 first terminal timestamp for deterministic Observation identity. The
 Observation uses the real start timestamp only when it does not follow that
 terminal timestamp.
+
+### Qualified sampling finalization
+
+`SqliteStore::finalize_sampling` reuses P013 assembly and the P016
+Observation writer inside the same immediate transaction as the strict
+checkpoint writer. The in-transaction reads validate the current checkpoint,
+associated workflow and both expected revisions. Finalization updates the
+checkpoint once and writes the terminal Observation at revision 1, or advances
+a compatible existing provisional Observation by one revision. Sampling
+progress stays in the checkpoint and creates no provisional Observation.
+
+An identical preexisting terminal row can be adopted only at its current
+revision, with its existing payload, checksum and revision preserved. A
+different terminal payload conflicts. A different normalized source identity
+produces an identity conflict even if the P017 Observation ID is the same.
+These conflicts preserve the pending workflow and the existing row.
+
+The transaction writes the completion receipt, removes pending state and
+preserves the rollout cursor and boundary. A transaction error rolls back both
+writes. After a crash following commit, the exact receipt and matching
+checksum-verified Observation support acknowledgment without a write. A
+missing receipt or missing Observation cannot authorize acknowledgment.
+Production sync retains its existing terminal recording path.
 
 ## Privacy and read-only boundary
 

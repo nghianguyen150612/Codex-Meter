@@ -51,13 +51,49 @@ fields. P012 policy durations use exact `{seconds, nanoseconds}` values rather
 than floating-point seconds. Restored policies pass `ReconciliationPolicy::validate`
 and domain-owned recovery validation before becoming runtime state.
 
-`state_format_version = 2` is the current internal checkpoint format version.
-The version 2 reader accepts version 1 payloads and defaults the newly added
-task start/terminal timestamps to unavailable. New checkpoints use version 2.
-This is separate from the SQLite migration version (`4`) and public JSON
-contract versions such as `schema_version = 1.0.0`. The format is present in
-both the row metadata and the typed payload envelope. A newer or unsupported
-format is rejected rather than decoded as the current version.
+Format 4 is the highest supported runtime checkpoint format. The reader
+accepts formats 1 through 4. Missing legacy task start/terminal timestamps and
+sampling metadata remain unavailable. Checkpoints without completion receipts
+continue to write format 3. Version 3 adds a bounded `qualified_sampling` map
+containing the exact source generation, task/session, verified interval,
+contract label, sampling phase, validated policy, original deadline, explicit
+evaluation timestamp, and sample identity digests. Its key hashes the full
+association identity, so equal task IDs with different sessions or intervals
+do not merge.
+
+The `qualified_sampling` record is metadata only. An authority contract string,
+checksum, and structurally valid JSON do not issue or restore a P044B1
+`AssociationCredential`. Recovery first produces an inspectable unauthorized
+value. A fresh recognized credential must match authority contract, contract
+version, source generation, task/session, interval, policy, and workflow identity
+before sampling resumes. Production recognizes no authority. Legacy v1/v2
+entries have no qualified association provenance and are never promoted.
+
+The format-3 record now includes only normalized baseline samples and a bounded
+accepted-event ledger. Event payloads are retained because an event admitted by
+the coordinator can be later than P012's evaluation time; it remains pending
+until an evaluation reaches its timestamp. Each subsequent evaluation replays
+eligible accepted events through P012, whose existing identity handling makes
+that replay idempotent. Payload digests are checked against those normalized
+samples; absent payloads for a nonempty digest ledger fail recovery closed.
+Initialized workflows reuse `active_reconciliations` for the complete P012
+state, including both meter states, stability evidence, deadlines, and pending
+actions. No quota delta is independently reconstructed.
+
+`TaskQuotaSampling::transition_and_persist` persists a validated transition
+with the existing checkpoint revision CAS. It preserves the rollout cursor and
+committed boundaries, updates checkpoint state in one SQLite transaction, and
+commits the caller's in-memory coordinator only after SQLite succeeds. An
+identical snapshot is idempotent. P012 remains keyed by task ID; if another
+workflow with the same task ID would collide in that map, persistence returns
+an identity conflict without overwriting either workflow.
+
+The state payload is capped at 4 MiB, with at most 128 qualified workflow
+records, 512 sample identities/events per workflow, and 256-byte identifiers. The format
+is separate from SQLite migration version (`6`) and public JSON contract
+versions such as `schema_version = 1.0.0`. The format is present in both row
+metadata and the typed payload envelope; disagreement, newer formats, and
+unsupported formats fail closed.
 
 P015 retains terminal reconciliation state in the active-reconciliation map
 when the caller has not yet handed its completed measurement to P016. This is a
@@ -76,6 +112,33 @@ The checkpoint contains privacy-filtered P009/P011/P012 state only. It never
 stores raw rollout lines, prompts, responses, reasoning text, tool arguments or
 outputs, source paths, credentials, OAuth tokens, cookies, account IDs, or
 public contract event archives.
+
+## Qualified sampling completion receipts
+
+P044B2-R2 uses an immediate SQLite transaction to finalize an authorized
+workflow. It checks the current revision and exact pending association, policy,
+deadline, normalized replay material and P012 state. It removes the completed
+workflow from `qualified_sampling` and removes its P012 state from
+`active_reconciliations` when no other initialized workflow owns it. Other
+workflows, cursor offsets, ordinals and source boundary fingerprints are
+preserved.
+
+Format 4 records a completion receipt under the workflow key. It retains the
+normalized terminal replay snapshot, the canonical Observation SHA-256 and
+the original CAS revisions for acknowledgment after restart. It carries
+neither token response events nor authority capabilities. Receipts are covered
+by the existing checkpoint checksum and 4 MiB payload limit. Subsequent
+checkpoint saves must preserve existing receipts, and a receipt and pending
+entry cannot coexist for the same key. Format 3 terminal sampling metadata
+signifies reconciled meter outcomes. An Observation commit adds a format 4
+receipt.
+
+A failure before commit leaves the workflow pending. After commit,
+`recover_finalized_sampling` can reopen the replay snapshot without creating
+a credential. The caller supplies fresh authority and the same normalized
+token evidence, if any, to reproduce the request. The finalizer reloads both
+records and verifies the exact snapshot and Observation checksum before
+returning a read-only replay.
 
 ## Revision and transactions
 
@@ -144,6 +207,8 @@ P016 may assume:
 - P009 telemetry state survives restart;
 - P011 replay/idempotency state survives restart;
 - active P012 reconciliation and stabilization can survive restart;
+- v3 qualified association metadata survives restart without restoring source
+  authority; and
 - no raw telemetry or content is persisted; and
 - no Observation table exists yet.
 

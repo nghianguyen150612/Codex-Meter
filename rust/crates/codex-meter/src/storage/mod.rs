@@ -4,11 +4,13 @@ mod checkpoints;
 mod migrations;
 mod observations;
 mod reporting;
+mod sampling_finalization;
 mod sqlite;
 mod usage_evidence;
 
 pub use checkpoints::{
-    ActiveReconciliationCheckpoint, RuntimeCheckpoint, RuntimeRecoveryState, STATE_FORMAT_VERSION,
+    ActiveReconciliationCheckpoint, QualifiedSamplingCheckpoint, QualifiedSamplingPhase,
+    RuntimeCheckpoint, RuntimeRecoveryState, SamplingFinalizationReceipt, STATE_FORMAT_VERSION,
 };
 pub use observations::{
     ObservationPage, ObservationPageCursor, ObservationQuery, StoredObservation,
@@ -20,6 +22,7 @@ pub use reporting::{
     TaskUsageReport, TaskUsageSummary, TokenHistoryCursor, TokenHistoryPage, TokenHistoryQuery,
     TokenStatistics, TokenStatisticsQuery, ValueCount,
 };
+pub use sampling_finalization::{SamplingFinalization, SamplingFinalizationRequest};
 pub use sqlite::{SqliteReadStore, SqliteStore, StorageError, StorageInfo, DEFAULT_BUSY_TIMEOUT};
 pub use usage_evidence::{
     EvidenceInsertCounts, IngestionDiagnostic, IngestionDiagnosticCode, QuotaSnapshotEvidence,

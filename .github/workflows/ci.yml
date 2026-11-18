@@ -48,6 +48,9 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: test "$(uname -m)" = "${{ matrix.expected_arch }}"
       - run: cargo build --manifest-path rust/Cargo.toml --workspace
+      - name: Check Python worker pipe cleanup on macOS Intel
+        if: matrix.os == 'macos-15-intel'
+        run: cargo test --manifest-path rust/Cargo.toml -p codex-meter --lib analytics::process::tests::environment_is_cleared_except_for_the_documented_runtime_allowlist -- --exact
       - run: cargo test --manifest-path rust/Cargo.toml --workspace --all-targets
       - run: cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --all-features
       - name: PTY resize with an inherited interactive controlling terminal

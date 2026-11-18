@@ -26,6 +26,7 @@ use super::usage_evidence::{
     IngestionDiagnostic, SourceBoundaryFingerprint, TokenUsageEvidence, UsageEvidenceBatch,
     UsageHistorySummary,
 };
+use crate::telemetry::task_quota_sampling::SamplingSnapshot;
 use crate::telemetry::{RolloutCursor, SourceIdentity};
 
 pub const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -84,6 +85,7 @@ pub enum StorageError {
     },
     CheckpointDecode,
     CheckpointStateInvalid,
+    CheckpointIdentityConflict,
     CheckpointCursorInvalid,
     SourceBoundaryConflict,
     EvidenceConflict,
@@ -125,6 +127,7 @@ impl StorageError {
             | Self::CheckpointFormatTooNew { .. }
             | Self::CheckpointFormatUnsupported { .. } => "database_format_unsupported",
             Self::CheckpointSourceMismatch | Self::SourceBoundaryConflict => "source_changed",
+            Self::CheckpointIdentityConflict => "checkpoint_conflict",
             Self::CheckpointRevisionConflict { .. } => "checkpoint_conflict",
             Self::EvidenceConflict => "evidence_conflict",
             Self::ReportingEvidenceNotFound => "event_not_found",
@@ -190,6 +193,7 @@ impl fmt::Display for StorageError {
             Self::CheckpointFormatUnsupported { found } => write!(formatter, "runtime checkpoint format {found} is unsupported"),
             Self::CheckpointDecode => write!(formatter, "runtime checkpoint could not be decoded"),
             Self::CheckpointStateInvalid => write!(formatter, "runtime checkpoint state is invalid"),
+            Self::CheckpointIdentityConflict => write!(formatter, "sampling workflow identity conflicts with stored reconciliation state"),
             Self::CheckpointCursorInvalid => write!(formatter, "runtime checkpoint cursor is invalid"),
             Self::SourceBoundaryConflict => write!(formatter, "source boundary conflicts with committed history"),
             Self::EvidenceConflict => write!(formatter, "immutable usage evidence conflicts with prior history"),
@@ -234,6 +238,7 @@ impl Error for StorageError {
             | Self::CheckpointFormatUnsupported { .. }
             | Self::CheckpointDecode
             | Self::CheckpointStateInvalid
+            | Self::CheckpointIdentityConflict
             | Self::CheckpointCursorInvalid
             | Self::SourceBoundaryConflict
             | Self::EvidenceConflict
@@ -265,7 +270,7 @@ pub struct StorageInfo {
 
 #[derive(Debug)]
 pub struct SqliteStore {
-    connection: Connection,
+    pub(super) connection: Connection,
     info: StorageInfo,
 }
 
@@ -318,6 +323,77 @@ impl SqliteStore {
             state,
             expected_revision,
         )
+    }
+
+    /// Atomically persist one sampling transition while retaining the current
+    /// rollout cursor and all other committed checkpoint state. Revision CAS is
+    /// checked against the caller's previously loaded revision.
+    pub fn save_sampling_snapshot(
+        &mut self,
+        source: &SourceIdentity,
+        snapshot: &SamplingSnapshot,
+        expected_revision: Option<u64>,
+    ) -> Result<RuntimeCheckpoint, StorageError> {
+        crate::telemetry::task_quota_sampling::TaskQuotaSampling::recover(snapshot.clone())
+            .map_err(|_| StorageError::CheckpointStateInvalid)?;
+        let existing = self.load_runtime_checkpoint(source)?;
+        let actual = existing.as_ref().map(|checkpoint| checkpoint.revision);
+        let workflow = snapshot.checkpoint.clone();
+        let workflow_id = workflow.workflow_id();
+        if let Some(checkpoint) = &existing {
+            if checkpoint
+                .state
+                .sampling_finalizations
+                .contains_key(&workflow_id)
+            {
+                return Err(StorageError::CheckpointIdentityConflict);
+            }
+            if checkpoint.state.qualified_sampling.get(&workflow_id) == Some(&workflow)
+                && checkpoint
+                    .state
+                    .active_reconciliations
+                    .get(&workflow.task_id)
+                    == snapshot.reconciliation.as_ref()
+            {
+                return Ok(checkpoint.clone());
+            }
+        }
+        if actual != expected_revision {
+            return Err(StorageError::CheckpointRevisionConflict {
+                expected: expected_revision,
+                actual,
+            });
+        }
+        let mut state = existing
+            .as_ref()
+            .map(|c| c.state.clone())
+            .unwrap_or_default();
+        if let Some(active) = &snapshot.reconciliation {
+            if active.reconciliation.task.task_id != workflow.task_id {
+                return Err(StorageError::CheckpointIdentityConflict);
+            }
+            if let Some(other) = state.active_reconciliations.get(&workflow.task_id) {
+                if other != active && !state.qualified_sampling.contains_key(&workflow_id) {
+                    return Err(StorageError::CheckpointIdentityConflict);
+                }
+            }
+            if state.qualified_sampling.iter().any(|(key, other)| {
+                key != &workflow_id
+                    && other.task_id == workflow.task_id
+                    && other.reconciliation_initialized
+            }) {
+                return Err(StorageError::CheckpointIdentityConflict);
+            }
+            state
+                .active_reconciliations
+                .insert(workflow.task_id.clone(), active.clone());
+        }
+        state.qualified_sampling.insert(workflow_id, workflow);
+        let cursor = existing
+            .as_ref()
+            .map(|c| c.cursor.clone())
+            .unwrap_or_else(|| RolloutCursor::at_start(source));
+        self.save_runtime_checkpoint(source, &cursor, &state, expected_revision)
     }
 
     pub fn load_source_boundary(

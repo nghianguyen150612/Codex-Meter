@@ -1377,7 +1377,7 @@ fn user_home() -> Result<PathBuf, ()> {
     home.map(PathBuf::from).ok_or(())
 }
 
-fn prepare_private_data_directory(directory: &Path) -> Result<(), CliError> {
+pub(super) fn prepare_private_data_directory(directory: &Path) -> Result<(), CliError> {
     fs::create_dir_all(directory).map_err(|_| CliError {
         code: "application_data_directory_unavailable",
         message: "could not create the per-user Codex Meter data directory".into(),
@@ -1405,7 +1405,7 @@ fn prepare_private_data_directory(directory: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-fn prepare_private_database_file(path: &Path) -> Result<(), CliError> {
+pub(super) fn prepare_private_database_file(path: &Path) -> Result<(), CliError> {
     let _ = path;
     #[cfg(unix)]
     {

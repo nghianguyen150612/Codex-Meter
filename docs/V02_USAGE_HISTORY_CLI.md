@@ -108,15 +108,36 @@ Task totals do not use quota meter snapshots and cannot establish task-level
 account quota consumption.
 
 `quota --live` explicitly requests one in-memory read through the Codex App
-Server. `--live` cannot be combined with `--history`, `--after`, `--limit`, or
-`--database`; it never writes SQLite. Use Codex's existing auth state. An
-unsupported method, unavailable authentication, or missing App Server is
-reported as a sanitized diagnostic. The JSON result has schema version 1.0.0,
-source and acquisition time, snapshot availability, five-hour and weekly
-availability, observed used percentages, derived remaining percentages,
-validated UTC resets, typed warnings, and account-level provenance. No email,
-account identifier, credential, provider response, prompt, transcript, or
-process path is included.
+Server. Without `--save`, it preserves P045A behavior and does not open or write
+SQLite. Use Codex's existing auth state. An unsupported method, unavailable
+authentication, or missing App Server is reported as a sanitized diagnostic.
+The JSON result has schema version 1.0.0, source and acquisition time, snapshot
+availability, five-hour and weekly availability, observed used percentages,
+derived remaining percentages, validated UTC resets, typed warnings, and
+account-level provenance. No email, account identifier, credential, provider
+response, prompt, transcript, or process path is included.
+
+`quota --live --save` explicitly stores the result of one successful read in
+the separate `live_account_quota_snapshots` table (migration 7). `--json` does
+not imply saving. The save result has its own versioned envelope with commit
+status and snapshot ID; the ID is reported only after SQLite commits. Missing
+or ambiguous meters remain missing/ambiguous and preserve typed warnings.
+Storage failure returns a sanitized error and does not report a successful save.
+A new explicit read
+gets a new random ID even when its percentages equal an earlier snapshot; exact
+same-ID retries are idempotent and conflicting payloads fail. App Server
+acquisition and the local transaction are not distributed atomic, so a crash
+does not promise exactly-once remote acquisition.
+
+`quota --history --source live` reads only the live account snapshot table and
+never unions it with local rollout quota evidence. It is strictly read-only,
+bounded to 1,000 snapshots, ordered by precise acquisition nanoseconds and
+snapshot ID descending, and paginated by a cursor that must resolve to a saved
+live snapshot. Without `--source live`, `quota --history` retains its rollout
+quota meaning. Both live outputs state account-level provenance and say task
+attribution and forecast qualification are not established. **An App Server
+quota snapshot is account-level evidence and does not authorize P044
+task-specific reconciliation.**
 
 This snapshot describes account quota state at the time of the explicit read.
 It does not prove quota consumed by a task, complete token coverage, task
@@ -151,9 +172,10 @@ Time (UTC)              | Session   | Model            | Reasoning    | Raw tota
 
 Reporting opens the existing database using SQLite read-only flags and
 `query_only`. It validates migration history and checksums, verifies required
-tables, and never creates a missing file or runs migrations. Version 5 P031
+tables, and never creates a missing file or runs migrations. Version 5 and 6
 databases remain reportable without modification; `sync` applies migration 6
-to add timestamp-normalized history indexes. Evidence rows returned or used in
+for timestamp-normalized rollout indexes and migration 7 for live account
+snapshots. Evidence rows returned or used in
 aggregates are decoded as typed evidence and checked against their stored
 SHA-256 checksum. Corrupt rows fail with a sanitized database-integrity error.
 

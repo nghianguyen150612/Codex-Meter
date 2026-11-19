@@ -110,9 +110,9 @@ P011 will implement:
 path through the existing initialized Codex App Server connection. It calls
 only `account/rateLimits/read`, with
 `supportsLunaReserve: false` and `excludeResetCreditDetails: true`. The
-response timestamp is captured immediately after the RPC returns. The result
-is held in memory and is never written to SQLite; `quota` without `--live`
-continues to report the existing local evidence ledger.
+response timestamp is captured immediately after the RPC returns. Without
+`--save`, the result is held in memory and is not written to SQLite; `quota`
+without `--live` continues to report the existing local evidence ledger.
 
 The audited compatibility source is Codex CLI `0.163.0`, upstream commit
 [`83086188ae0614bd882818ff1aa23f3194962012`](https://github.com/openai/codex/tree/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol).
@@ -165,4 +165,39 @@ authenticated live response. Physical-device and live-source qualification
 remain **UNVERIFIED**.
 
 **An App Server quota snapshot is account-level evidence and does not
+authorize P044 task-specific reconciliation.**
+
+## P045B explicit persistence and history
+
+`codex-meter quota --live --save` is an additional explicit opt-in. It performs
+one App Server read, validates the normalized P045A result at the storage
+boundary, and commits one account snapshot to the separate
+`live_account_quota_snapshots` table in SQLite migration 7. `--save` is never
+implied by `--json`; `quota --live` retains the P045A in-memory-only behavior.
+An unavailable or partial quota response from a successful RPC is preserved as
+one snapshot with its original missing meter statuses and typed warnings.
+RPC, authentication, malformed-response, or transport failure does not create a
+snapshot row.
+
+The table stores only fixed provenance values, the UTC acquisition time, bucket
+identity, per-meter availability, directly observed used percentages and reset
+times, bounded warning codes, and a canonical payload SHA-256. Remaining
+percentage remains derived and is not stored as a second observation. A
+128-bit random event ID is generated for each explicit persistence attempt.
+Equal percentages from separate reads remain distinct. Retrying the same ID
+and payload is idempotent; a conflicting payload for that ID fails closed. The
+App Server request and local SQLite transaction are not distributed atomic, so
+a crash cannot guarantee exactly-once remote acquisition.
+
+`codex-meter quota --history --source live` reads only this table using a
+read-only connection. It does not union rollout quota samples or migrate the
+database. Pages are bounded and ordered by acquisition nanoseconds descending,
+then snapshot ID descending. A cursor must identify a saved live snapshot.
+Schema 6 databases return an empty live history until a writer explicitly
+migrates them; this read never creates the table.
+
+The stored record retains `account_level` evidence scope and fixed
+`not_established` task-attribution and forecast-qualification fields. It never
+creates a P044 credential, qualified event, task Observation, or estimator
+input. **An App Server quota snapshot is account-level evidence and does not
 authorize P044 task-specific reconciliation.**

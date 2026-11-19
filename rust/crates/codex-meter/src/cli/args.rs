@@ -84,9 +84,16 @@ pub struct QuotaArguments {
     pub database: Option<PathBuf>,
     pub history: bool,
     pub live: bool,
+    pub save: bool,
+    pub source: Option<QuotaHistorySource>,
     pub limit: u32,
     pub after: Option<String>,
     pub json: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuotaHistorySource {
+    Live,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -771,6 +778,8 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     let mut database = None;
     let mut history = false;
     let mut live = false;
+    let mut save = false;
+    let mut source = None;
     let mut limit = 20;
     let mut after = None;
     let mut json = false;
@@ -778,12 +787,14 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     while index < arguments.len() {
         let flag = utf8_value(&arguments[index], "argument")?;
         match flag.as_str() {
-            "--history" | "--live" | "--json" => {
+            "--history" | "--live" | "--save" | "--json" => {
                 set_once(&mut seen, &flag)?;
                 if flag == "--history" {
                     history = true;
                 } else if flag == "--live" {
                     live = true;
+                } else if flag == "--save" {
+                    save = true;
                 } else {
                     json = true;
                 }
@@ -794,7 +805,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     arguments,
                     &mut index,
                     &flag,
-                    &["--database", "--limit", "--after"],
+                    &["--database", "--limit", "--after", "--source"],
                 )?;
                 if !seen.insert(flag.clone()) {
                     return Err(error("invalid_argument", "duplicate quota option"));
@@ -803,6 +814,18 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     "--database" => database = Some(PathBuf::from(value)),
                     "--limit" => limit = parse_limit(&value)?,
                     "--after" => after = Some(checked_identifier(&value, "cursor")?),
+                    "--source" => {
+                        let value = utf8_value(&value, "quota source")?;
+                        source = Some(match value.as_str() {
+                            "live" => QuotaHistorySource::Live,
+                            _ => {
+                                return Err(error(
+                                    "unsupported_source",
+                                    "quota history source must be live",
+                                ))
+                            }
+                        });
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -814,16 +837,30 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
             "--limit and --after require --history",
         ));
     }
-    if live && (history || database.is_some() || seen.contains("--limit") || after.is_some()) {
+    if save && !live {
+        return Err(error("conflicting_options", "--save requires --live"));
+    }
+    if source.is_some() && !history {
+        return Err(error("conflicting_options", "--source requires --history"));
+    }
+    if live
+        && (history
+            || source.is_some()
+            || (!save && database.is_some())
+            || seen.contains("--limit")
+            || after.is_some())
+    {
         return Err(error(
             "conflicting_options",
-            "--live cannot be combined with --history, --database, --limit, or --after",
+            "--live cannot be combined with history, source, limit, or cursor options; --database requires --save",
         ));
     }
     Ok(CliAction::Quota(QuotaArguments {
         database,
         history,
         live,
+        save,
+        source,
         limit,
         after,
         json,
@@ -1118,7 +1155,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter readiness [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting commands read SQLite strictly read-only.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter readiness [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local and opted-in live quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting and history commands read SQLite strictly read-only; only `quota --live --save` explicitly writes one live account snapshot.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {
@@ -1178,7 +1215,7 @@ pub fn inspect_help_text() -> &'static str {
 }
 
 pub fn quota_help_text() -> &'static str {
-    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --live [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --history         Include timestamped persisted quota samples\n    --limit N         History page size (default 20, range 1–1000)\n    --after SAMPLE_ID Continue after a sample from the previous page\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication, do not write SQLite, and do not establish task attribution.\n"
+    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --save            Save this live acquisition as one account-level snapshot\n    --history         Include timestamped persisted quota samples\n    --source live     Query only saved App Server account snapshots\n    --limit N         History page size (default 20, range 1–1000)\n    --after ID        Continue after an item from the selected history source\n    --database PATH   Select the database for an explicit save or history query\n    --json            Emit versioned JSON only; saving still requires --save\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. Account snapshots do not establish task attribution.\n"
 }
 
 pub fn tui_help_text() -> &'static str {
@@ -1641,11 +1678,59 @@ mod tests {
         };
         assert!(live.live);
         assert!(live.json);
+        assert!(!live.save);
+        let CliAction::Quota(saved) = parse(&[
+            "quota",
+            "--live",
+            "--save",
+            "--json",
+            "--database",
+            "quota.sqlite",
+        ])
+        .unwrap() else {
+            panic!("expected saved live quota")
+        };
+        assert!(saved.live && saved.save && saved.json);
+        assert_eq!(
+            saved.database.as_deref(),
+            Some(std::path::Path::new("quota.sqlite"))
+        );
+        let CliAction::Quota(live_history) = parse(&[
+            "quota",
+            "--history",
+            "--source",
+            "live",
+            "--limit",
+            "20",
+            "--after",
+            "lqs_00000000000000000000000000000001",
+            "--database",
+            "quota.sqlite",
+            "--json",
+        ])
+        .unwrap() else {
+            panic!("expected live quota history")
+        };
+        assert!(live_history.history);
+        assert_eq!(live_history.source, Some(QuotaHistorySource::Live));
+        assert_eq!(live_history.limit, 20);
+        assert_eq!(
+            live_history.after.as_deref(),
+            Some("lqs_00000000000000000000000000000001")
+        );
+        assert!(live_history.json);
+        let CliAction::Quota(local_history) = parse(&["quota", "--history"]).unwrap() else {
+            panic!("expected local quota history")
+        };
+        assert_eq!(local_history.source, None);
         for args in [
             vec!["quota", "--live", "--history"],
             vec!["quota", "--live", "--after", "cursor"],
             vec!["quota", "--live", "--limit", "3"],
             vec!["quota", "--live", "--database", "quota.sqlite"],
+            vec!["quota", "--save"],
+            vec!["quota", "--source", "live"],
+            vec!["quota", "--live", "--save", "--history"],
         ] {
             assert_eq!(
                 parse(&args).unwrap_err().code,
@@ -1653,6 +1738,12 @@ mod tests {
                 "args: {args:?}"
             );
         }
+        assert_eq!(
+            parse(&["quota", "--history", "--source", "rollout"])
+                .unwrap_err()
+                .code,
+            "unsupported_source"
+        );
     }
 
     #[test]

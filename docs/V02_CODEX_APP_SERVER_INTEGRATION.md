@@ -75,8 +75,8 @@ sends exactly one `account/rateLimits/read` request. It passes
 prevents opting into the reserve experiment and avoids requesting reset-credit
 details. The client does not poll `account/rateLimits/updated`, consume reset
 credits, log in, or start/steer/interrupt a turn. Without `--live`, `quota`
-continues to read local SQLite evidence; the live path does not open or write
-SQLite.
+continues to read local SQLite evidence. `quota --live` without `--save` retains
+P045A's in-memory-only behavior and does not open or write SQLite.
 
 The method was audited against Codex CLI `0.163.0`, upstream commit
 `83086188ae0614bd882818ff1aa23f3194962012`, including the pinned generated
@@ -112,6 +112,34 @@ managed ChatGPT tokens, agent identity, and personal access tokens, and says
 API-key-only and Bedrock authentication do not work for those account-service
 reads. That note is not a compatibility promise for every `rateLimits/read`
 runtime; unsupported or unavailable auth is returned as a typed error.
+
+## P045B explicit persistence and history
+
+`codex-meter quota --live --save` explicitly opts into one local write after a
+successful typed `account/rateLimits/read`. Migration 7 stores a bounded,
+checksummed account snapshot in `live_account_quota_snapshots`; it does not
+alter P031 rollout evidence, P016 Observations, or P044 task reconciliation.
+`--save` is required even with `--json`. Storage failure returns a sanitized
+error and never reports a successful save. A repeat request performs a new
+live read and receives a new opaque event ID, even when its quota values match
+an earlier acquisition.
+
+`codex-meter quota --history --source live` is read-only, bounded, and queries
+only the live account snapshot table. Rollout history remains the default for
+`quota --history` without a source selector. Pages use keyset ordering by exact
+acquisition nanoseconds and snapshot ID, both descending; a cursor must refer
+to a saved live snapshot. A version-6 database can still be queried read-only;
+live history is empty there until a later explicit writer applies migration 7.
+
+Persistence retains only normalized percentages, reset timestamps, typed
+availability and warning codes, fixed bucket labels, the UTC acquisition time,
+and fixed account-level provenance. It stores no account identifiers, email,
+credentials, raw provider JSON, arbitrary provider labels, prompts, transcripts,
+or filesystem paths. Snapshot movement remains account-level evidence and is
+not joined to tasks or promoted to capacity-estimator evidence. The RPC and
+SQLite transaction are not a distributed transaction; exactly-once remote
+acquisition across crashes is not promised. See
+[`PROMPT045B_MANIFEST.md`](PROMPT045B_MANIFEST.md).
 
 ## Session fields and lifecycle
 

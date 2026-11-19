@@ -3,6 +3,7 @@
 mod args;
 mod estimate;
 mod live_quota;
+mod live_quota_history;
 mod models;
 mod projects;
 mod readiness;
@@ -14,9 +15,9 @@ mod workload;
 
 pub use args::{
     parse_args, CliAction, CliError, EstimateArguments, HistoryArguments, InspectArguments,
-    ModelsArguments, ProjectsArguments, QuotaArguments, ReadinessArguments, SessionForkArguments,
-    SessionShowArguments, SessionsArguments, SyncArguments, TasksArguments, TokenScope,
-    TokensArguments, TuiArguments, WorkloadArguments,
+    ModelsArguments, ProjectsArguments, QuotaArguments, QuotaHistorySource, ReadinessArguments,
+    SessionForkArguments, SessionShowArguments, SessionsArguments, SyncArguments, TasksArguments,
+    TokenScope, TokensArguments, TuiArguments, WorkloadArguments,
 };
 
 pub fn run<I, S>(arguments: I) -> Result<String, CliError>
@@ -54,6 +55,9 @@ where
         CliAction::History(arguments) => reporting::history(arguments),
         CliAction::Inspect(arguments) => reporting::inspect(arguments),
         CliAction::Quota(arguments) if arguments.live => live_quota::run(&arguments),
+        CliAction::Quota(arguments) if arguments.source == Some(QuotaHistorySource::Live) => {
+            live_quota_history::run(&arguments)
+        }
         CliAction::Quota(arguments) => reporting::quota(arguments),
         CliAction::Sessions(arguments) => sessions::list(arguments),
         CliAction::SessionShow(arguments) => sessions::show(arguments),

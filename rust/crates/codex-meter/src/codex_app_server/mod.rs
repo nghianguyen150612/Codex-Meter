@@ -14,6 +14,7 @@ mod execution_recovery;
 mod models;
 mod projects;
 mod protocol;
+mod rate_limits;
 mod sessions;
 mod transport;
 
@@ -32,6 +33,10 @@ pub use execution_recovery::{
 };
 pub use models::{ModelCatalog, ModelInfo, ReasoningEffortInfo};
 pub use projects::{ProjectAssociation, ProjectAssociationKind, ProjectSummary};
+pub use rate_limits::{
+    AccountRateLimitsSnapshot, BucketIdentity, MeterAvailability, MeterSnapshot, QuotaWarning,
+    SnapshotAvailability,
+};
 pub use sessions::{
     ArchiveFilter, ForkedSession, HistoryAvailability, RuntimeStatus, SessionDetail,
     SessionListOptions, SessionMetadata, SessionOrigin, SessionSource, TurnMetadata,

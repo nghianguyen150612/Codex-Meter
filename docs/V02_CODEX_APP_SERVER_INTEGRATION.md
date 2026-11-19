@@ -48,6 +48,7 @@ The typed adapters use these stable methods:
 | `thread/resume` | Explicitly load a thread with `excludeTurns: true` |
 | `thread/fork` | Explicitly clone a thread with `excludeTurns: true` |
 | `model/list` | Current model catalog, including hidden entries |
+| `account/rateLimits/read` | One explicitly requested, normalized account-level quota snapshot |
 
 P033's compatibility was checked against `codex-cli 0.159.2` installed in that milestone's
 implementation environment. P036 separately audited `codex-cli 0.163.0` and its generated stable
@@ -65,6 +66,52 @@ The integration uses Codex's existing authentication behavior. Codex Meter never
 retained or printed. The process is supervised and reaped on disconnect. The Codex App Server
 documentation describes this interface as experimental and unsupported for production; P033 treats
 it as an opt-in development integration and does not claim a stable cross-version contract.
+
+## P045A live quota read
+
+`codex-meter quota --live` starts the same initialized, bounded stdio client and
+sends exactly one `account/rateLimits/read` request. It passes
+`supportsLunaReserve: false` and `excludeResetCreditDetails: true`, which
+prevents opting into the reserve experiment and avoids requesting reset-credit
+details. The client does not poll `account/rateLimits/updated`, consume reset
+credits, log in, or start/steer/interrupt a turn. Without `--live`, `quota`
+continues to read local SQLite evidence; the live path does not open or write
+SQLite.
+
+The method was audited against Codex CLI `0.163.0`, upstream commit
+`83086188ae0614bd882818ff1aa23f3194962012`, including the pinned generated
+`ClientRequest.json`, `GetAccountRateLimitsResponse.json`, v2 protocol types,
+and official [App Server reference](https://learn.chatgpt.com/docs/app-server).
+The read method accepts optional params; its response has the legacy
+`rateLimits` view and optional multi-bucket `rateLimitsByLimitId` map. The
+schema's window percentage is integer `usedPercent`; duration and reset seconds
+are optional. Runtime versions are not assumed compatible from the static
+schema audit: an unsupported RPC is reported explicitly. This audit does not
+change the separate P036/P038 task-execution allowlist.
+
+The multi-bucket map wins when present, and `codex` identifies the main bucket.
+If an embedded `limitId` contradicts its key or the legacy and multi-bucket
+views disagree, the result is ambiguous. A legacy-only bucket requires a
+matching `limitId`; missing identity is unavailable. Arbitrary bucket names
+and `limitName` are discarded. Each window is classified by duration using
+P010's existing five-hour and weekly ranges, so short windows cannot be
+misreported as five-hour quota. Invalid percentages or reset timestamps reject
+the response; missing metadata remains unavailable.
+
+The response is projected into a versioned privacy-safe account snapshot with
+observed percentages, derived remaining percentages, validated UTC reset times,
+typed warnings, and a client-side acquisition timestamp. It contains no
+account identifier, email, token, raw RPC JSON, prompts, transcripts, provider
+labels, or process paths. Codex's existing auth is used; no credentials are
+read or persisted. Unsupported method, auth, startup, and transport errors are
+sanitized. **An App Server quota snapshot is account-level evidence and does
+not authorize P044 task-specific reconciliation.**
+
+The official account-service authentication note lists ChatGPT, externally
+managed ChatGPT tokens, agent identity, and personal access tokens, and says
+API-key-only and Bedrock authentication do not work for those account-service
+reads. That note is not a compatibility promise for every `rateLimits/read`
+runtime; unsupported or unavailable auth is returned as a typed error.
 
 ## Session fields and lifecycle
 

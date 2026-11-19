@@ -115,6 +115,8 @@ while True:
             time.sleep(30)
     elif not initialized:
         raise SystemExit(14)
+    elif method in ("thread/start", "turn/start", "turn/steer", "turn/interrupt", "account/login/start", "account/logout", "account/rateLimitResetCredit/consume") and mode.startswith("rate_limits"):
+        raise SystemExit(61)
     elif mode in ("interactive_request", "interactive_notification_flood", "interactive_oversized_event", "server_request") and method == "thread/read":
         if message.get("params") != {"threadId": "thread-test", "includeTurns": False}:
             raise SystemExit(50)
@@ -300,6 +302,40 @@ while True:
     elif method in ("thread/start", "turn/start", "turn/steer"):
         # Preparation-only tests must fail loudly if a thread or model turn is started.
         raise SystemExit(30)
+    elif method == "account/rateLimits/read":
+        if message.get("params") != {"supportsLunaReserve": False, "excludeResetCreditDetails": True}:
+            raise SystemExit(60)
+        if mode == "rate_limits_unsupported":
+            send({"id": message["id"], "error": {"code": -32601, "message": "unsupported"}})
+        elif mode == "rate_limits_authentication":
+            send({"id": message["id"], "error": {"code": -32001, "message": "unauthorized", "data": {"codexErrorInfo": "unauthorized"}}})
+        elif mode == "rate_limits_malformed":
+            send({"id": message["id"], "result": ["not", "an", "object"]})
+        elif mode == "rate_limits_wrong_id":
+            send({"id": message["id"] + 100, "result": {"rateLimits": {"limitId": "codex"}}})
+        elif mode == "rate_limits_wrong_type":
+            send({"id": message["id"], "result": "wrong response type"})
+        elif mode == "rate_limits_nonfinite":
+            sys.stdout.write('{"id":' + str(message["id"]) + ',"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":NaN,"windowDurationMins":300}}}}\n')
+            sys.stdout.flush()
+        elif mode == "rate_limits_invalid_reset":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": 999999999999999}}}})
+        elif mode == "rate_limits_oversized":
+            send({"id": message["id"], "result": {"padding": "x" * (4 * 1024 * 1024 + 32)}})
+        elif mode == "rate_limits_legacy":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 2000000000}}}})
+        elif mode == "rate_limits_missing":
+            send({"id": message["id"], "result": {"accountId": "sensitive-account-id", "email": "private@example.invalid", "unknownProviderField": "discard me"}})
+        else:
+            snapshot = {"limitId": "codex", "limitName": "Codex", "primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": 2000000000}, "secondary": {"usedPercent": 0, "windowDurationMins": 10080}}
+            if mode == "rate_limits_nonmain":
+                send({"id": message["id"], "result": {"rateLimitsByLimitId": {"codex_model_x": {"limitId": "codex_model_x", "primary": {"usedPercent": 2, "windowDurationMins": 300}}}}})
+            elif mode == "rate_limits_conflicting_views":
+                send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 40, "windowDurationMins": 300}}, "rateLimitsByLimitId": {"codex": snapshot}}})
+            elif mode == "rate_limits_duplicate":
+                send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42, "windowDurationMins": 300}, "secondary": {"usedPercent": 43, "windowDurationMins": 300}}}})
+            else:
+                send({"id": message["id"], "result": {"rateLimits": snapshot, "rateLimitsByLimitId": {"codex": snapshot, "codex_model_x": {"limitId": "codex_model_x", "primary": {"usedPercent": 3, "windowDurationMins": 300}}}, "accountId": "sensitive-account-id", "email": "private@example.invalid", "accessToken": "never-log-this", "unknownProviderField": "discard me"}})
     elif mode == "unsupported":
         send({"id": message["id"], "error": {"code": -32601, "message": "unsupported"}})
     elif mode == "remote_sensitive":

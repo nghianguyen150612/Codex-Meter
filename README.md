@@ -3,7 +3,8 @@
 Codex Meter is an independent, unofficial, local-first project for measuring Codex usage. The
 native Rust `codex-meter sync` command discovers supported local Codex rollout files and saves
 privacy-filtered token and quota evidence in a per-user SQLite database. The `tokens`, `tasks`, `history`,
-`inspect`, and `quota` commands report that evidence through read-only native Rust queries. The
+`inspect`, and `quota` commands report that evidence through read-only native Rust queries, except
+that the explicit `quota --live --save` option writes one normalized account-level snapshot. The
 existing `codex-meter estimate` command continues to read a supplied Codex Meter SQLite dataset
 and report empirical current-capacity estimates through the Python analytics pipeline. The
 `codex-meter workload` command uses at least three qualified terminal P017 Observations with the
@@ -37,16 +38,19 @@ cargo run --manifest-path rust/Cargo.toml -- quota
 ```
 
 Reporting reads the same per-user database as `sync` in SQLite read-only mode. Its token and quota
-coverage is limited to supported local rollout evidence. See the
+coverage is limited to supported local rollout evidence unless the source-specific live history
+mode is selected. See the
 [usage history CLI guide](docs/V02_USAGE_HISTORY_CLI.md) and
 [P032 implementation manifest](docs/PROMPT032_MANIFEST.md) for accounting semantics and validation
 status.
 
 The unreleased P033 development CLI also connects to the installed Codex App Server over stdio for
 local session metadata, live model discovery, and read-only project grouping. It does not read
-Codex credentials, persist App Server responses, or start model turns. Session resume loads thread
-state; fork copies conversation history and requires confirmation. These commands are not included
-in the published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
+Codex credentials or persist conversation responses. The quota command has a separate explicit
+`--live --save` option for one normalized account-level quota snapshot. No App Server mode starts a
+model turn unless the user explicitly invokes task execution. Session resume loads thread state;
+fork copies conversation history and requires confirmation. These commands are not included in the
+published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
 
 The unreleased P034–P037 development branch adds `codex-meter tui` and `codex-meter compose`. The

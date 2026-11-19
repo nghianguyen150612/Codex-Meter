@@ -1,6 +1,7 @@
 //! Rust-owned SQLite storage and migration infrastructure.
 
 mod checkpoints;
+mod live_account_snapshots;
 mod migrations;
 mod observations;
 mod reporting;
@@ -11,6 +12,12 @@ mod usage_evidence;
 pub use checkpoints::{
     ActiveReconciliationCheckpoint, QualifiedSamplingCheckpoint, QualifiedSamplingPhase,
     RuntimeCheckpoint, RuntimeRecoveryState, SamplingFinalizationReceipt, STATE_FORMAT_VERSION,
+};
+pub use live_account_snapshots::{
+    LiveAccountSnapshotHistoryPage, LiveSnapshotSaveDisposition, SavedLiveAccountSnapshot,
+    StoredLiveAccountSnapshot, StoredLiveQuotaMeter, LIVE_ACCOUNT_QUOTA_EVIDENCE_SCOPE,
+    LIVE_ACCOUNT_QUOTA_FORECAST_QUALIFICATION, LIVE_ACCOUNT_QUOTA_SOURCE,
+    LIVE_ACCOUNT_QUOTA_STORAGE_SCHEMA_VERSION, LIVE_ACCOUNT_QUOTA_TASK_ATTRIBUTION,
 };
 pub use observations::{
     ObservationPage, ObservationPageCursor, ObservationQuery, StoredObservation,

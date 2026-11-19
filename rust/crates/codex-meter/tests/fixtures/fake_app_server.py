@@ -11,6 +11,7 @@ execution_workspace = sys.argv[2] if len(sys.argv) > 2 else None
 initialized = False
 config_read_count = 0
 thread_read_count = 0
+rate_limits_read_count = 0
 if mode == "startup_failure":
     raise SystemExit(3)
 
@@ -303,6 +304,9 @@ while True:
         # Preparation-only tests must fail loudly if a thread or model turn is started.
         raise SystemExit(30)
     elif method == "account/rateLimits/read":
+        rate_limits_read_count += 1
+        if mode in ("rate_limits_once", "rate_limits_short_once") and rate_limits_read_count > 1:
+            raise SystemExit(62)
         if message.get("params") != {"supportsLunaReserve": False, "excludeResetCreditDetails": True}:
             raise SystemExit(60)
         if mode == "rate_limits_unsupported":
@@ -324,6 +328,8 @@ while True:
             send({"id": message["id"], "result": {"padding": "x" * (4 * 1024 * 1024 + 32)}})
         elif mode == "rate_limits_legacy":
             send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 2000000000}}}})
+        elif mode == "rate_limits_short_once":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42, "windowDurationMins": 15, "resetsAt": 2000000000}, "secondary": {"usedPercent": 10, "windowDurationMins": 30}}}})
         elif mode == "rate_limits_missing":
             send({"id": message["id"], "result": {"accountId": "sensitive-account-id", "email": "private@example.invalid", "unknownProviderField": "discard me"}})
         else:

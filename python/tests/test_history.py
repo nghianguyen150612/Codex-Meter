@@ -208,10 +208,17 @@ def test_version_six_database_remains_readable(tmp_path: Path) -> None:
         assert database.load_dataset().migration_version == 6
 
 
+def test_version_seven_database_remains_readable(tmp_path: Path) -> None:
+    path = tmp_path / "version-seven.sqlite"
+    _create_database(path, latest=7)
+    with ObservationDatabase.open(path) as database:
+        assert database.load_dataset().migration_version == 7
+
+
 def test_new_database_is_rejected(database_path: Path) -> None:
     connection = sqlite3.connect(database_path)
     connection.execute(
-        "INSERT INTO schema_migrations VALUES (7, '0007_future', '" + "0" * 64 + "')"
+        "INSERT INTO schema_migrations VALUES (8, '0008_future', '" + "0" * 64 + "')"
     )
     connection.commit()
     connection.close()

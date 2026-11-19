@@ -108,6 +108,10 @@ pub enum StorageError {
     ReportingEvidenceNotFound,
     ReportingEvidenceAmbiguous,
     ReportingTotalOverflow,
+    LiveAccountSnapshotInvalid,
+    LiveAccountSnapshotConflict,
+    LiveAccountSnapshotCorrupt,
+    LiveAccountSnapshotCursorInvalid,
 }
 
 impl StorageError {
@@ -135,6 +139,10 @@ impl StorageError {
             Self::ReportingQueryInvalid => "invalid_query",
             Self::ReportingTotalOverflow => "token_total_overflow",
             Self::EvidenceInvalid => "evidence_invalid",
+            Self::LiveAccountSnapshotInvalid => "live_snapshot_invalid",
+            Self::LiveAccountSnapshotConflict => "live_snapshot_conflict",
+            Self::LiveAccountSnapshotCorrupt => "database_corrupt",
+            Self::LiveAccountSnapshotCursorInvalid => "invalid_cursor",
             Self::CheckpointCursorInvalid
             | Self::CheckpointDecode
             | Self::CheckpointStateInvalid => "checkpoint_corrupt",
@@ -213,6 +221,10 @@ impl fmt::Display for StorageError {
             Self::ReportingEvidenceNotFound => write!(formatter, "usage evidence was not found"),
             Self::ReportingEvidenceAmbiguous => write!(formatter, "usage evidence identifier is ambiguous"),
             Self::ReportingTotalOverflow => write!(formatter, "token total exceeds the supported integer range"),
+            Self::LiveAccountSnapshotInvalid => write!(formatter, "live account quota snapshot is invalid"),
+            Self::LiveAccountSnapshotConflict => write!(formatter, "live account quota snapshot identity conflicts with stored evidence"),
+            Self::LiveAccountSnapshotCorrupt => write!(formatter, "live account quota snapshot is corrupt"),
+            Self::LiveAccountSnapshotCursorInvalid => write!(formatter, "live account quota history cursor is invalid"),
         }
     }
 }
@@ -257,7 +269,11 @@ impl Error for StorageError {
             | Self::ReportingQueryInvalid
             | Self::ReportingEvidenceNotFound
             | Self::ReportingEvidenceAmbiguous
-            | Self::ReportingTotalOverflow => None,
+            | Self::ReportingTotalOverflow
+            | Self::LiveAccountSnapshotInvalid
+            | Self::LiveAccountSnapshotConflict
+            | Self::LiveAccountSnapshotCorrupt
+            | Self::LiveAccountSnapshotCursorInvalid => None,
         }
     }
 }
@@ -535,7 +551,7 @@ impl SqliteStore {
 /// It never creates files or applies migrations.
 #[derive(Debug)]
 pub struct SqliteReadStore {
-    connection: Connection,
+    pub(super) connection: Connection,
     info: StorageInfo,
 }
 
@@ -575,6 +591,55 @@ impl SqliteReadStore {
                 )
                 .map_err(StorageError::sqlite)?;
             if !exists {
+                return Err(StorageError::MigrationHistoryCorrupt {
+                    detail: "database schema is incomplete",
+                    source: None,
+                });
+            }
+        }
+        if info.latest_applied_migration >= 7 {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'live_account_quota_snapshots')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(StorageError::sqlite)?;
+            let required = [
+                "snapshot_id",
+                "acquired_at_utc",
+                "acquired_at_unix_ns",
+                "storage_schema_version",
+                "source",
+                "evidence_scope",
+                "task_attribution",
+                "forecast_qualification",
+                "overall_availability",
+                "main_bucket_identity",
+                "five_hour_availability",
+                "five_hour_used_percent",
+                "five_hour_reset_at_utc",
+                "weekly_availability",
+                "weekly_used_percent",
+                "weekly_reset_at_utc",
+                "warning_codes",
+                "payload_sha256",
+            ];
+            let actual = if exists {
+                connection
+                    .prepare("PRAGMA table_info('live_account_quota_snapshots')")
+                    .and_then(|mut statement| {
+                        statement
+                            .query_map([], |row| row.get::<_, String>(1))
+                            .and_then(|rows| {
+                                rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+                            })
+                    })
+                    .map_err(StorageError::sqlite)?
+            } else {
+                std::collections::HashSet::new()
+            };
+            if required.iter().any(|column| !actual.contains(*column)) {
                 return Err(StorageError::MigrationHistoryCorrupt {
                     detail: "database schema is incomplete",
                     source: None,
@@ -947,8 +1012,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 6,
-                latest_applied_migration: 6,
+                latest_supported_migration: 7,
+                latest_applied_migration: 7,
             }
         );
         let tables = store
@@ -963,6 +1028,7 @@ mod tests {
             tables,
             vec![
                 "ingestion_diagnostics",
+                "live_account_quota_snapshots",
                 "observations",
                 "quota_snapshot_evidence",
                 "runtime_checkpoints",
@@ -978,7 +1044,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 6);
+        assert_eq!(migration_count, 7);
     }
 
     #[test]
@@ -1010,7 +1076,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 6);
+            assert_eq!(migration_count, 7);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
@@ -1023,14 +1089,14 @@ mod tests {
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 6);
+        assert_eq!(upgraded.info().latest_applied_migration, 7);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 6);
+        assert_eq!(migration_count, 7);
         drop(upgraded);
         remove_database(&path);
     }
@@ -1051,7 +1117,7 @@ mod tests {
             stored.payload_sha256
         };
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 6);
+        assert_eq!(store.info().latest_applied_migration, 7);
         let (json, checksum, started, ended, finalized): (String, String, String, String, String) = store.connection().query_row("SELECT observation_json, observation_sha256, started_at, ended_at, finalized_at FROM observations", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
         assert_eq!(checksum, payload_checksum);
         assert_eq!(json, serde_json::to_string(&observation).unwrap());
@@ -1201,7 +1267,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 6
+                latest_supported_migration: 7
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -1210,7 +1276,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
         drop(connection);
         remove_database(&path);
     }

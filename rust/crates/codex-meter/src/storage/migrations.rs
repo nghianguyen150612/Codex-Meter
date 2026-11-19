@@ -28,6 +28,8 @@ pub(crate) const USAGE_EVIDENCE_MIGRATION: &str =
     include_str!("../../migrations/0005_usage_evidence.sql");
 pub(crate) const USAGE_HISTORY_INDEXES_MIGRATION: &str =
     include_str!("../../migrations/0006_usage_history_indexes.sql");
+pub(crate) const LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION: &str =
+    include_str!("../../migrations/0007_live_account_quota_snapshots.sql");
 
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -59,6 +61,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 6,
         name: "0006_usage_history_indexes",
         sql: USAGE_HISTORY_INDEXES_MIGRATION,
+    },
+    Migration {
+        version: 7,
+        name: "0007_live_account_quota_snapshots",
+        sql: LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION,
     },
 ];
 
@@ -458,6 +465,14 @@ mod tests {
         assert_eq!(
             checksum(USAGE_HISTORY_INDEXES_MIGRATION),
             "d54003a1e27b9689729dd7dcfc296e98d1d25709c50c9f5e99152ddc4ae59edc"
+        );
+    }
+
+    #[test]
+    fn migration_seven_checksum_is_regression_stable() {
+        assert_eq!(
+            checksum(LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION),
+            "23286ac97e1b76eb21c6840e8734f86990477a779699391e55d4e9d8bc37c09f"
         );
     }
 }

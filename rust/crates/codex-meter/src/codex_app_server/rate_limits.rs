@@ -1,7 +1,7 @@
 //! Privacy-filtered, account-level snapshots from `account/rateLimits/read`.
 
 use super::{client::CodexAppServer, CodexAppError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 
@@ -9,7 +9,7 @@ const METHOD: &str = "account/rateLimits/read";
 const FIVE_HOUR_MINUTES: std::ops::RangeInclusive<i64> = 285..=315;
 const WEEKLY_MINUTES: std::ops::RangeInclusive<i64> = 9_576..=10_584;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotAvailability {
     Available,
@@ -18,7 +18,7 @@ pub enum SnapshotAvailability {
     Ambiguous,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeterAvailability {
     Available,
@@ -26,7 +26,7 @@ pub enum MeterAvailability {
     Ambiguous,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BucketIdentity {
     MainCodex,
@@ -36,7 +36,7 @@ pub enum BucketIdentity {
     Conflicting,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaWarning {
     NoQuotaData,
@@ -183,7 +183,10 @@ fn normalize_response(
     } else {
         match object.get("rateLimits").filter(|entry| !entry.is_null()) {
             Some(bucket) => match bucket_identity(bucket)? {
-                Some(id) if id.eq_ignore_ascii_case("codex") => Some(bucket),
+                Some(id) if id.eq_ignore_ascii_case("codex") => {
+                    bucket_label = BucketIdentity::MainCodex;
+                    Some(bucket)
+                }
                 Some(id) => {
                     warnings.push(QuotaWarning::NonMainBucketsIgnored);
                     bucket_label = if id.to_ascii_lowercase().starts_with("codex") {
@@ -566,6 +569,7 @@ mod tests {
     fn legacy_read_preserves_observed_one_hundred_percent() {
         let client = CodexAppServer::connect_test_server("rate_limits_legacy").unwrap();
         let snapshot = client.read_rate_limits().unwrap();
+        assert_eq!(snapshot.bucket_identity, BucketIdentity::MainCodex);
         assert_eq!(snapshot.five_hour.used_percent, Some(100.0));
         assert_eq!(snapshot.five_hour.remaining_percent, Some(0.0));
         assert_eq!(

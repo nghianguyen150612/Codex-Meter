@@ -76,10 +76,11 @@ received, not from task timestamps.
 
 ## CLI and evidence boundary
 
-`codex-meter quota --live [--json]` is the sole live entry point. `--live` is
-incompatible with `--history`, `--after`, `--limit`, and `--database`. Without
-it, the current SQLite reporting path remains in use. The live route never
-opens SQLite, persists snapshots, or polls.
+P045A introduced `codex-meter quota --live [--json]` as the in-memory-only live
+read. This behavior remains the default when `--save` is absent: it does not
+open SQLite or poll. P045B adds the separate explicit save option and
+`quota --history --source live` reader; rollout history remains the default
+source for `quota --history` without `--source`.
 
 JSON schema version `1.0.0` includes the source, acquisition timestamp,
 overall and per-meter availability, observed and derived percentage
@@ -96,11 +97,12 @@ token allowance.
 
 ## Privacy and read-only guarantees
 
-The result cannot include email, account ID, access token, raw JSON-RPC
-response, arbitrary provider fields, prompt, transcript, or process path.
-There is no Codex Meter database mutation. No login, logout, turn start/steer/
-interrupt, or rate-limit reset-credit consumption RPC is sent. Transport
-stderr remains drained and discarded.
+The P045A in-memory result cannot include email, account ID, access token, raw
+JSON-RPC response, arbitrary provider fields, prompt, transcript, or process
+path. No login, logout, turn start/steer/interrupt, or rate-limit reset-credit
+consumption RPC is sent. Transport stderr remains drained and discarded. See
+the [P045B manifest](PROMPT045B_MANIFEST.md) for the separate opt-in storage
+contract.
 
 ## Validation
 
@@ -121,7 +123,7 @@ qualification, and Windows/Arch physical-device checks remain **UNVERIFIED**.
 
 ## Follow-on
 
-P045B may add a separately versioned, explicitly opted-in account-snapshot
-persistence and timestamped history contract after P045A is reviewed. Such
-snapshots must remain account-level and must never be promoted automatically
-to P044 task-specific evidence.
+P045B adds a separately versioned, explicitly opted-in account-snapshot
+persistence and timestamped history contract. Such snapshots remain
+account-level and are never promoted automatically to P044 task-specific
+evidence; see [`PROMPT045B_MANIFEST.md`](PROMPT045B_MANIFEST.md).

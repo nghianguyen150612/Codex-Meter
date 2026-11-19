@@ -14,7 +14,8 @@ codex-meter tasks [--today | --week | --all] [--model MODEL]
 codex-meter history [--today | --week] [--since UTC] [--until UTC]
     [--limit N] [--model MODEL] [--session SESSION_ID] [--after EVENT_ID] [--json]
 codex-meter inspect EVENT_ID [--json]
-codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--json]
+codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]
+codex-meter quota --live [--json]
 ```
 
 Every command also accepts `--database PATH` as an optional advanced override.
@@ -105,6 +106,24 @@ supported local rollout evidence.
 supports the same bounded keyset continuation using `--after SAMPLE_ID`.
 Task totals do not use quota meter snapshots and cannot establish task-level
 account quota consumption.
+
+`quota --live` explicitly requests one in-memory read through the Codex App
+Server. `--live` cannot be combined with `--history`, `--after`, `--limit`, or
+`--database`; it never writes SQLite. Use Codex's existing auth state. An
+unsupported method, unavailable authentication, or missing App Server is
+reported as a sanitized diagnostic. The JSON result has schema version 1.0.0,
+source and acquisition time, snapshot availability, five-hour and weekly
+availability, observed used percentages, derived remaining percentages,
+validated UTC resets, typed warnings, and account-level provenance. No email,
+account identifier, credential, provider response, prompt, transcript, or
+process path is included.
+
+This snapshot describes account quota state at the time of the explicit read.
+It does not prove quota consumed by a task, complete token coverage, task
+association, or capacity-estimator qualification. **An App Server quota
+snapshot is account-level evidence and does not authorize P044 task-specific
+reconciliation.** Offline fake-server tests do not qualify an authenticated
+live account or all installed Codex versions; those gates remain UNVERIFIED.
 
 ## Fixture-only display examples
 

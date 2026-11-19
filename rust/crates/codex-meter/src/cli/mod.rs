@@ -2,6 +2,7 @@
 
 mod args;
 mod estimate;
+mod live_quota;
 mod models;
 mod projects;
 mod readiness;
@@ -52,6 +53,7 @@ where
         CliAction::Tasks(arguments) => reporting::tasks(arguments),
         CliAction::History(arguments) => reporting::history(arguments),
         CliAction::Inspect(arguments) => reporting::inspect(arguments),
+        CliAction::Quota(arguments) if arguments.live => live_quota::run(&arguments),
         CliAction::Quota(arguments) => reporting::quota(arguments),
         CliAction::Sessions(arguments) => sessions::list(arguments),
         CliAction::SessionShow(arguments) => sessions::show(arguments),

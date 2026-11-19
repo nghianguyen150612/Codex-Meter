@@ -103,3 +103,66 @@ P011 may assume:
 P011 will implement:
 
 **reset/window tracking and reset-safe quota delta semantics.**
+
+## P045A live account snapshot
+
+`codex-meter quota --live` is a separate, explicit, single-shot acquisition
+path through the existing initialized Codex App Server connection. It calls
+only `account/rateLimits/read`, with
+`supportsLunaReserve: false` and `excludeResetCreditDetails: true`. The
+response timestamp is captured immediately after the RPC returns. The result
+is held in memory and is never written to SQLite; `quota` without `--live`
+continues to report the existing local evidence ledger.
+
+The audited compatibility source is Codex CLI `0.163.0`, upstream commit
+[`83086188ae0614bd882818ff1aa23f3194962012`](https://github.com/openai/codex/tree/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol).
+Its generated `GetAccountRateLimitsResponse` schema includes the legacy
+`rateLimits` view, optional `rateLimitsByLimitId`, bucket `limitId` and
+`limitName`, primary/secondary windows, integer `usedPercent`, and optional
+`windowDurationMins` and `resetsAt`. Account identifiers, plan metadata,
+credits, names, aliases, upsell data, and all other provider fields are
+discarded. The official [App Server reference](https://learn.chatgpt.com/docs/app-server)
+documents `account/rateLimits/read` as the ChatGPT rate-limit read and shows
+both single and multi-bucket results. The ChatGPT service read requires
+Codex-service authentication. The reference's account-service authentication
+note lists ChatGPT, externally managed ChatGPT tokens, agent identity, and
+personal access tokens; API-key-only and Bedrock authentication are unsupported
+for those ChatGPT account-service reads. The docs do not promise identical
+quota-read behavior across all App Server versions, so runtime errors remain
+typed and live compatibility stays unqualified. Codex Meter uses only auth
+managed inside Codex; it does not read credentials or start a login flow.
+
+When the keyed multi-bucket view is present, its `codex` entry is authoritative.
+The bucket key must agree with any returned `limitId`. A legacy view is used
+only when the multi-bucket view is absent. If both views disagree, the snapshot
+is ambiguous. Other buckets are ignored and their arbitrary names are never
+returned. The legacy view is accepted only when its `limitId` identifies
+`codex`; a missing identity remains unknown.
+
+The primary and secondary slots are independently classified using observed
+duration and P010's existing tolerances: 285–315 minutes for five-hour and
+9,576–10,584 minutes for weekly. A short duration such as 15 minutes is not
+treated as a five-hour reading. Missing durations are not inferred. Duplicate
+supported windows are ambiguous. `usedPercent` is directly observed and must
+be finite and within 0–100; remaining percentage is separately marked as
+derived. Unix reset seconds become validated UTC timestamps; missing resets
+remain unavailable.
+
+The versioned JSON result contains only the source, acquisition timestamp,
+availability, normalized five-hour/weekly values, typed warnings, and explicit
+account-level provenance. It omits account IDs, email, tokens, raw RPC data,
+provider labels, prompts, transcripts, and process paths. Unsupported method,
+auth, missing executable, and process failures use sanitized App Server error
+categories. There is no polling, login prompt, task association, qualified
+Observation, or estimator input.
+
+Offline fake-server coverage verifies the exact method and params, multi- and
+single-bucket paths, conflicts, meter duration classification, missing and
+invalid metadata, response limits, authentication and unsupported-method
+errors, redaction, and rejected execution/login/reset methods. These tests do
+not establish compatibility with every installed Codex version or qualify an
+authenticated live response. Physical-device and live-source qualification
+remain **UNVERIFIED**.
+
+**An App Server quota snapshot is account-level evidence and does not
+authorize P044 task-specific reconciliation.**

@@ -83,6 +83,7 @@ pub struct InspectArguments {
 pub struct QuotaArguments {
     pub database: Option<PathBuf>,
     pub history: bool,
+    pub live: bool,
     pub limit: u32,
     pub after: Option<String>,
     pub json: bool,
@@ -769,6 +770,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     let mut seen = HashSet::new();
     let mut database = None;
     let mut history = false;
+    let mut live = false;
     let mut limit = 20;
     let mut after = None;
     let mut json = false;
@@ -776,10 +778,12 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     while index < arguments.len() {
         let flag = utf8_value(&arguments[index], "argument")?;
         match flag.as_str() {
-            "--history" | "--json" => {
+            "--history" | "--live" | "--json" => {
                 set_once(&mut seen, &flag)?;
                 if flag == "--history" {
                     history = true;
+                } else if flag == "--live" {
+                    live = true;
                 } else {
                     json = true;
                 }
@@ -810,9 +814,16 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
             "--limit and --after require --history",
         ));
     }
+    if live && (history || database.is_some() || seen.contains("--limit") || after.is_some()) {
+        return Err(error(
+            "conflicting_options",
+            "--live cannot be combined with --history, --database, --limit, or --after",
+        ));
+    }
     Ok(CliAction::Quota(QuotaArguments {
         database,
         history,
+        live,
         limit,
         after,
         json,
@@ -1167,7 +1178,7 @@ pub fn inspect_help_text() -> &'static str {
 }
 
 pub fn quota_help_text() -> &'static str {
-    "Codex Meter — local quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n\nOPTIONS:\n    --history         Include timestamped quota samples\n    --limit N         History page size (default 20, range 1–1000)\n    --after SAMPLE_ID Continue after a sample from the previous page\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nQuota values are persisted account-meter snapshots, not live values or task-specific attribution. A 24-hour freshness label is a presentation policy.\n"
+    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --live [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --history         Include timestamped persisted quota samples\n    --limit N         History page size (default 20, range 1–1000)\n    --after SAMPLE_ID Continue after a sample from the previous page\n    --database PATH   Read a specific existing database (default: sync database)\n    --json            Emit versioned JSON only\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication, do not write SQLite, and do not establish task attribution.\n"
 }
 
 pub fn tui_help_text() -> &'static str {
@@ -1621,6 +1632,27 @@ mod tests {
                 .code,
             "invalid_argument"
         );
+        let CliAction::Quota(local) = parse(&["quota"]).unwrap() else {
+            panic!("expected local quota")
+        };
+        assert!(!local.live);
+        let CliAction::Quota(live) = parse(&["quota", "--live", "--json"]).unwrap() else {
+            panic!("expected live quota")
+        };
+        assert!(live.live);
+        assert!(live.json);
+        for args in [
+            vec!["quota", "--live", "--history"],
+            vec!["quota", "--live", "--after", "cursor"],
+            vec!["quota", "--live", "--limit", "3"],
+            vec!["quota", "--live", "--database", "quota.sqlite"],
+        ] {
+            assert_eq!(
+                parse(&args).unwrap_err().code,
+                "conflicting_options",
+                "args: {args:?}"
+            );
+        }
     }
 
     #[test]

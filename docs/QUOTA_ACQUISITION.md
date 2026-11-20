@@ -167,6 +167,27 @@ remain **UNVERIFIED**.
 **An App Server quota snapshot is account-level evidence and does not
 authorize P044 task-specific reconciliation.**
 
+## P046A structural source diagnostic
+
+`codex-meter quota --live --diagnose` is an additional explicit preflight. It
+requires `--live`, makes one request through the existing P045A client, and
+evaluates only the already normalized snapshot. Its versioned JSON result
+reports the connection/RPC outcome, recognized response and main-bucket
+structure, five-hour and weekly evidence separately, reset metadata, typed
+warnings, structural eligibility, and fixed evidence limitations. It never
+performs a second read to test stability. `--diagnose` cannot be combined with
+persistence or history options, and it never opens SQLite.
+
+Structural eligibility means only that the observed response contains
+recognized, internally consistent account-level quota structure. It does not
+establish percentage accuracy, a documented token allowance, task association,
+exclusive use, external-usage isolation, token coverage, or estimator readiness.
+Missing and ambiguous meter evidence remains explicit; a present reset time is
+not proof of reset stability. A user-agent version is emitted only after strict
+parsing and remains metadata; even a match to the pinned `0.163.0` audit does
+not establish runtime compatibility. See
+[`PROMPT046A_MANIFEST.md`](PROMPT046A_MANIFEST.md).
+
 ## P045B explicit persistence and history
 
 `codex-meter quota --live --save` is an additional explicit opt-in. It performs

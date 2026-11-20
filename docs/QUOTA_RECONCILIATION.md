@@ -155,3 +155,12 @@ P013 may assume:
 P013 will own:
 
 **Observation assembly, per-domain validity/reason codes, quality grades, finalization/incomplete/invalid states, and v1 observation serialization.**
+## P046A source-diagnostic boundary
+
+The P046A live source preflight evaluates only the P045A normalized account
+snapshot. A structurally available result is not a before/after sample pair
+and cannot be passed to P044 as task evidence. It creates no
+`AssociationCredential`, `QualifiedQuotaEvent`, P013 Observation, or estimator
+dataset entry. One successful read leaves task causality, external-use
+isolation, reset stability, production semantic qualification, and quota
+accuracy unverified.

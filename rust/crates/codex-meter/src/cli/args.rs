@@ -85,6 +85,7 @@ pub struct QuotaArguments {
     pub history: bool,
     pub live: bool,
     pub save: bool,
+    pub diagnose: bool,
     pub source: Option<QuotaHistorySource>,
     pub limit: u32,
     pub after: Option<String>,
@@ -779,6 +780,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     let mut history = false;
     let mut live = false;
     let mut save = false;
+    let mut diagnose = false;
     let mut source = None;
     let mut limit = 20;
     let mut after = None;
@@ -787,7 +789,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     while index < arguments.len() {
         let flag = utf8_value(&arguments[index], "argument")?;
         match flag.as_str() {
-            "--history" | "--live" | "--save" | "--json" => {
+            "--history" | "--live" | "--save" | "--diagnose" | "--json" => {
                 set_once(&mut seen, &flag)?;
                 if flag == "--history" {
                     history = true;
@@ -795,6 +797,8 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     live = true;
                 } else if flag == "--save" {
                     save = true;
+                } else if flag == "--diagnose" {
+                    diagnose = true;
                 } else {
                     json = true;
                 }
@@ -840,8 +844,24 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     if save && !live {
         return Err(error("conflicting_options", "--save requires --live"));
     }
+    if diagnose && !live {
+        return Err(error("conflicting_options", "--diagnose requires --live"));
+    }
     if source.is_some() && !history {
         return Err(error("conflicting_options", "--source requires --history"));
+    }
+    if diagnose
+        && (history
+            || save
+            || source.is_some()
+            || database.is_some()
+            || seen.contains("--limit")
+            || after.is_some())
+    {
+        return Err(error(
+            "conflicting_options",
+            "--diagnose cannot be combined with save, history, source, database, limit, or cursor options",
+        ));
     }
     if live
         && (history
@@ -860,6 +880,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
         history,
         live,
         save,
+        diagnose,
         source,
         limit,
         after,
@@ -1215,7 +1236,7 @@ pub fn inspect_help_text() -> &'static str {
 }
 
 pub fn quota_help_text() -> &'static str {
-    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --save            Save this live acquisition as one account-level snapshot\n    --history         Include timestamped persisted quota samples\n    --source live     Query only saved App Server account snapshots\n    --limit N         History page size (default 20, range 1–1000)\n    --after ID        Continue after an item from the selected history source\n    --database PATH   Select the database for an explicit save or history query\n    --json            Emit versioned JSON only; saving still requires --save\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. Account snapshots do not establish task attribution.\n"
+    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n    codex-meter quota --live --diagnose [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --diagnose        Evaluate one read's structural account-quota evidence (requires --live)\n    --save            Save this live acquisition as one account-level snapshot\n    --history         Include timestamped persisted quota samples\n    --source live     Query only saved App Server account snapshots\n    --limit N         History page size (default 20, range 1–1000)\n    --after ID        Continue after an item from the selected history source\n    --database PATH   Select the database for an explicit save or history query\n    --json            Emit versioned JSON only; saving still requires --save\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. --diagnose performs exactly one read and does not save. Account snapshots do not establish task attribution.\n"
 }
 
 pub fn tui_help_text() -> &'static str {
@@ -1679,6 +1700,13 @@ mod tests {
         assert!(live.live);
         assert!(live.json);
         assert!(!live.save);
+        assert!(!live.diagnose);
+        let CliAction::Quota(diagnostic) =
+            parse(&["quota", "--live", "--diagnose", "--json"]).unwrap()
+        else {
+            panic!("expected live source diagnostic")
+        };
+        assert!(diagnostic.live && diagnostic.diagnose && diagnostic.json);
         let CliAction::Quota(saved) = parse(&[
             "quota",
             "--live",
@@ -1731,6 +1759,18 @@ mod tests {
             vec!["quota", "--save"],
             vec!["quota", "--source", "live"],
             vec!["quota", "--live", "--save", "--history"],
+            vec!["quota", "--diagnose"],
+            vec!["quota", "--live", "--diagnose", "--save"],
+            vec!["quota", "--live", "--diagnose", "--history"],
+            vec![
+                "quota",
+                "--live",
+                "--diagnose",
+                "--database",
+                "quota.sqlite",
+            ],
+            vec!["quota", "--live", "--diagnose", "--limit", "10"],
+            vec!["quota", "--live", "--diagnose", "--after", "cursor"],
         ] {
             assert_eq!(
                 parse(&args).unwrap_err().code,

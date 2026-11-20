@@ -80,6 +80,12 @@ The invariant is:
 raw tokens != weighted/effective usage != plan quota
 ```
 
+An account-level live quota snapshot or structural source diagnostic MUST NOT
+be treated as task-specific consumption. A single read MUST NOT establish
+reset stability, external-use isolation, exhaustive token coverage, or source
+accuracy. Structural source eligibility and production semantic qualification
+are distinct evidence claims.
+
 No implementation may silently equate, substitute, or pool these domains. A relationship between them is an empirical inference and MUST retain its provenance and uncertainty.
 
 ## Observation semantics

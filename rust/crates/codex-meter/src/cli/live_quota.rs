@@ -13,6 +13,13 @@ pub(super) fn run(arguments: &QuotaArguments) -> Result<String, CliError> {
 
 fn run_with_client(arguments: &QuotaArguments, client: CodexAppServer) -> Result<String, CliError> {
     let snapshot = client.read_rate_limits().map_err(app_server_error)?;
+    if arguments.diagnose {
+        let diagnostic = crate::telemetry::evaluate_live_quota_source(
+            &snapshot,
+            (!client.info().user_agent.is_empty()).then_some(client.info().user_agent.as_str()),
+        );
+        return render_diagnostic(arguments, &diagnostic);
+    }
     if !arguments.save {
         return render_unpersisted(arguments, &snapshot);
     }
@@ -43,6 +50,97 @@ fn run_with_client(arguments: &QuotaArguments, client: CodexAppServer) -> Result
         }
     ));
     Ok(output)
+}
+
+fn render_diagnostic(
+    arguments: &QuotaArguments,
+    diagnostic: &crate::telemetry::LiveQuotaSourceDiagnostic,
+) -> Result<String, CliError> {
+    if arguments.json {
+        return serde_json::to_string(diagnostic)
+            .map(|mut output| {
+                output.push('\n');
+                output
+            })
+            .map_err(|_| CliError {
+                code: "serialization_failed",
+                message: "live quota diagnostic could not be encoded".into(),
+            });
+    }
+    let mut output = String::from(
+        "Codex Meter — Live Quota Source Diagnostic\n\nConnection: available\nRate-limit RPC: supported\nSource: Codex App Server\nEvidence scope: account-level\n",
+    );
+    output.push_str(&format!(
+        "Runtime version: {}\nRuntime compatibility: unverified\n",
+        diagnostic
+            .runtime_compatibility
+            .runtime_version
+            .as_deref()
+            .unwrap_or("unavailable")
+    ));
+    output.push_str(&format!(
+        "Main Codex bucket: {}\n\n",
+        status_word(diagnostic.main_bucket)
+    ));
+    render_diagnostic_meter(&mut output, "Five-hour", &diagnostic.five_hour);
+    render_diagnostic_meter(&mut output, "Weekly", &diagnostic.weekly);
+    output.push_str(&format!(
+        "\nReset stability: unverified from one read\nAccount-level provenance: {}\nTask association: not established\nExternal usage isolation: unverified\nToken coverage closure: unverified\nProduction semantic qualification: unverified\nProduction quota accuracy: unverified\nCapacity estimator qualification: not established\nOverall: structurally {}\n",
+        status_word(diagnostic.account_level_provenance),
+        match diagnostic.structural_eligibility {
+            crate::telemetry::LiveQuotaEvidenceStatus::Supported => "available",
+            crate::telemetry::LiveQuotaEvidenceStatus::Partial => "partial",
+            crate::telemetry::LiveQuotaEvidenceStatus::Unavailable => "unavailable",
+            crate::telemetry::LiveQuotaEvidenceStatus::Unsupported => "unsupported",
+            crate::telemetry::LiveQuotaEvidenceStatus::Ambiguous => "ambiguous",
+            crate::telemetry::LiveQuotaEvidenceStatus::Unverified => "unverified",
+        }
+    ));
+    if !diagnostic.warnings.is_empty() {
+        output.push_str("Warnings: ");
+        output.push_str(
+            &diagnostic
+                .warnings
+                .iter()
+                .map(|warning| format!("{warning:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn render_diagnostic_meter(
+    output: &mut String,
+    label: &str,
+    meter: &crate::telemetry::MeterSourceDiagnostic,
+) {
+    output.push_str(&format!(
+        "{label}:\n  Structural evidence: {}\n",
+        status_word(meter.structural_evidence)
+    ));
+    let observed = meter
+        .observed_used_percent
+        .map(display_percent)
+        .map(|percent| format!("{percent}% (observed)"))
+        .unwrap_or_else(|| status_word(meter.used_percent).to_owned());
+    output.push_str(&format!(
+        "  Used percentage: {observed}\n  Reset metadata: {}\n",
+        status_word(meter.reset_metadata)
+    ));
+}
+
+fn status_word(status: crate::telemetry::LiveQuotaEvidenceStatus) -> &'static str {
+    use crate::telemetry::LiveQuotaEvidenceStatus as Status;
+    match status {
+        Status::Supported => "available",
+        Status::Partial => "partial",
+        Status::Unavailable => "unavailable",
+        Status::Unsupported => "unsupported",
+        Status::Ambiguous => "ambiguous",
+        Status::Unverified => "unverified",
+    }
 }
 
 fn render_unpersisted(
@@ -378,6 +476,229 @@ mod tests {
         assert_eq!(value["source"], "codex_app_server_account_rate_limits");
         assert!(value.get("persistence").is_none());
         assert!(value.get("snapshot_id").is_none());
+    }
+
+    #[test]
+    fn diagnostic_is_single_read_account_level_json_and_has_no_persistence_or_sensitive_fields() {
+        let database = database_path();
+        let seed_client = CodexAppServer::connect_test_server("rate_limits_once").unwrap();
+        let seeded_snapshot = seed_client.read_rate_limits().unwrap();
+        let mut store = SqliteStore::open(&database).unwrap();
+        let seeded = store.save_live_account_snapshot(&seeded_snapshot).unwrap();
+        drop(store);
+        let arguments = parsed_quota(&["quota", "--live", "--diagnose", "--json"]);
+        let client = CodexAppServer::connect_test_server("rate_limits_once").unwrap();
+        let output = run_with_client(&arguments, client).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["schema_version"], "1.0.0");
+        assert_eq!(value["source"], "codex_app_server_account_rate_limits");
+        assert_eq!(value["evidence_scope"], "account_level");
+        assert_eq!(value["connection"], "supported");
+        assert_eq!(value["rate_limit_rpc"], "supported");
+        assert_eq!(value["five_hour"]["observed_used_percent"], 42.0);
+        assert_eq!(value["weekly"]["observed_used_percent"], 0.0);
+        assert_eq!(value["task_association"], "unverified");
+        assert_eq!(value["production_quota_accuracy"], "unverified");
+        assert_eq!(value["runtime_compatibility"]["runtime_version"], "0.163.0");
+        assert_eq!(
+            value["runtime_compatibility"]["compatibility"],
+            "unverified"
+        );
+        for forbidden in [
+            "sensitive-account-id",
+            "private@example.invalid",
+            "never-log-this",
+            "unknownProviderField",
+            "raw_response",
+            "database",
+            "snapshot_id",
+            "credential",
+            "task_id",
+        ] {
+            assert!(
+                !output.contains(forbidden),
+                "forbidden diagnostic field: {forbidden}"
+            );
+        }
+        let mut reader = SqliteReadStore::open(&database).unwrap();
+        let history = reader.live_account_snapshot_history(20, None).unwrap();
+        assert_eq!(history.snapshots.len(), 1);
+        assert_eq!(
+            history.snapshots[0].snapshot_id,
+            seeded.snapshot.snapshot_id
+        );
+        drop(reader);
+        remove_database(&database);
+    }
+
+    #[test]
+    fn diagnostic_human_output_keeps_structural_and_semantic_claims_separate() {
+        let arguments = parsed_quota(&["quota", "--live", "--diagnose"]);
+        let client = CodexAppServer::connect_test_server("rate_limits_once").unwrap();
+        let output = run_with_client(&arguments, client).unwrap();
+        assert!(output.contains("Used percentage: 42% (observed)"));
+        assert!(output.contains("Task association: not established"));
+        assert!(output.contains("Reset stability: unverified from one read"));
+        assert!(output.contains("Production quota accuracy: unverified"));
+        assert!(output.contains("Overall: structurally available"));
+    }
+
+    #[test]
+    fn diagnostic_uses_normalized_independent_meter_evidence_for_fake_server_shapes() {
+        for (mode, expected_five, expected_weekly, expected_overall) in [
+            (
+                "rate_limits_five_hour_only",
+                "supported",
+                "unavailable",
+                "partial",
+            ),
+            (
+                "rate_limits_weekly_only",
+                "unavailable",
+                "supported",
+                "partial",
+            ),
+            (
+                "rate_limits_weekly_reversed",
+                "supported",
+                "supported",
+                "supported",
+            ),
+            (
+                "rate_limits_missing_reset",
+                "supported",
+                "supported",
+                "supported",
+            ),
+            (
+                "rate_limits_no_meters",
+                "unavailable",
+                "unavailable",
+                "unavailable",
+            ),
+            (
+                "rate_limits_unknown_bucket",
+                "unavailable",
+                "unavailable",
+                "unavailable",
+            ),
+            (
+                "rate_limits_nonmain",
+                "unavailable",
+                "unavailable",
+                "unavailable",
+            ),
+            (
+                "rate_limits_short_once",
+                "unavailable",
+                "unavailable",
+                "unavailable",
+            ),
+            (
+                "rate_limits_missing_percentage",
+                "unavailable",
+                "supported",
+                "partial",
+            ),
+            (
+                "rate_limits_missing_duration",
+                "unavailable",
+                "supported",
+                "partial",
+            ),
+            (
+                "rate_limits_duplicate",
+                "ambiguous",
+                "unavailable",
+                "ambiguous",
+            ),
+            (
+                "rate_limits_conflicting_views",
+                "ambiguous",
+                "ambiguous",
+                "ambiguous",
+            ),
+        ] {
+            let arguments = parsed_quota(&["quota", "--live", "--diagnose", "--json"]);
+            let client = CodexAppServer::connect_test_server(mode).unwrap();
+            let output = run_with_client(&arguments, client).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(
+                value["five_hour"]["structural_evidence"], expected_five,
+                "{mode}"
+            );
+            assert_eq!(
+                value["weekly"]["structural_evidence"], expected_weekly,
+                "{mode}"
+            );
+            assert_eq!(value["structural_eligibility"], expected_overall, "{mode}");
+            assert_eq!(value["task_association"], "unverified", "{mode}");
+            let warnings = value["warnings"].as_array().unwrap();
+            match mode {
+                "rate_limits_short_once" => {
+                    assert!(warnings.contains(&serde_json::json!("unsupported_duration")))
+                }
+                "rate_limits_missing_percentage" => {
+                    assert!(warnings.contains(&serde_json::json!("missing_percentage")))
+                }
+                "rate_limits_missing_duration" => {
+                    assert!(warnings.contains(&serde_json::json!("missing_duration")))
+                }
+                "rate_limits_duplicate" => {
+                    assert!(warnings.contains(&serde_json::json!("duplicate_five_hour")))
+                }
+                "rate_limits_conflicting_views" => {
+                    assert!(warnings.contains(&serde_json::json!("conflicting_bucket_views")))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_rpc_failures_remain_sanitized_errors_and_do_not_create_a_database() {
+        let database = database_path();
+        let arguments = parsed_quota(&["quota", "--live", "--diagnose"]);
+        let client = CodexAppServer::connect_test_server("rate_limits_unsupported").unwrap();
+        let error = run_with_client(&arguments, client).unwrap_err();
+        assert_eq!(error.code, "unsupported_method");
+        assert!(!error.message.contains("unsupported"));
+        assert!(!database.exists());
+        remove_database(&database);
+    }
+
+    #[test]
+    fn diagnostic_process_exit_and_timeout_are_sanitized_failures() {
+        let arguments = parsed_quota(&["quota", "--live", "--diagnose", "--json"]);
+        for (mode, expected) in [
+            ("rate_limits_process_exit", "unexpected_process_exit"),
+            ("rate_limits_timeout", "request_timeout"),
+        ] {
+            let client = CodexAppServer::connect_test_server(mode).unwrap();
+            let error = run_with_client(&arguments, client).unwrap_err();
+            assert_eq!(error.code, expected, "{mode}");
+            assert!(!error.message.contains("SENSITIVE"), "{mode}");
+        }
+    }
+
+    #[test]
+    fn missing_or_ambiguous_runtime_metadata_stays_unavailable_and_is_not_echoed() {
+        for mode in [
+            "rate_limits_missing_user_agent",
+            "rate_limits_ambiguous_user_agent",
+        ] {
+            let arguments = parsed_quota(&["quota", "--live", "--diagnose", "--json"]);
+            let client = CodexAppServer::connect_test_server(mode).unwrap();
+            let output = run_with_client(&arguments, client).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert!(value["runtime_compatibility"]["runtime_version"].is_null());
+            assert_eq!(
+                value["runtime_compatibility"]["compatibility"],
+                "unverified"
+            );
+            assert!(!output.contains("private-metadata"));
+            assert_eq!(value["connection"], "supported");
+        }
     }
 
     #[test]

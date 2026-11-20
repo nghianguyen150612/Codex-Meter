@@ -141,6 +141,20 @@ SQLite transaction are not a distributed transaction; exactly-once remote
 acquisition across crashes is not promised. See
 [`PROMPT045B_MANIFEST.md`](PROMPT045B_MANIFEST.md).
 
+## P046A live source diagnostic
+
+`quota --live --diagnose [--json]` uses the same connection and performs one
+`account/rateLimits/read`. It consumes the P045A normalized snapshot and
+provides per-meter structural findings with fixed account-level provenance.
+It does not write SQLite, save a live snapshot, poll, or start a model turn.
+Task association, reset stability, external-use isolation, token coverage,
+production accuracy, and estimator qualification remain unverified. Runtime
+version metadata is bounded to a strictly parsed App Server user-agent version;
+a match to the pinned audit version is not itself a compatibility claim.
+Unsupported methods and other failures remain sanitized typed errors. See the
+[P046A manifest](PROMPT046A_MANIFEST.md) for the versioned JSON contract and
+qualification limits.
+
 ## Session fields and lifecycle
 
 Session rows retain thread ID, session-tree ID when returned, name, creation/update timestamps,

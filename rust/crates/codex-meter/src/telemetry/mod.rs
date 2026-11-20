@@ -5,6 +5,7 @@ pub mod codex_rollout;
 pub mod coverage;
 pub(crate) mod identity;
 pub mod incremental_jsonl;
+pub mod live_quota_source_diagnostic;
 pub mod normalized;
 pub mod observation;
 pub mod quota_normalization;
@@ -33,6 +34,11 @@ pub use assembly::{
 pub use incremental_jsonl::{
     read_available, CursorIdentityError, IncrementalReadError, IoOperation, ReadBatch, ReadItem,
     ReadItemOutcome, RejectedLine, RejectedLineReason, RolloutCursor, SourceIdentity,
+};
+
+pub use live_quota_source_diagnostic::{
+    evaluate_live_quota_source, DiagnosticLimitation, EvidenceStatus as LiveQuotaEvidenceStatus,
+    LiveQuotaSourceDiagnostic, MeterSourceDiagnostic, RuntimeCompatibilityEvidence,
 };
 
 pub use normalized::{

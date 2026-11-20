@@ -23,6 +23,7 @@ pub const LIVE_ACCOUNT_QUOTA_STORAGE_SCHEMA_VERSION: u32 = 1;
 const SNAPSHOT_SCHEMA_VERSION: &str = "1.0.0";
 const SNAPSHOT_PROVENANCE: &str =
     "account_level_snapshot; task_attribution_not_established; forecast_qualification_not_established";
+pub const LIVE_ACCOUNT_QUOTA_PROVENANCE: &str = SNAPSHOT_PROVENANCE;
 const MAX_WARNING_CODES: usize = 32;
 const MAX_HISTORY_LIMIT: u32 = 1000;
 const SNAPSHOT_ID_PREFIX: &str = "lqs_";
@@ -212,6 +213,20 @@ impl SqliteStore {
 }
 
 impl SqliteReadStore {
+    /// Load one explicitly selected saved account snapshot through the
+    /// checksum-validating decoder. This method never changes the database.
+    pub fn live_account_snapshot(
+        &mut self,
+        snapshot_id: &str,
+    ) -> Result<Option<StoredLiveAccountSnapshot>, StorageError> {
+        validate_snapshot_id(snapshot_id)
+            .map_err(|_| StorageError::LiveAccountSnapshotCursorInvalid)?;
+        if self.info().latest_applied_migration < 7 {
+            return Ok(None);
+        }
+        load_snapshot_by_id(&self.connection, snapshot_id)
+    }
+
     /// Read only the dedicated P045B live account snapshot table.
     pub fn live_account_snapshot_history(
         &mut self,
@@ -1171,6 +1186,45 @@ mod tests {
         let mut reader = SqliteReadStore::open(database.path()).unwrap();
         assert!(matches!(
             reader.live_account_snapshot_history(10, None),
+            Err(StorageError::LiveAccountSnapshotCorrupt)
+        ));
+        assert!(matches!(
+            reader.live_account_snapshot(&saved.snapshot.snapshot_id),
+            Err(StorageError::LiveAccountSnapshotCorrupt)
+        ));
+    }
+
+    #[test]
+    fn selected_snapshot_reader_rejects_invalid_ids_and_unsupported_storage_versions() {
+        let database = TestDatabase::new();
+        let mut writer = SqliteStore::open(database.path()).unwrap();
+        let saved = writer
+            .save_live_account_snapshot(&snapshot("rate_limits"))
+            .unwrap();
+        writer
+            .connection()
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        writer
+            .connection()
+            .execute(
+                "UPDATE live_account_quota_snapshots SET storage_schema_version = 99 WHERE snapshot_id = ?1",
+                [&saved.snapshot.snapshot_id],
+            )
+            .unwrap();
+        writer
+            .connection()
+            .pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+        drop(writer);
+
+        let mut reader = SqliteReadStore::open(database.path()).unwrap();
+        assert!(matches!(
+            reader.live_account_snapshot("not-a-snapshot"),
+            Err(StorageError::LiveAccountSnapshotCursorInvalid)
+        ));
+        assert!(matches!(
+            reader.live_account_snapshot(&saved.snapshot.snapshot_id),
             Err(StorageError::LiveAccountSnapshotCorrupt)
         ));
     }

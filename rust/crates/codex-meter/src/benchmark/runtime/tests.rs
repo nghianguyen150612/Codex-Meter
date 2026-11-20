@@ -1504,6 +1504,17 @@ fn timeout_is_unknown_and_exact_replay_cannot_launch_again() {
 }
 
 #[test]
+fn late_worker_result_requests_cancellation_after_deadline() {
+    let cancellation = CancellationToken::default();
+    request_cancellation_if_late_result(
+        &cancellation,
+        policy(Duration::from_millis(1)),
+        Duration::from_millis(15),
+    );
+    assert!(cancellation.is_cancelled());
+}
+
+#[test]
 fn adapter_failure_is_terminal_and_does_not_trigger_a_retry() {
     let directory = TestDirectory::new();
     let coordinator = BenchmarkRuntimeCoordinator::new_simulation(directory.guard());

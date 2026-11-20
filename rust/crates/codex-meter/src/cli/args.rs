@@ -86,6 +86,9 @@ pub struct QuotaArguments {
     pub live: bool,
     pub save: bool,
     pub diagnose: bool,
+    pub compare_live: bool,
+    pub before_snapshot: Option<String>,
+    pub after_snapshot: Option<String>,
     pub source: Option<QuotaHistorySource>,
     pub limit: u32,
     pub after: Option<String>,
@@ -781,6 +784,9 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     let mut live = false;
     let mut save = false;
     let mut diagnose = false;
+    let mut compare_live = false;
+    let mut before_snapshot = None;
+    let mut after_snapshot = None;
     let mut source = None;
     let mut limit = 20;
     let mut after = None;
@@ -789,7 +795,7 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
     while index < arguments.len() {
         let flag = utf8_value(&arguments[index], "argument")?;
         match flag.as_str() {
-            "--history" | "--live" | "--save" | "--diagnose" | "--json" => {
+            "--history" | "--live" | "--save" | "--diagnose" | "--compare-live" | "--json" => {
                 set_once(&mut seen, &flag)?;
                 if flag == "--history" {
                     history = true;
@@ -799,6 +805,8 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     save = true;
                 } else if flag == "--diagnose" {
                     diagnose = true;
+                } else if flag == "--compare-live" {
+                    compare_live = true;
                 } else {
                     json = true;
                 }
@@ -809,7 +817,14 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     arguments,
                     &mut index,
                     &flag,
-                    &["--database", "--limit", "--after", "--source"],
+                    &[
+                        "--database",
+                        "--limit",
+                        "--after",
+                        "--source",
+                        "--before-snapshot",
+                        "--after-snapshot",
+                    ],
                 )?;
                 if !seen.insert(flag.clone()) {
                     return Err(error("invalid_argument", "duplicate quota option"));
@@ -818,6 +833,12 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
                     "--database" => database = Some(PathBuf::from(value)),
                     "--limit" => limit = parse_limit(&value)?,
                     "--after" => after = Some(checked_identifier(&value, "cursor")?),
+                    "--before-snapshot" => {
+                        before_snapshot = Some(checked_snapshot_id(&value, "before snapshot ID")?)
+                    }
+                    "--after-snapshot" => {
+                        after_snapshot = Some(checked_snapshot_id(&value, "after snapshot ID")?)
+                    }
                     "--source" => {
                         let value = utf8_value(&value, "quota source")?;
                         source = Some(match value.as_str() {
@@ -863,6 +884,32 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
             "--diagnose cannot be combined with save, history, source, database, limit, or cursor options",
         ));
     }
+    if compare_live {
+        if before_snapshot.is_none() || after_snapshot.is_none() {
+            return Err(error(
+                "missing_snapshot_id",
+                "--compare-live requires --before-snapshot and --after-snapshot",
+            ));
+        }
+        if live
+            || save
+            || diagnose
+            || history
+            || source.is_some()
+            || seen.contains("--limit")
+            || after.is_some()
+        {
+            return Err(error(
+                "conflicting_options",
+                "--compare-live cannot be combined with live, save, diagnose, history, source, limit, or history cursor options",
+            ));
+        }
+    } else if before_snapshot.is_some() || after_snapshot.is_some() {
+        return Err(error(
+            "conflicting_options",
+            "snapshot IDs require --compare-live",
+        ));
+    }
     if live
         && (history
             || source.is_some()
@@ -881,6 +928,9 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
         live,
         save,
         diagnose,
+        compare_live,
+        before_snapshot,
+        after_snapshot,
         source,
         limit,
         after,
@@ -1121,6 +1171,23 @@ fn checked_identifier(value: &OsStr, label: &str) -> Result<String, CliError> {
     Ok(value)
 }
 
+fn checked_snapshot_id(value: &OsStr, label: &str) -> Result<String, CliError> {
+    let value = checked_identifier(value, label)?;
+    let valid = value.strip_prefix("lqs_").is_some_and(|random| {
+        random.len() == 32
+            && random
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if !valid {
+        return Err(error(
+            "invalid_snapshot_id",
+            "snapshot ID format is invalid",
+        ));
+    }
+    Ok(value)
+}
+
 fn parse_limit(value: &OsStr) -> Result<u32, CliError> {
     let parsed = utf8_value(value, "limit")?
         .parse::<u32>()
@@ -1236,7 +1303,7 @@ pub fn inspect_help_text() -> &'static str {
 }
 
 pub fn quota_help_text() -> &'static str {
-    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n    codex-meter quota --live --diagnose [--json]\n\nOPTIONS:\n    --live            Explicitly request one live account quota read from Codex App Server\n    --diagnose        Evaluate one read's structural account-quota evidence (requires --live)\n    --save            Save this live acquisition as one account-level snapshot\n    --history         Include timestamped persisted quota samples\n    --source live     Query only saved App Server account snapshots\n    --limit N         History page size (default 20, range 1–1000)\n    --after ID        Continue after an item from the selected history source\n    --database PATH   Select the database for an explicit save or history query\n    --json            Emit versioned JSON only; saving still requires --save\n    --help            Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. --diagnose performs exactly one read and does not save. Account snapshots do not establish task attribution.\n"
+    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --compare-live --before-snapshot SNAPSHOT_ID --after-snapshot SNAPSHOT_ID [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n    codex-meter quota --live --diagnose [--json]\n\nOPTIONS:\n    --live                  Explicitly request one live account quota read from Codex App Server\n    --diagnose              Evaluate one read's structural account-quota evidence (requires --live)\n    --save                  Save this live acquisition as one account-level snapshot\n    --compare-live          Compare two explicitly selected saved account snapshots\n    --before-snapshot ID    Select the earlier saved snapshot for comparison\n    --after-snapshot ID     Select the later saved snapshot for comparison\n    --history               Include timestamped persisted quota samples\n    --source live           Query only saved App Server account snapshots\n    --limit N               History page size (default 20, range 1–1000)\n    --after ID              Continue after an item from the selected history source\n    --database PATH         Select the database for an explicit save or read-only query\n    --json                  Emit versioned JSON only; saving still requires --save\n    --help                  Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. --diagnose performs exactly one read and does not save. --compare-live is read-only and reports account-level movement only. Account snapshots do not establish task attribution.\n"
 }
 
 pub fn tui_help_text() -> &'static str {
@@ -1747,10 +1814,128 @@ mod tests {
             Some("lqs_00000000000000000000000000000001")
         );
         assert!(live_history.json);
+        let CliAction::Quota(comparison) = parse(&[
+            "quota",
+            "--compare-live",
+            "--before-snapshot",
+            "lqs_00000000000000000000000000000001",
+            "--after-snapshot",
+            "lqs_00000000000000000000000000000002",
+            "--database",
+            "quota.sqlite",
+            "--json",
+        ])
+        .unwrap() else {
+            panic!("expected explicit live snapshot comparison")
+        };
+        assert!(comparison.compare_live && comparison.json);
+        assert_eq!(
+            comparison.before_snapshot.as_deref(),
+            Some("lqs_00000000000000000000000000000001")
+        );
+        assert_eq!(
+            comparison.after_snapshot.as_deref(),
+            Some("lqs_00000000000000000000000000000002")
+        );
+        assert_eq!(
+            comparison.database.as_deref(),
+            Some(std::path::Path::new("quota.sqlite"))
+        );
         let CliAction::Quota(local_history) = parse(&["quota", "--history"]).unwrap() else {
             panic!("expected local quota history")
         };
         assert_eq!(local_history.source, None);
+        assert_eq!(
+            parse(&["quota", "--compare-live"]).unwrap_err().code,
+            "missing_snapshot_id"
+        );
+        assert_eq!(
+            parse(&[
+                "quota",
+                "--compare-live",
+                "--before-snapshot",
+                "not-an-id",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ])
+            .unwrap_err()
+            .code,
+            "invalid_snapshot_id"
+        );
+        for args in [
+            vec![
+                "quota",
+                "--compare-live",
+                "--live",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--save",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--diagnose",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--history",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--source",
+                "live",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--limit",
+                "10",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+            vec![
+                "quota",
+                "--compare-live",
+                "--after",
+                "cursor",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+            ],
+        ] {
+            assert_eq!(
+                parse(&args).unwrap_err().code,
+                "conflicting_options",
+                "args: {args:?}"
+            );
+        }
         for args in [
             vec!["quota", "--live", "--history"],
             vec!["quota", "--live", "--after", "cursor"],

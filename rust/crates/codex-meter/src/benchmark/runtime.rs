@@ -679,6 +679,7 @@ impl BenchmarkRuntimeCoordinator {
                 self.dispatch_guard
                     .acknowledge(&reservation, &result_observed_at)?;
                 let elapsed = start.elapsed();
+                request_cancellation_if_late_result(&cancellation, policy, elapsed);
                 let outcome = match *result {
                     Err(_) => {
                         self.abort_unknown(experiment, run_id, &reservation, &result_observed_at)?;
@@ -991,6 +992,21 @@ fn validate_event_time(timestamp: &str) -> Result<(), RuntimeError> {
     super::model::parse_utc_timestamp(timestamp)
         .map(|_| ())
         .map_err(|_| RuntimeError::InvalidTimestamp)
+}
+
+/// A worker result can be queued after the deadline while the waiting thread
+/// is descheduled. Classify that late result as timed out and preserve the same
+/// cancellation request made by the `recv_timeout` path.
+fn request_cancellation_if_late_result(
+    cancellation: &super::adapter::CancellationToken,
+    policy: super::adapter::RuntimeExecutionPolicy,
+    elapsed: std::time::Duration,
+) {
+    if elapsed > policy.maximum_elapsed()
+        && policy.cancellation_policy() == super::adapter::CancellationPolicy::RequestWhenSupported
+    {
+        cancellation.cancel();
+    }
 }
 
 /// Typed privacy-safe orchestration failures.

@@ -222,3 +222,28 @@ The stored record retains `account_level` evidence scope and fixed
 creates a P044 credential, qualified event, task Observation, or estimator
 input. **An App Server quota snapshot is account-level evidence and does not
 authorize P044 task-specific reconciliation.**
+
+## P046B1 saved account snapshot comparison
+
+`codex-meter quota --compare-live --before-snapshot ID --after-snapshot ID`
+compares two existing P045B snapshots through the checksum-verifying
+read-only SQLite reader. Both IDs are mandatory, their order is retained, and
+their UTC acquisition times must be strictly increasing. `--after-snapshot`
+does not reuse the history `--after` cursor. The command does not acquire a
+quota RPC, start App Server, execute a task, poll, or write the database.
+
+The five-hour and weekly meters remain independent. A same-window movement
+requires observed values, the same observed reset timestamp still in the
+future at the second sample, no bucket conflict, and non-decreasing used
+percentage. Missing reset evidence is classified as continuity unverified;
+reset crossings and meter instability produce no movement. P011 is not adapted
+here because its normalized local-rollout source contract would mislabel live
+App Server provenance. This is a narrow pairwise policy and does not reuse or
+replicate P011's state machine.
+
+Output schema `1.0.0` reports only account-level observed percentage-point
+movement. It always marks account identity continuity, outside activity, task
+causality, controlled isolation, token coverage, and production accuracy as
+unverified; no observed movement is task usage. The command does not persist
+results or create P044 authority, an Observation, or estimator input. See
+[`PROMPT046B1_MANIFEST.md`](PROMPT046B1_MANIFEST.md).

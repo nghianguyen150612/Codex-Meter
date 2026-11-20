@@ -3,6 +3,7 @@
 mod args;
 mod estimate;
 mod live_quota;
+mod live_quota_comparison;
 mod live_quota_history;
 mod models;
 mod projects;
@@ -55,6 +56,9 @@ where
         CliAction::History(arguments) => reporting::history(arguments),
         CliAction::Inspect(arguments) => reporting::inspect(arguments),
         CliAction::Quota(arguments) if arguments.live => live_quota::run(&arguments),
+        CliAction::Quota(arguments) if arguments.compare_live => {
+            live_quota_comparison::run(&arguments)
+        }
         CliAction::Quota(arguments) if arguments.source == Some(QuotaHistorySource::Live) => {
             live_quota_history::run(&arguments)
         }

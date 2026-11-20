@@ -124,8 +124,16 @@ fn parse_initialize_response(value: &Value) -> Result<AppServerInfo, CodexAppErr
     };
     // Validate presence and type, then discard this sensitive absolute path.
     let _codex_home = required("codexHome")?;
+    let user_agent = object
+        .get("userAgent")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            value.len() <= 128 && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        })
+        .map(str::to_owned)
+        .unwrap_or_default();
     Ok(AppServerInfo {
-        user_agent: required("userAgent")?,
+        user_agent,
         platform_family: required("platformFamily")?,
         platform_os: required("platformOs")?,
     })

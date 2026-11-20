@@ -97,7 +97,7 @@ while True:
                         "codex_cli_rs/0.162.0"
                         if mode == "execution_unsupported_version"
                         else "codex_cli_rs/0.163.0"
-                        if mode.startswith("execution_")
+                        if mode.startswith(("execution_", "rate_limits"))
                         else "codex_cli_rs/test"
                     ),
                     "codexHome": "/not-retained",
@@ -107,6 +107,10 @@ while True:
             }
         if mode == "initialization_malformed":
             result["result"].pop("platformOs")
+        if mode == "rate_limits_missing_user_agent":
+            result["result"].pop("userAgent")
+        if mode == "rate_limits_ambiguous_user_agent":
+            result["result"]["userAgent"] = "codex_cli_rs/0.163.0; private-metadata"
         send(result)
     elif method == "initialized":
         if "params" in message:
@@ -326,6 +330,26 @@ while True:
             send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": 999999999999999}}}})
         elif mode == "rate_limits_oversized":
             send({"id": message["id"], "result": {"padding": "x" * (4 * 1024 * 1024 + 32)}})
+        elif mode == "rate_limits_process_exit":
+            raise SystemExit(63)
+        elif mode == "rate_limits_timeout":
+            time.sleep(11)
+        elif mode == "rate_limits_five_hour_only":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 0, "windowDurationMins": 300, "resetsAt": 2000000000}}}})
+        elif mode == "rate_limits_weekly_only":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 100, "windowDurationMins": 10080}}}})
+        elif mode == "rate_limits_weekly_reversed":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 100, "windowDurationMins": 10080}, "secondary": {"usedPercent": 42, "windowDurationMins": 300}}}})
+        elif mode == "rate_limits_missing_percentage":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"windowDurationMins": 300}, "secondary": {"usedPercent": 10, "windowDurationMins": 10080}}}})
+        elif mode == "rate_limits_missing_duration":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42}, "secondary": {"usedPercent": 10, "windowDurationMins": 10080}}}})
+        elif mode == "rate_limits_missing_reset":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 42, "windowDurationMins": 300}, "secondary": {"usedPercent": 10, "windowDurationMins": 10080}}}})
+        elif mode == "rate_limits_unknown_bucket":
+            send({"id": message["id"], "result": {"rateLimits": {"primary": {"usedPercent": 42, "windowDurationMins": 300}}}})
+        elif mode == "rate_limits_no_meters":
+            send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": None, "secondary": None}}})
         elif mode == "rate_limits_legacy":
             send({"id": message["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 2000000000}}}})
         elif mode == "rate_limits_short_once":

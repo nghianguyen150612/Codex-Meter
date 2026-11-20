@@ -135,6 +135,10 @@ on versions before 7 because the live-account table does not exist. The next
 writer applies any missing migration, including version 7. The Python estimator
 reader accepts migration 7's checksum but continues to read Observations only;
 it does not query or promote live account snapshots.
+
+P046B1's `quota --compare-live` path uses that same `SqliteReadStore` and
+loads exactly two snapshot IDs through the checksum-validating decoder. It
+does not add a migration, write comparison results, or touch rollout history.
 P039 task summaries are computed from this same ledger with bounded result
 materialization and streaming checksum validation; no task table, projection,
 or migration is added. Task identity is `(source_id, session_id, task_id)`.

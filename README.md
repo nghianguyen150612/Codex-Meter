@@ -48,7 +48,9 @@ The unreleased P033 development CLI also connects to the installed Codex App Ser
 local session metadata, live model discovery, and read-only project grouping. It does not read
 Codex credentials or persist conversation responses. The quota command has a separate explicit
 `--live --save` option for one normalized account-level quota snapshot. No App Server mode starts a
-model turn unless the user explicitly invokes task execution. Session resume loads thread state;
+model turn unless the user explicitly invokes task execution. Saved snapshots can be compared
+explicitly with `quota --compare-live --before-snapshot ID --after-snapshot ID`; that command is
+read-only and reports account-level movement without task attribution. Session resume loads thread state;
 fork copies conversation history and requires confirmation. These commands are not included in the
 published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.

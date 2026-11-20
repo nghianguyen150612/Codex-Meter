@@ -139,6 +139,32 @@ attribution and forecast qualification are not established. **An App Server
 quota snapshot is account-level evidence and does not authorize P044
 task-specific reconciliation.**
 
+`quota --compare-live --before-snapshot ID --after-snapshot ID` compares only
+the two explicitly selected saved snapshots. `--after-snapshot` is separate
+from the history pagination `--after` cursor. The comparator opens the existing
+database through `SqliteReadStore`, validates each stored checksum and fixed
+source/provenance contract, requires strictly increasing UTC acquisition
+times, and never invokes Codex App Server. It rejects live, save, diagnose,
+history, source, limit, and pagination-cursor combinations. `--database PATH`
+selects an existing database and remains read-only.
+
+Five-hour and weekly meters are classified independently. A movement is
+reported only when both observed percentages have the same observed reset
+timestamp, the reset is after both acquisition times, bucket evidence is the
+main Codex bucket, and the percentage did not decrease. A crossed or changed
+reset, missing reset metadata, unavailable meter, ambiguous bucket evidence,
+or decreasing percentage suppresses movement. Missing evidence is never
+treated as zero. A zero movement is one unchanged account-meter pair, not a
+stability or task-consumption finding. Output is versioned and reproducible
+from the two IDs and comparator version; results are not persisted.
+
+The comparison remains account-level: fixed App Server source labels do not
+prove that both snapshots belong to the same authenticated account. External
+account activity, task causality, controlled isolation, token coverage,
+production quota accuracy, official token allowance, and estimator eligibility
+remain unverified or unavailable. No P044 event, Observation, or estimator
+input is created.
+
 This snapshot describes account quota state at the time of the explicit read.
 It does not prove quota consumed by a task, complete token coverage, task
 association, or capacity-estimator qualification. **An App Server quota

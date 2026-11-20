@@ -5,6 +5,7 @@ pub mod codex_rollout;
 pub mod coverage;
 pub(crate) mod identity;
 pub mod incremental_jsonl;
+pub mod live_quota_comparison;
 pub mod live_quota_source_diagnostic;
 pub mod normalized;
 pub mod observation;
@@ -39,6 +40,12 @@ pub use incremental_jsonl::{
 pub use live_quota_source_diagnostic::{
     evaluate_live_quota_source, DiagnosticLimitation, EvidenceStatus as LiveQuotaEvidenceStatus,
     LiveQuotaSourceDiagnostic, MeterSourceDiagnostic, RuntimeCompatibilityEvidence,
+};
+
+pub use live_quota_comparison::{
+    evaluate_live_quota_comparison, ComparisonError, ComparisonWarning, LiveQuotaComparison,
+    MeterComparison, MeterComparisonStatus, MeterKind as LiveQuotaMeterKind, ResetEvidence,
+    SourceCompatibility, WindowContinuity, LIVE_QUOTA_COMPARISON_SCHEMA_VERSION,
 };
 
 pub use normalized::{

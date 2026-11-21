@@ -95,6 +95,33 @@ pub struct QuotaArguments {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum QuotaMeasureCommand {
+    Start {
+        before_snapshot: String,
+        database: Option<PathBuf>,
+        duration_minutes: u16,
+        json: bool,
+    },
+    Status {
+        session_id: String,
+        database: Option<PathBuf>,
+        json: bool,
+    },
+    Finish {
+        session_id: String,
+        after_snapshot: String,
+        activity: String,
+        database: Option<PathBuf>,
+        json: bool,
+    },
+    Abort {
+        session_id: String,
+        database: Option<PathBuf>,
+        json: bool,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuotaHistorySource {
     Live,
@@ -166,6 +193,7 @@ pub enum CliAction {
     History(HistoryArguments),
     Inspect(InspectArguments),
     Quota(QuotaArguments),
+    QuotaMeasure(QuotaMeasureCommand),
     Sessions(SessionsArguments),
     SessionShow(SessionShowArguments),
     SessionResume(String),
@@ -775,6 +803,9 @@ fn parse_inspect_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
 }
 
 fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments.first().is_some_and(|value| value == "measure") {
+        return parse_quota_measure_args(&arguments[1..]);
+    }
     if has_help(arguments) {
         return Ok(CliAction::QuotaHelp);
     }
@@ -936,6 +967,200 @@ fn parse_quota_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
         after,
         json,
     }))
+}
+
+fn parse_quota_measure_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
+    if arguments.iter().any(|value| value == "--help") {
+        return Ok(CliAction::QuotaHelp);
+    }
+    let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
+        return Err(error(
+            "missing_measure_command",
+            "quota measure requires start, status, finish, or abort",
+        ));
+    };
+    let needs_session = matches!(command, "status" | "finish" | "abort");
+    if !matches!(command, "start" | "status" | "finish" | "abort") {
+        return Err(error(
+            "invalid_measure_command",
+            "quota measure command must be start, status, finish, or abort",
+        ));
+    }
+    let mut index = 1;
+    let session_id = if needs_session {
+        let value = arguments
+            .get(index)
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                error(
+                    "missing_session_id",
+                    "this measure command requires a session ID",
+                )
+            })?;
+        if !valid_measurement_session_id(value) {
+            return Err(error(
+                "invalid_session_id",
+                "measurement session ID is invalid",
+            ));
+        }
+        index += 1;
+        Some(value.to_owned())
+    } else {
+        None
+    };
+    let mut seen = HashSet::new();
+    let mut database = None;
+    let mut before_snapshot = None;
+    let mut after_snapshot = None;
+    let mut duration_minutes = crate::storage::DEFAULT_MEASUREMENT_MINUTES;
+    let mut activity = None;
+    let mut confirmed = false;
+    let mut json = false;
+    while index < arguments.len() {
+        let flag = utf8_value(&arguments[index], "measure option")?;
+        if flag == "--json" || flag == "--confirm-account-scope" {
+            set_once(&mut seen, &flag)?;
+            if flag == "--json" {
+                json = true;
+            } else {
+                confirmed = true;
+            }
+            index += 1;
+            continue;
+        }
+        let value = next_option_value(
+            arguments,
+            &mut index,
+            &flag,
+            &[
+                "--database",
+                "--before-snapshot",
+                "--after-snapshot",
+                "--duration-minutes",
+                "--activity",
+            ],
+        )?;
+        if !seen.insert(flag.clone()) {
+            return Err(error("invalid_argument", "duplicate measure option"));
+        }
+        match flag.as_str() {
+            "--database" => database = Some(PathBuf::from(value)),
+            "--before-snapshot" => {
+                before_snapshot = Some(checked_snapshot_id(&value, "before snapshot ID")?)
+            }
+            "--after-snapshot" => {
+                after_snapshot = Some(checked_snapshot_id(&value, "after snapshot ID")?)
+            }
+            "--duration-minutes" => {
+                let raw = utf8_value(&value, "duration")?;
+                duration_minutes = raw
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|n| (1..=crate::storage::MAX_MEASUREMENT_MINUTES).contains(n))
+                    .ok_or_else(|| {
+                        error(
+                            "invalid_duration",
+                            "duration must be between 1 and 240 minutes",
+                        )
+                    })?;
+            }
+            "--activity" => {
+                let raw = utf8_value(&value, "activity declaration")?;
+                if !matches!(
+                    raw.as_str(),
+                    "unknown" | "known_local_overlap" | "self_reported_no_known_overlap"
+                ) {
+                    return Err(error("invalid_activity_declaration", "activity must be unknown, known_local_overlap, or self_reported_no_known_overlap"));
+                }
+                activity = Some(raw);
+            }
+            _ => unreachable!(),
+        }
+    }
+    match command {
+        "start" => {
+            if before_snapshot.is_none()
+                || !confirmed
+                || after_snapshot.is_some()
+                || activity.is_some()
+            {
+                return Err(error(
+                    "invalid_measure_options",
+                    "start requires --before-snapshot and --confirm-account-scope",
+                ));
+            }
+            Ok(CliAction::QuotaMeasure(QuotaMeasureCommand::Start {
+                before_snapshot: before_snapshot.unwrap(),
+                database,
+                duration_minutes,
+                json,
+            }))
+        }
+        "status" => {
+            if before_snapshot.is_some()
+                || after_snapshot.is_some()
+                || activity.is_some()
+                || confirmed
+                || seen.contains("--duration-minutes")
+            {
+                return Err(error(
+                    "invalid_measure_options",
+                    "status accepts only SESSION_ID, --database, and --json",
+                ));
+            }
+            Ok(CliAction::QuotaMeasure(QuotaMeasureCommand::Status {
+                session_id: session_id.unwrap(),
+                database,
+                json,
+            }))
+        }
+        "finish" => {
+            if after_snapshot.is_none()
+                || !confirmed
+                || before_snapshot.is_some()
+                || seen.contains("--duration-minutes")
+            {
+                return Err(error(
+                    "invalid_measure_options",
+                    "finish requires --after-snapshot and --confirm-account-scope",
+                ));
+            }
+            Ok(CliAction::QuotaMeasure(QuotaMeasureCommand::Finish {
+                session_id: session_id.unwrap(),
+                after_snapshot: after_snapshot.unwrap(),
+                activity: activity.unwrap_or_else(|| "unknown".to_owned()),
+                database,
+                json,
+            }))
+        }
+        "abort" => {
+            if before_snapshot.is_some()
+                || after_snapshot.is_some()
+                || activity.is_some()
+                || confirmed
+                || seen.contains("--duration-minutes")
+            {
+                return Err(error(
+                    "invalid_measure_options",
+                    "abort accepts only SESSION_ID, --database, and --json",
+                ));
+            }
+            Ok(CliAction::QuotaMeasure(QuotaMeasureCommand::Abort {
+                session_id: session_id.unwrap(),
+                database,
+                json,
+            }))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn valid_measurement_session_id(value: &str) -> bool {
+    value.len() == 36
+        && value.starts_with("qms_")
+        && value[4..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn parse_sessions_args(arguments: &[OsString]) -> Result<CliAction, CliError> {
@@ -1243,7 +1468,7 @@ fn utf8_value(value: &OsStr, label: &str) -> Result<String, CliError> {
 }
 
 pub fn help_text() -> &'static str {
-    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter readiness [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local and opted-in live quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting and history commands read SQLite strictly read-only; only `quota --live --save` explicitly writes one live account snapshot.\n"
+    "Codex Meter — local Codex usage evidence, session management, and capacity estimates\n\nUSAGE:\n    codex-meter --help\n    codex-meter --version\n    codex-meter tui [--database PATH]\n    codex-meter compose [--database PATH]\n    codex-meter sync [OPTIONS]\n    codex-meter sessions [OPTIONS]\n    codex-meter session show THREAD_ID [--json]\n    codex-meter session resume THREAD_ID\n    codex-meter session fork THREAD_ID [--yes]\n    codex-meter models [--json]\n    codex-meter projects [--json]\n    codex-meter tokens [OPTIONS]\n    codex-meter tasks [OPTIONS]\n    codex-meter history [OPTIONS]\n    codex-meter inspect EVENT_ID [OPTIONS]\n    codex-meter quota [OPTIONS]\n    codex-meter quota measure start|status|finish|abort [OPTIONS]\n    codex-meter estimate --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n    codex-meter readiness [OPTIONS]\n    codex-meter workload --database PATH --request FILE --generated-at UTC_TIMESTAMP [OPTIONS]\n\nCOMMANDS:\n    tui                             Open the interactive evidence dashboard\n    compose                         Open the task preparation composer\n    sync                            Ingest supported local Codex rollout evidence\n    sessions                        Discover local Codex threads through App Server\n    session                         Inspect, load, or fork one local thread\n    models                          Discover the live App Server model catalog\n    projects                        Group sessions by verified local project context\n    tokens                          Summarize persisted per-response token evidence\n    tasks                           Attribute observed token evidence to local tasks\n    history                         List recent persisted per-response events\n    inspect EVENT_ID                Inspect one token event or quota sample\n    quota                           Show timestamped local and opted-in live quota evidence\n    estimate                        Estimate capacity from an existing dataset\n    workload                        Forecast workload from qualified historical observations\n\nUse `codex-meter COMMAND --help` for command options. Composer saves drafts only after explicit user action and never starts a model turn. Reporting and history commands read SQLite strictly read-only; only `quota --live --save` explicitly writes one live account snapshot.\n"
 }
 
 pub fn sessions_help_text() -> &'static str {
@@ -1303,7 +1528,7 @@ pub fn inspect_help_text() -> &'static str {
 }
 
 pub fn quota_help_text() -> &'static str {
-    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --compare-live --before-snapshot SNAPSHOT_ID --after-snapshot SNAPSHOT_ID [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n    codex-meter quota --live --diagnose [--json]\n\nOPTIONS:\n    --live                  Explicitly request one live account quota read from Codex App Server\n    --diagnose              Evaluate one read's structural account-quota evidence (requires --live)\n    --save                  Save this live acquisition as one account-level snapshot\n    --compare-live          Compare two explicitly selected saved account snapshots\n    --before-snapshot ID    Select the earlier saved snapshot for comparison\n    --after-snapshot ID     Select the later saved snapshot for comparison\n    --history               Include timestamped persisted quota samples\n    --source live           Query only saved App Server account snapshots\n    --limit N               History page size (default 20, range 1–1000)\n    --after ID              Continue after an item from the selected history source\n    --database PATH         Select the database for an explicit save or read-only query\n    --json                  Emit versioned JSON only; saving still requires --save\n    --help                  Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. --diagnose performs exactly one read and does not save. --compare-live is read-only and reports account-level movement only. Account snapshots do not establish task attribution.\n"
+    "Codex Meter — quota evidence\n\nUSAGE:\n    codex-meter quota measure start --before-snapshot ID --confirm-account-scope [--duration-minutes N] [--database PATH] [--json]\n    codex-meter quota measure status SESSION_ID [--database PATH] [--json]\n    codex-meter quota measure finish SESSION_ID --after-snapshot ID [--activity VALUE] --confirm-account-scope [--database PATH] [--json]\n    codex-meter quota measure abort SESSION_ID [--database PATH] [--json]\n    codex-meter quota [--history [--limit N] [--after SAMPLE_ID]] [--database PATH] [--json]\n    codex-meter quota --history --source live [--limit N] [--after SNAPSHOT_ID] [--database PATH] [--json]\n    codex-meter quota --compare-live --before-snapshot SNAPSHOT_ID --after-snapshot SNAPSHOT_ID [--database PATH] [--json]\n    codex-meter quota --live [--save [--database PATH]] [--json]\n    codex-meter quota --live --diagnose [--json]\n\nOPTIONS:\n    --live                  Explicitly request one live account quota read from Codex App Server\n    --diagnose              Evaluate one read's structural account-quota evidence (requires --live)\n    --save                  Save this live acquisition as one account-level snapshot\n    --compare-live          Compare two explicitly selected saved account snapshots\n    measure                 Bind two explicitly saved snapshots in a bounded, user-controlled session\n    --duration-minutes N    Session deadline duration (default 60, range 1–240)\n    --activity VALUE        unknown (default), known_local_overlap, or self_reported_no_known_overlap\n    --confirm-account-scope Confirm this records account-level movement, not task-specific usage\n    --before-snapshot ID    Select the earlier saved snapshot for comparison\n    --after-snapshot ID     Select the later saved snapshot for comparison\n    --history               Include timestamped persisted quota samples\n    --source live           Query only saved App Server account snapshots\n    --limit N               History page size (default 20, range 1–1000)\n    --after ID              Continue after an item from the selected history source\n    --database PATH         Select the database for an explicit save or read-only query\n    --json                  Emit versioned JSON only; saving still requires --save\n    --help                  Show this help\n\nWithout --live, quota reads existing SQLite evidence. Live reads use Codex's existing authentication and do not write SQLite unless --save is explicitly present. --diagnose performs exactly one read and does not save. --compare-live is read-only and reports account-level movement only. Account snapshots do not establish task attribution. Measurement commands never acquire snapshots, perform App Server RPCs, poll, or execute work. Status is read-only.\n"
 }
 
 pub fn tui_help_text() -> &'static str {
@@ -2008,5 +2233,107 @@ mod tests {
                 .code,
             "invalid_argument"
         );
+    }
+
+    #[test]
+    fn controlled_measure_commands_are_explicit_typed_and_bounded() {
+        let start = parse(&[
+            "quota",
+            "measure",
+            "start",
+            "--before-snapshot",
+            "lqs_00000000000000000000000000000001",
+            "--confirm-account-scope",
+            "--database",
+            "measure.sqlite",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            start,
+            CliAction::QuotaMeasure(QuotaMeasureCommand::Start {
+                duration_minutes: 60,
+                json: true,
+                ..
+            })
+        ));
+        let session = "qms_00000000000000000000000000000001";
+        let finish = parse(&[
+            "quota",
+            "measure",
+            "finish",
+            session,
+            "--after-snapshot",
+            "lqs_00000000000000000000000000000002",
+            "--confirm-account-scope",
+        ])
+        .unwrap();
+        assert!(
+            matches!(finish, CliAction::QuotaMeasure(QuotaMeasureCommand::Finish { activity, .. }) if activity == "unknown")
+        );
+        assert_eq!(
+            parse(&[
+                "quota",
+                "measure",
+                "start",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001"
+            ])
+            .unwrap_err()
+            .code,
+            "invalid_measure_options"
+        );
+        assert_eq!(
+            parse(&[
+                "quota",
+                "measure",
+                "start",
+                "--before-snapshot",
+                "bad",
+                "--confirm-account-scope"
+            ])
+            .unwrap_err()
+            .code,
+            "invalid_snapshot_id"
+        );
+        assert_eq!(
+            parse(&[
+                "quota",
+                "measure",
+                "start",
+                "--before-snapshot",
+                "lqs_00000000000000000000000000000001",
+                "--confirm-account-scope",
+                "--duration-minutes",
+                "241"
+            ])
+            .unwrap_err()
+            .code,
+            "invalid_duration"
+        );
+        assert_eq!(
+            parse(&[
+                "quota",
+                "measure",
+                "finish",
+                session,
+                "--after-snapshot",
+                "lqs_00000000000000000000000000000002",
+                "--activity",
+                "private free text",
+                "--confirm-account-scope"
+            ])
+            .unwrap_err()
+            .code,
+            "invalid_activity_declaration"
+        );
+        assert!(matches!(
+            parse(&["quota", "measure", "status", session]).unwrap(),
+            CliAction::QuotaMeasure(QuotaMeasureCommand::Status { .. })
+        ));
+        assert!(matches!(
+            parse(&["quota", "measure", "abort", session, "--json"]).unwrap(),
+            CliAction::QuotaMeasure(QuotaMeasureCommand::Abort { json: true, .. })
+        ));
     }
 }

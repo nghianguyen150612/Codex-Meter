@@ -7,6 +7,7 @@ mod live_quota_comparison;
 mod live_quota_history;
 mod models;
 mod projects;
+mod quota_measure;
 mod readiness;
 mod render;
 mod reporting;
@@ -16,9 +17,9 @@ mod workload;
 
 pub use args::{
     parse_args, CliAction, CliError, EstimateArguments, HistoryArguments, InspectArguments,
-    ModelsArguments, ProjectsArguments, QuotaArguments, QuotaHistorySource, ReadinessArguments,
-    SessionForkArguments, SessionShowArguments, SessionsArguments, SyncArguments, TasksArguments,
-    TokenScope, TokensArguments, TuiArguments, WorkloadArguments,
+    ModelsArguments, ProjectsArguments, QuotaArguments, QuotaHistorySource, QuotaMeasureCommand,
+    ReadinessArguments, SessionForkArguments, SessionShowArguments, SessionsArguments,
+    SyncArguments, TasksArguments, TokenScope, TokensArguments, TuiArguments, WorkloadArguments,
 };
 
 pub fn run<I, S>(arguments: I) -> Result<String, CliError>
@@ -63,6 +64,7 @@ where
             live_quota_history::run(&arguments)
         }
         CliAction::Quota(arguments) => reporting::quota(arguments),
+        CliAction::QuotaMeasure(command) => quota_measure::run(&command),
         CliAction::Sessions(arguments) => sessions::list(arguments),
         CliAction::SessionShow(arguments) => sessions::show(arguments),
         CliAction::SessionResume(thread_id) => sessions::resume(thread_id),

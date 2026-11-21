@@ -13,6 +13,11 @@ its current `TrackedQuotaWindow`, the latest normalized sample, and deterministi
 sample IDs already seen for replay detection. There is no persistence, SQLite,
 timer, polling loop, task association, or estimator logic.
 
+P046B2 controlled measurement sessions are a separate bookkeeping layer. They
+bind explicit saved live account snapshots and call the P046B1 comparator; they
+do not use or persist P011 tracking state and do not imply task attribution.
+See `PROMPT046B2_MANIFEST.md` for lifecycle, timing, and trust boundaries.
+
 The batch API clones the supplied state and returns outcomes plus `next_state`.
 An invalid structural input returns an error without exposing a partially
 advanced state. The per-meter transition API is shared by both meters, so reset

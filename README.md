@@ -55,6 +55,14 @@ fork copies conversation history and requires confirmation. These commands are n
 published v0.1.0 assets. See the [Codex App Server integration guide](docs/V02_CODEX_APP_SERVER_INTEGRATION.md)
 and [P033 implementation manifest](docs/PROMPT033_MANIFEST.md) for protocol and validation status.
 
+The controlled quota measurement workflow stores a bounded session around two
+snapshots that the user saved separately. Use `codex-meter quota measure start`
+after the before acquisition, perform work independently, save the after
+acquisition, then `finish` and `status` the session. These commands never acquire
+quota, call App Server, poll, or execute work. The result is account-level
+movement only; task causality and external account activity remain unverified.
+See the [P046B2 manifest](docs/PROMPT046B2_MANIFEST.md) for syntax and limits.
+
 The unreleased P034–P037 development branch adds `codex-meter tui` and `codex-meter compose`. The
 Ratatui dashboard shows local usage evidence, quota snapshots, App Server sessions, projects,
 models, and history. Composer adds multiline task preparation, live model and reasoning selection,

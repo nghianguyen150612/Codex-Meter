@@ -83,7 +83,10 @@ identify which task caused it. No quality A/B, P044 credential, qualified
 quota event, P013 Observation, or estimator input is created.
 
 The output is reproducible from the two stored IDs and evaluator schema
-version. Comparison results are not persisted; no SQLite migration is added.
+version. P046B1 comparison deltas are not persisted; P046B1 adds no SQLite
+migration. P046B2 later stores a session receipt that binds selected snapshot
+IDs/checksums and the evaluator contract version. Inspection still derives the
+comparison from those snapshots through this P046B1 evaluator.
 
 ## Tests and validation
 

@@ -30,6 +30,8 @@ pub(crate) const USAGE_HISTORY_INDEXES_MIGRATION: &str =
     include_str!("../../migrations/0006_usage_history_indexes.sql");
 pub(crate) const LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION: &str =
     include_str!("../../migrations/0007_live_account_quota_snapshots.sql");
+pub(crate) const CONTROLLED_MEASUREMENT_SESSIONS_MIGRATION: &str =
+    include_str!("../../migrations/0008_controlled_measurement_sessions.sql");
 
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -66,6 +68,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 7,
         name: "0007_live_account_quota_snapshots",
         sql: LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION,
+    },
+    Migration {
+        version: 8,
+        name: "0008_controlled_measurement_sessions",
+        sql: CONTROLLED_MEASUREMENT_SESSIONS_MIGRATION,
     },
 ];
 
@@ -473,6 +480,14 @@ mod tests {
         assert_eq!(
             checksum(LIVE_ACCOUNT_QUOTA_SNAPSHOTS_MIGRATION),
             "23286ac97e1b76eb21c6840e8734f86990477a779699391e55d4e9d8bc37c09f"
+        );
+    }
+
+    #[test]
+    fn migration_eight_checksum_is_regression_stable_for_python_readers() {
+        assert_eq!(
+            checksum(CONTROLLED_MEASUREMENT_SESSIONS_MIGRATION),
+            "51feba5752e0532a1fcd76025f935a32d67c26e3c8c9ed93d02f173a7847ad08"
         );
     }
 }

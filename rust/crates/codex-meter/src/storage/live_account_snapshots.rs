@@ -425,7 +425,7 @@ fn normalize_utc_timestamp(value: &str) -> Result<(String, i64), StorageError> {
     Ok((canonical, unix_ns))
 }
 
-fn validate_snapshot_id(snapshot_id: &str) -> Result<(), StorageError> {
+pub(super) fn validate_snapshot_id(snapshot_id: &str) -> Result<(), StorageError> {
     let Some(random) = snapshot_id.strip_prefix(SNAPSHOT_ID_PREFIX) else {
         return Err(StorageError::LiveAccountSnapshotCursorInvalid);
     };
@@ -464,7 +464,7 @@ fn snapshot_checksum(snapshot: &StoredLiveAccountSnapshot) -> Result<String, Sto
         .collect())
 }
 
-fn load_snapshot_by_id(
+pub(super) fn load_snapshot_by_id(
     connection: &Connection,
     snapshot_id: &str,
 ) -> Result<Option<StoredLiveAccountSnapshot>, StorageError> {
@@ -762,7 +762,7 @@ mod tests {
     fn fresh_schema_separates_live_snapshots_and_keeps_provenance_fixed() {
         let database = TestDatabase::new();
         let mut store = SqliteStore::open(database.path()).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 7);
+        assert_eq!(store.info().latest_applied_migration, 8);
         let snapshot = snapshot("rate_limits");
         let saved = store.save_live_account_snapshot(&snapshot).unwrap();
         assert_eq!(saved.persistence, LiveSnapshotSaveDisposition::Persisted);
@@ -1266,7 +1266,7 @@ mod tests {
             .map(|migration| super::super::migrations::checksum(migration.sql))
             .collect::<Vec<_>>();
         let store = SqliteStore::open(database.path()).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 7);
+        assert_eq!(store.info().latest_applied_migration, 8);
         let quotas: i64 = store
             .connection()
             .query_row(
@@ -1323,7 +1323,7 @@ mod tests {
 
         let writer = SqliteStore::open(database.path()).unwrap();
         writer.connection().execute(
-            "INSERT INTO schema_migrations (version, name, checksum_sha256) VALUES (8, 'future', ?1)",
+            "INSERT INTO schema_migrations (version, name, checksum_sha256) VALUES (9, 'future', ?1)",
             ["0".repeat(64)],
         ).unwrap();
         drop(writer);

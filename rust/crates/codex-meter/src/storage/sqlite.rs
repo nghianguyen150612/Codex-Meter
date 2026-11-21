@@ -112,6 +112,15 @@ pub enum StorageError {
     LiveAccountSnapshotConflict,
     LiveAccountSnapshotCorrupt,
     LiveAccountSnapshotCursorInvalid,
+    ControlledMeasurementInvalid,
+    ControlledMeasurementNotFound,
+    ControlledMeasurementSnapshotMissing,
+    ControlledMeasurementBaselineStale,
+    ControlledMeasurementTimingInvalid,
+    ControlledMeasurementExpired,
+    ControlledMeasurementConflict,
+    ControlledMeasurementTerminal,
+    ControlledMeasurementCorrupt,
 }
 
 impl StorageError {
@@ -143,6 +152,18 @@ impl StorageError {
             Self::LiveAccountSnapshotConflict => "live_snapshot_conflict",
             Self::LiveAccountSnapshotCorrupt => "database_corrupt",
             Self::LiveAccountSnapshotCursorInvalid => "invalid_cursor",
+            Self::ControlledMeasurementInvalid => "measurement_invalid",
+            Self::ControlledMeasurementNotFound | Self::ControlledMeasurementSnapshotMissing => {
+                "measurement_not_found"
+            }
+            Self::ControlledMeasurementBaselineStale | Self::ControlledMeasurementTimingInvalid => {
+                "measurement_timing_invalid"
+            }
+            Self::ControlledMeasurementExpired => "measurement_expired",
+            Self::ControlledMeasurementConflict | Self::ControlledMeasurementTerminal => {
+                "measurement_conflict"
+            }
+            Self::ControlledMeasurementCorrupt => "database_corrupt",
             Self::CheckpointCursorInvalid
             | Self::CheckpointDecode
             | Self::CheckpointStateInvalid => "checkpoint_corrupt",
@@ -225,6 +246,15 @@ impl fmt::Display for StorageError {
             Self::LiveAccountSnapshotConflict => write!(formatter, "live account quota snapshot identity conflicts with stored evidence"),
             Self::LiveAccountSnapshotCorrupt => write!(formatter, "live account quota snapshot is corrupt"),
             Self::LiveAccountSnapshotCursorInvalid => write!(formatter, "live account quota history cursor is invalid"),
+            Self::ControlledMeasurementInvalid => write!(formatter, "controlled measurement request is invalid"),
+            Self::ControlledMeasurementNotFound => write!(formatter, "controlled measurement session was not found"),
+            Self::ControlledMeasurementSnapshotMissing => write!(formatter, "selected saved quota snapshot was not found"),
+            Self::ControlledMeasurementBaselineStale => write!(formatter, "before snapshot is older than the five minute freshness limit"),
+            Self::ControlledMeasurementTimingInvalid => write!(formatter, "snapshot timing is outside the permitted measurement interval"),
+            Self::ControlledMeasurementExpired => write!(formatter, "measurement deadline passed; session is now expired"),
+            Self::ControlledMeasurementConflict => write!(formatter, "controlled measurement session conflicts with another request or open session"),
+            Self::ControlledMeasurementTerminal => write!(formatter, "terminal measurement session cannot be changed"),
+            Self::ControlledMeasurementCorrupt => write!(formatter, "controlled measurement session or referenced evidence is corrupt"),
         }
     }
 }
@@ -273,7 +303,16 @@ impl Error for StorageError {
             | Self::LiveAccountSnapshotInvalid
             | Self::LiveAccountSnapshotConflict
             | Self::LiveAccountSnapshotCorrupt
-            | Self::LiveAccountSnapshotCursorInvalid => None,
+            | Self::LiveAccountSnapshotCursorInvalid
+            | Self::ControlledMeasurementInvalid
+            | Self::ControlledMeasurementNotFound
+            | Self::ControlledMeasurementSnapshotMissing
+            | Self::ControlledMeasurementBaselineStale
+            | Self::ControlledMeasurementTimingInvalid
+            | Self::ControlledMeasurementExpired
+            | Self::ControlledMeasurementConflict
+            | Self::ControlledMeasurementTerminal
+            | Self::ControlledMeasurementCorrupt => None,
         }
     }
 }
@@ -639,6 +678,56 @@ impl SqliteReadStore {
             } else {
                 std::collections::HashSet::new()
             };
+            if required.iter().any(|column| !actual.contains(*column)) {
+                return Err(StorageError::MigrationHistoryCorrupt {
+                    detail: "database schema is incomplete",
+                    source: None,
+                });
+            }
+        }
+        if info.latest_applied_migration >= 8 {
+            let exists: bool = connection.query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'controlled_quota_measurement_sessions')",
+                [], |row| row.get(0),
+            ).map_err(StorageError::sqlite)?;
+            if !exists {
+                return Err(StorageError::MigrationHistoryCorrupt {
+                    detail: "database schema is incomplete",
+                    source: None,
+                });
+            }
+            let actual = connection
+                .prepare("PRAGMA table_info('controlled_quota_measurement_sessions')")
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([], |row| row.get::<_, String>(1))
+                        .and_then(|rows| {
+                            rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+                        })
+                })
+                .map_err(StorageError::sqlite)?;
+            let required = [
+                "session_id",
+                "format_version",
+                "before_snapshot_id",
+                "before_snapshot_sha256",
+                "created_at_utc",
+                "created_at_unix_ns",
+                "deadline_utc",
+                "deadline_unix_ns",
+                "max_duration_minutes",
+                "state",
+                "after_snapshot_id",
+                "after_snapshot_sha256",
+                "completed_at_utc",
+                "completed_at_unix_ns",
+                "activity_declaration",
+                "revision",
+                "receipt_sha256",
+                "source",
+                "evidence_scope",
+                "task_attribution",
+            ];
             if required.iter().any(|column| !actual.contains(*column)) {
                 return Err(StorageError::MigrationHistoryCorrupt {
                     detail: "database schema is incomplete",
@@ -1012,8 +1101,8 @@ mod tests {
         assert_eq!(
             store.info(),
             StorageInfo {
-                latest_supported_migration: 7,
-                latest_applied_migration: 7,
+                latest_supported_migration: 8,
+                latest_applied_migration: 8,
             }
         );
         let tables = store
@@ -1027,6 +1116,7 @@ mod tests {
         assert_eq!(
             tables,
             vec![
+                "controlled_quota_measurement_sessions",
                 "ingestion_diagnostics",
                 "live_account_quota_snapshots",
                 "observations",
@@ -1044,7 +1134,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 7);
+        assert_eq!(migration_count, 8);
     }
 
     #[test]
@@ -1076,7 +1166,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(migration_count, 7);
+            assert_eq!(migration_count, 8);
             assert_eq!(value, "test-value");
         }
         remove_database(&path);
@@ -1089,14 +1179,14 @@ mod tests {
         assert_eq!(version_one.info().latest_applied_migration, 1);
         drop(version_one);
         let upgraded = SqliteStore::open(&path).unwrap();
-        assert_eq!(upgraded.info().latest_applied_migration, 7);
+        assert_eq!(upgraded.info().latest_applied_migration, 8);
         let migration_count: i64 = upgraded
             .connection()
             .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 7);
+        assert_eq!(migration_count, 8);
         drop(upgraded);
         remove_database(&path);
     }
@@ -1117,7 +1207,7 @@ mod tests {
             stored.payload_sha256
         };
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.info().latest_applied_migration, 7);
+        assert_eq!(store.info().latest_applied_migration, 8);
         let (json, checksum, started, ended, finalized): (String, String, String, String, String) = store.connection().query_row("SELECT observation_json, observation_sha256, started_at, ended_at, finalized_at FROM observations", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
         assert_eq!(checksum, payload_checksum);
         assert_eq!(json, serde_json::to_string(&observation).unwrap());
@@ -1267,7 +1357,7 @@ mod tests {
             error,
             StorageError::DatabaseTooNew {
                 database_version: 999,
-                latest_supported_migration: 7
+                latest_supported_migration: 8
             }
         ));
         let connection = Connection::open(&path).unwrap();
@@ -1276,7 +1366,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 8);
+        assert_eq!(count, 9);
         drop(connection);
         remove_database(&path);
     }

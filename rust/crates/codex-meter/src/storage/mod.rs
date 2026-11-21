@@ -1,6 +1,7 @@
 //! Rust-owned SQLite storage and migration infrastructure.
 
 mod checkpoints;
+mod controlled_measurements;
 mod live_account_snapshots;
 mod migrations;
 mod observations;
@@ -12,6 +13,11 @@ mod usage_evidence;
 pub use checkpoints::{
     ActiveReconciliationCheckpoint, QualifiedSamplingCheckpoint, QualifiedSamplingPhase,
     RuntimeCheckpoint, RuntimeRecoveryState, SamplingFinalizationReceipt, STATE_FORMAT_VERSION,
+};
+pub use controlled_measurements::{
+    ActivityDeclaration, ControlledMeasurementSession, MeasurementSessionState,
+    CONTROLLED_MEASUREMENT_FORMAT_VERSION, DEFAULT_MEASUREMENT_MINUTES, EVALUATOR_CONTRACT_VERSION,
+    MAX_MEASUREMENT_MINUTES,
 };
 pub use live_account_snapshots::{
     LiveAccountSnapshotHistoryPage, LiveSnapshotSaveDisposition, SavedLiveAccountSnapshot,

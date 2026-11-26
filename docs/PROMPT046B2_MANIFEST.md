@@ -85,3 +85,36 @@ Codex account. Passing local tests does not establish authenticated source
 behavior, production quota accuracy, account identity continuity, external
 activity isolation, task-specific causality, token coverage closure, or P038
 G4/G5 hardware qualification. Those gates remain unverified.
+
+## RC1 fixture correction and validation (acceptance remains partial)
+
+The CLI fixture used current acquisition times with fixed November 2026 resets.
+Once the five-hour reset was past, the comparator correctly suppressed movement.
+The fixture now captures a UTC reference for the before acquisition and both
+reset identities; the after acquisition uses the returned session start time to
+satisfy the actual CLI chronology. Resets are four hours and four days after
+that reference. These are test values, not provider window assumptions. No
+production comparison policy changed.
+
+The file-backed expiry test now checks the committed expired revision after
+reopen, absence of a receipt and after snapshot, identical and conflicting
+finish rejection, and a replacement open session. It re-reads the expired row
+and checks its state and revision. Further independent acceptance review is
+needed for unrelated snapshot immutability and every requested invariant.
+
+Local RC1 validation: the corrected CLI test passed once and three repeated
+runs; six controlled-measurement tests passed. Rust formatting and Clippy
+passed; all-feature tests passed (621 unit and 43 integration tests). Default
+suite passed after installing the local Python worker (623 unit and 50
+integration tests). Its initial run failed six analytics integration tests due
+to worker resolution in the fresh environment. Python: 679 passed; Ruff lint
+and format passed; contracts: 8 schemas, 19 positive and 7 negative fixtures.
+P029 installed-runtime smoke passed. These results precede the final commit.
+
+Historical PR CI run 44884388374 failed on macOS Intel in attempt 1 in
+`compiled_task_history_is_readonly_resizes_and_never_submits_a_turn` with
+`expected="Task usage" raw_contains=true screen_contains=false`; attempt 2
+passed. The cause was not established. Final-head hosted validation and the
+complete independent acceptance matrix remain pending; do not treat this
+record as engineering acceptance. Production source qualification remains
+unverified as described above.

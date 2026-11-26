@@ -332,7 +332,12 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
-    fn snapshot(at: String, percent: f64) -> AccountRateLimitsSnapshot {
+    fn snapshot(
+        at: String,
+        percent: f64,
+        five_hour_reset: &str,
+        weekly_reset: &str,
+    ) -> AccountRateLimitsSnapshot {
         let meter = |used: f64, reset: &str| MeterSnapshot {
             availability: MeterAvailability::Available,
             used_percent: Some(used),
@@ -347,8 +352,8 @@ mod tests {
             acquired_at: at,
             availability: SnapshotAvailability::Available,
             bucket_identity: BucketIdentity::MainCodex,
-            five_hour: meter(percent, "2026-11-21T23:00:00Z"),
-            weekly: meter(percent, "2026-11-28T00:00:00Z"),
+            five_hour: meter(percent, five_hour_reset),
+            weekly: meter(percent, weekly_reset),
             warnings: Vec::<QuotaWarning>::new(),
             provenance: LIVE_ACCOUNT_QUOTA_PROVENANCE,
         }
@@ -359,14 +364,19 @@ mod tests {
 
     #[test]
     fn cli_start_status_finish_json_and_abort_use_explicit_saved_snapshots() {
+        let reference = OffsetDateTime::now_utc();
+        let five_hour_reset = timestamp(reference + time::Duration::hours(4));
+        let weekly_reset = timestamp(reference + time::Duration::days(4));
         let path = db();
         let path_text = path.to_string_lossy().to_string();
         let before = {
             let mut store = SqliteStore::open(&path).unwrap();
             store
                 .save_live_account_snapshot(&snapshot(
-                    timestamp(OffsetDateTime::now_utc() - time::Duration::seconds(30)),
+                    timestamp(reference - time::Duration::seconds(30)),
                     10.0,
+                    &five_hour_reset,
+                    &weekly_reset,
                 ))
                 .unwrap()
                 .snapshot
@@ -409,7 +419,15 @@ mod tests {
         let after = {
             let mut store = SqliteStore::open(&path).unwrap();
             store
-                .save_live_account_snapshot(&snapshot(timestamp(OffsetDateTime::now_utc()), 13.0))
+                .save_live_account_snapshot(&snapshot(
+                    start_json["session"]["created_at_utc"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    13.0,
+                    &five_hour_reset,
+                    &weekly_reset,
+                ))
                 .unwrap()
                 .snapshot
                 .snapshot_id
@@ -455,7 +473,12 @@ mod tests {
         let abort_id = {
             let mut store = SqliteStore::open(&path).unwrap();
             let new_before = store
-                .save_live_account_snapshot(&snapshot(timestamp(OffsetDateTime::now_utc()), 14.0))
+                .save_live_account_snapshot(&snapshot(
+                    timestamp(reference),
+                    14.0,
+                    &five_hour_reset,
+                    &weekly_reset,
+                ))
                 .unwrap()
                 .snapshot
                 .snapshot_id;

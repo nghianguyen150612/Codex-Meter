@@ -860,6 +860,41 @@ mod tests {
             .unwrap();
         assert_eq!(expired.state, MeasurementSessionState::Expired);
         assert_eq!(expired.revision, 2);
+        assert!(expired.receipt_sha256.is_none());
+        assert!(expired.after_snapshot_id.is_none());
+        drop(read);
+        let mut store = SqliteStore::open(&path).unwrap();
+        for (snapshot_id, activity) in [
+            (&after, ActivityDeclaration::Unknown),
+            (&before, ActivityDeclaration::Unknown),
+        ] {
+            assert_eq!(
+                store
+                    .finish_controlled_measurement_at(
+                        &started.session_id,
+                        snapshot_id,
+                        activity,
+                        at("2026-10-01T00:02:01Z")
+                    )
+                    .unwrap_err()
+                    .code(),
+                "measurement_conflict"
+            );
+        }
+        let replacement = store
+            .start_controlled_measurement_at(&after, 1, at("2026-10-01T00:02:01Z"))
+            .unwrap();
+        assert_eq!(replacement.state, MeasurementSessionState::Open);
+        drop(store);
+        let mut read = SqliteReadStore::open(&path).unwrap();
+        let unchanged = read
+            .controlled_measurement_session(&started.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.state, MeasurementSessionState::Expired);
+        assert_eq!(unchanged.revision, 2);
+        assert!(unchanged.receipt_sha256.is_none());
+        drop(read);
         cleanup(&path);
     }
 

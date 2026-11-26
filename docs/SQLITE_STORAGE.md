@@ -283,3 +283,17 @@ P015 may assume:
 P016 implements **durable Observation persistence, deterministic history queries,
 and atomic checkpoint-to-Observation handoff**. Estimation, weighting, capacity
 calculation, and Python analytics remain deferred to Phase E.
+# Controlled measurement sessions (migration 8)
+
+`controlled_quota_measurement_sessions` stores bounded, local session metadata
+and references P045B snapshots by ID and checksum. It does not copy snapshot
+payloads or create task evidence. The SQLite connection enables foreign keys;
+the session references use `ON DELETE RESTRICT`, and a partial unique index
+permits one open session in a database. State transitions use immediate
+transactions and a revision check. A completed receipt is checksummed and
+immutable; its evaluator version is retained so later evaluator changes cannot
+silently strengthen historical results.
+
+The `quota measure status` reader opens the database read-only and validates
+the referenced snapshot checksums and terminal receipt without migration or
+write activity. See `PROMPT046B2_MANIFEST.md` for lifecycle and evidence limits.

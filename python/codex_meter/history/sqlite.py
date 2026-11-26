@@ -24,7 +24,7 @@ from .models import (
     ResetStatus,
 )
 
-SUPPORTED_MIGRATION_VERSION = 7
+SUPPORTED_MIGRATION_VERSION = 8
 DEFAULT_BUSY_TIMEOUT_SECONDS = 5.0
 MAXIMUM_OBSERVATIONS_SAFETY_LIMIT = 100_000
 
@@ -75,6 +75,11 @@ MIGRATIONS = (
         7,
         "0007_live_account_quota_snapshots",
         "23286ac97e1b76eb21c6840e8734f86990477a779699391e55d4e9d8bc37c09f",
+    ),
+    (
+        8,
+        "0008_controlled_measurement_sessions",
+        "51feba5752e0532a1fcd76025f935a32d67c26e3c8c9ed93d02f173a7847ad08",
     ),
 )
 

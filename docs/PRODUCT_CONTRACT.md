@@ -86,6 +86,12 @@ reset stability, external-use isolation, exhaustive token coverage, or source
 accuracy. Structural source eligibility and production semantic qualification
 are distinct evidence claims.
 
+A controlled measurement session MAY organize explicitly selected before and
+after account snapshots. It is bookkeeping around a user-managed interval, not
+a task execution trace or an Observation. It MUST preserve the P046B1 meter
+comparison and its uncertainties and MUST NOT assign account movement to the
+work that occurred during the interval.
+
 No implementation may silently equate, substitute, or pool these domains. A relationship between them is an empirical inference and MUST retain its provenance and uncertainty.
 
 ## Observation semantics

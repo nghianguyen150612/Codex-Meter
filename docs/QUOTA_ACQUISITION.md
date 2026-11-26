@@ -247,3 +247,31 @@ causality, controlled isolation, token coverage, and production accuracy as
 unverified; no observed movement is task usage. The command does not persist
 results or create P044 authority, an Observation, or estimator input. See
 [`PROMPT046B1_MANIFEST.md`](PROMPT046B1_MANIFEST.md).
+
+## P046B2 controlled measurement sessions
+
+`codex-meter quota measure start|status|finish|abort` organizes an explicitly
+selected saved before snapshot and saved after snapshot around a user-managed
+interval. The user must first run `quota --live --save` for each acquisition.
+Start and finish require `--confirm-account-scope`; duration defaults to 60
+minutes and is bounded to 1–240 minutes. The before snapshot must be at most
+five minutes old at start. Finish validates chronology, deadline, both stored
+checksums, then reuses the P046B1 comparator in the same SQLite transaction as
+the immutable terminal receipt. Migration 8 adds the session table and its
+one-open-session constraint.
+
+The workflow does not call App Server, acquire snapshots, poll, or execute
+tasks. `status` uses SQLite read-only mode and does not apply migrations. It
+reports snapshot acquisition times separately from the session start/finish;
+actual workload execution timestamps are not independently verified. Activity
+is a bounded declaration (`unknown` by default, `known_local_overlap`, or
+`self_reported_no_known_overlap`). Self-report is not verified isolation.
+Five-hour and weekly comparisons retain independent reset, missing-data, and
+movement outcomes. Readout never labels account percentage movement as tokens
+consumed by the work.
+
+Sessions do not establish account identity continuity, inactivity on other
+devices, exhaustive token coverage, production accuracy, or task causality and
+cannot promote task evidence or estimator inputs. See
+[`PROMPT046B2_MANIFEST.md`](PROMPT046B2_MANIFEST.md) for the persistence and
+recovery contract.
